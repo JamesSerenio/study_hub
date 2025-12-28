@@ -1,0 +1,108 @@
+/* BACKGROUND GRADIENT */
+.login-content {
+  --background: linear-gradient(
+    180deg,
+    hsla(36, 19%, 73%, 1),
+    hsla(36, 41%, 91%, 1)
+  );
+}
+
+/* CENTER CONTENT */
+.login-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+}
+
+/* GLASS LOGIN CARD */
+.login-box {
+  width: 90%;
+  max-width: 360px;
+  padding: 28px 24px;
+  border-radius: 16px;
+
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+
+  animation: fadeUp 0.6s ease;
+}
+
+/* TITLE */
+.login-box h2 {
+  text-align: center;
+  margin-bottom: 26px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.input-item {
+  --background: transparent;
+  margin-bottom: 18px;
+  border-radius: 10px;
+
+  border: 1.5px solid rgba(0, 0, 0, 0.3);
+}
+
+/* focus effect */
+.input-item.item-has-focus {
+  border-color: #5b6cff;
+}
+
+/* floating label smooth */
+.input-item ion-label {
+  font-size: 14px;
+  opacity: 0.85;
+  transition: all 0.3s ease; /* smooth floating animation */
+}
+
+/* when input has value or focus, label moves up */
+.input-item.item-has-focus ion-label,
+.input-item ion-input:focus + ion-label {
+  transform: translateY(-18px) scale(0.85);
+  opacity: 1;
+  color: #5b6cff; /* optional focus color */
+}
+
+
+/* input padding */
+.input-item ion-input {
+  --padding-start: 12px;
+  --padding-end: 12px;
+}
+
+
+/* LOGIN BUTTON */
+.login-btn {
+  margin-top: 22px;
+  height: 44px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+
+  --border-radius: 10px;
+  --background: linear-gradient(135deg, #5b6cff, #7f8cff);
+  --box-shadow: 0 8px 18px rgba(91, 108, 255, 0.35);
+}
+
+/* BUTTON HOVER (WEB) */
+.login-btn:hover {
+  filter: brightness(1.05);
+}
+
+/* ANIMATION */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
