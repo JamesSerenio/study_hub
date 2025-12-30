@@ -1,101 +1,193 @@
-/* BACKGROUND GRADIENT */
+/* =========================
+   GLOBAL FONT
+========================= */
+* {
+  font-family: 'Poppins', sans-serif;
+}
+
+/* REMOVE IONIC BLUE */
+ion-item {
+  --highlight-color-focused: transparent;
+  --highlight-color-valid: transparent;
+  --highlight-color-invalid: transparent;
+}
+
+/* =========================
+   BACKGROUND
+========================= */
 .login-content {
   --background: linear-gradient(
     180deg,
-    hsla(36, 19%, 73%, 1),
-    hsla(36, 41%, 91%, 1)
+    rgb(240, 219, 185),
+    rgb(220, 181, 119)
   );
+  position: relative;
+  overflow: hidden;
 }
 
-/* CENTER CONTENT */
+ion-content {
+  --overflow: hidden;
+}
+
+.leaf {
+  position: absolute;
+  width: 250px;
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@media (max-width: 768px) {
+  .leaf {
+    width: 180px;
+  }
+}
+
+/* TOP LEFT */
+.leaf-top-left {
+  top: -10px;
+  left: -10px;
+  transform: scaleY(-1);
+}
+
+/* TOP RIGHT */
+.leaf-top-right {
+  top: -10px;
+  right: -10px;
+  transform: rotate(180deg);
+}
+
+/* BOTTOM LEFT */
+.leaf-bottom-left {
+  bottom: -10px;
+  left: -10px;
+  transform: scaleY(1);
+}
+
+/* BOTTOM RIGHT */
+.leaf-bottom-right {
+  bottom: -10px;
+  right: -10px;
+  transform: rotate(-90deg);
+}
+
+
+/* =========================
+   CENTER
+========================= */
 .login-wrapper {
   display: flex;
   justify-content: center;
   align-items: center;
   height: 100%;
+  position: relative;
+  z-index: 2;
 }
 
-/* GLASS LOGIN CARD */
+/* =========================
+   CARD
+========================= */
 .login-box {
   width: 90%;
   max-width: 360px;
   padding: 28px 24px;
   border-radius: 16px;
 
-  background: rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(230, 222, 222, 0.586); /* Semi-white + transparent */
+  backdrop-filter: blur(20px); /* Glass effect */
+  -webkit-backdrop-filter: blur(20px); /* Safari support */
 
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  box-shadow:
-    0 12px 30px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(0, 0, 0, 0.3); /* Black border with slight transparency */
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */
 
   animation: fadeUp 0.6s ease;
 }
 
-/* TITLE */
-.login-box h2 {
-  text-align: center;
-  margin-bottom: 26px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
+
+/* =========================
+   TITLE + LOGO
+========================= */
+.login-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 35px;
+  padding-left: 63px;
 }
 
+.login-header h2 {
+  margin: 5px;
+  font-weight: 700;
+  font-size: 30px;
+  color: #000;
+}
+
+.login-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+/* =========================
+   INPUT
+========================= */
 .input-item {
   --background: transparent;
-  margin-bottom: 18px;
+  margin-bottom: 25px;
   border-radius: 10px;
 
-  border: 1.5px solid rgba(0, 0, 0, 0.3);
+  border: 1.6px solid rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  padding-left: 10px;
+
+  transition: border-color 0.25s ease;
 }
 
-/* focus effect */
 .input-item.item-has-focus {
-  border-color: #5b6cff;
+  border-color: #000;
 }
 
-/* floating label smooth */
-.input-item ion-label {
-  font-size: 14px;
-  opacity: 0.85;
-  transition: all 0.3s ease; /* smooth floating animation */
+.input-icon {
+  font-size: 20px;
+  color: rgba(0, 0, 0, 0.55);
 }
 
-/* when input has value or focus, label moves up */
-.input-item.item-has-focus ion-label,
-.input-item ion-input:focus + ion-label {
-  transform: translateY(-18px) scale(0.85);
-  opacity: 1;
-  color: #5b6cff; /* optional focus color */
+.input-item.item-has-focus .input-icon {
+  color: #000;
 }
 
-
-/* input padding */
 .input-item ion-input {
-  --padding-start: 12px;
+  --padding-start: 10px;
   --padding-end: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #000;
 }
 
+.input-item ion-input::part(native)::placeholder {
+  color: rgba(0, 0, 0, 0.5);
+}
 
-/* LOGIN BUTTON */
+/* =========================
+   BUTTON
+========================= */
 .login-btn {
   margin-top: 22px;
   height: 44px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.6px;
 
   --border-radius: 10px;
-  --background: linear-gradient(135deg, #5b6cff, #7f8cff);
-  --box-shadow: 0 8px 18px rgba(91, 108, 255, 0.35);
+  --background: #000;
+  --box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
 }
 
-/* BUTTON HOVER (WEB) */
-.login-btn:hover {
-  filter: brightness(1.05);
-}
-
-/* ANIMATION */
+/* =========================
+   ANIMATION
+========================= */
 @keyframes fadeUp {
   from {
     opacity: 0;
@@ -104,5 +196,14 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* =========================
+   RESPONSIVE
+========================= */
+@media (max-width: 480px) {
+  .leaf {
+    width: 90px;
   }
 }
