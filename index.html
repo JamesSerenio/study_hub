@@ -4,13 +4,27 @@
     <meta charset="utf-8" />
     <title>Ionic App</title>
 
-    <!-- GOOGLE FONT (Poppins) -->
+    <!-- =========================
+         GOOGLE FONTS
+    ========================= -->
+
+    <!-- Poppins (main app font) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+
+    <!-- Porter Sans Block (for Me Tyme Lounge) -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Porter+Sans+Block&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- =========================
+         BASE & META
+    ========================= -->
 
     <base href="/" />
 
@@ -22,14 +36,19 @@
     <meta name="format-detection" content="telephone=no" />
     <meta name="msapplication-tap-highlight" content="no" />
 
+    <!-- =========================
+         PWA
+    ========================= -->
+
     <link rel="manifest" href="/manifest.json" />
     <link rel="shortcut icon" type="image/png" href="/favicon.png" />
 
-    <!-- add to homescreen for ios -->
+    <!-- iOS -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Ionic App" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
   </head>
+
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

@@ -10,7 +10,6 @@ import {
   IonMenuToggle,
   IonPage,
   IonSplitPane,
-  IonTitle,
   IonToolbar,
   IonIcon,
 } from "@ionic/react";
@@ -18,15 +17,16 @@ import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 
-// Page
+/* Page */
 import Staff_Dashboard from "./Staff_Dashboard";
 
-// Icon
+/* Assets */
 import dashboardIcon from "../assets/add_user.png";
+import studyHubLogo from "../assets/study_hub.png";
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
-  const [activePage, setActivePage] = useState<string>("dashboard");
+  const [activePage, setActivePage] = useState("dashboard");
 
   const menuItems = [
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
@@ -37,83 +37,87 @@ const Staff_menu: React.FC = () => {
     return <h2>Welcome Staff</h2>;
   };
 
-  const listVariants = {
-    hidden: { opacity: 0 },
-    show: { opacity: 1, transition: { staggerChildren: 0.15 } },
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, x: -30 },
-    show: { opacity: 1, x: 0 },
-  };
-
   const handleLogout = () => {
-    // Clear any session or user data
     localStorage.clear();
     sessionStorage.clear();
-    setActivePage("dashboard"); // reset menu state
-    history.push("/login");      // navigate to login page
+    history.push("/login");
   };
 
   return (
     <IonPage>
       <IonSplitPane contentId="main" when="(min-width: 768px)">
-        {/* Sidebar */}
+        
+        {/* ================= SIDEBAR ================= */}
         <IonMenu contentId="main" className="staff-menu">
-          <IonHeader>
+          
+          {/* HEADER */}
+          <IonHeader className="staff-menu-header">
             <IonToolbar>
-              <IonTitle>👤 Staff Menu</IonTitle>
+              <div className="menu-brand">
+                <img
+                  src={studyHubLogo}
+                  alt="Me Tyme Lounge"
+                  className="menu-logo"
+                />
+
+                {/* FIGMA STYLE TEXT */}
+                <span className="menu-title-text figma-title">
+                  Me Tyme Lounge
+                </span>
+              </div>
             </IonToolbar>
           </IonHeader>
 
           <IonContent>
             <motion.div
-              variants={listVariants}
-              initial="hidden"
-              animate="show"
-              transition={{ duration: 0.4, ease: "easeOut" }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4 }}
             >
-              {menuItems.map((item, index) => (
-                <motion.div key={index} variants={itemVariants}>
-                  <IonMenuToggle autoHide={false}>
-                    <IonItem
-                      button
-                      onClick={() => setActivePage(item.key)}
-                      lines="none"
-                      className={activePage === item.key ? "active" : ""}
-                    >
-                      <img
-                        src={item.icon}
-                        alt={item.name}
-                        style={{ width: 24, marginRight: 12 }}
-                      />
-                      {item.name}
-                    </IonItem>
-                  </IonMenuToggle>
-                </motion.div>
+              {menuItems.map((item) => (
+                <IonMenuToggle key={item.key} autoHide={false}>
+                  <IonItem
+                    button
+                    lines="none"
+                    className={`menu-item ${
+                      activePage === item.key ? "active" : ""
+                    }`}
+                    onClick={() => setActivePage(item.key)}
+                  >
+                    <img
+                      src={item.icon}
+                      alt={item.name}
+                      className="menu-icon"
+                    />
+                    {item.name}
+                  </IonItem>
+                </IonMenuToggle>
               ))}
 
-              {/* Logout */}
-              <motion.div variants={itemVariants} style={{ marginTop: 20 }}>
-                <IonMenuToggle autoHide={false}>
-                  <IonButton expand="block" color="danger" onClick={handleLogout}>
-                    <IonIcon icon={logOutOutline} slot="start" />
-                    Logout
-                  </IonButton>
-                </IonMenuToggle>
-              </motion.div>
+              {/* LOGOUT */}
+              <IonMenuToggle autoHide={false}>
+                <IonButton
+                  expand="block"
+                  color="danger"
+                  className="logout-btn"
+                  onClick={handleLogout}
+                >
+                  <IonIcon icon={logOutOutline} slot="start" />
+                  Logout
+                </IonButton>
+              </IonMenuToggle>
             </motion.div>
           </IonContent>
         </IonMenu>
 
-        {/* Main Content */}
+        {/* ================= MAIN ================= */}
         <IonPage id="main">
           <IonHeader>
             <IonToolbar>
               <IonButtons slot="start">
                 <IonMenuButton />
               </IonButtons>
-              <IonTitle>Staff Dashboard</IonTitle>
+              <span className="topbar-title">Staff Dashboard</span>
             </IonToolbar>
           </IonHeader>
 
@@ -121,16 +125,17 @@ const Staff_menu: React.FC = () => {
             <AnimatePresence mode="wait">
               <motion.div
                 key={activePage}
-                initial={{ opacity: 0, y: 25 }}
+                initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -25 }}
-                transition={{ duration: 0.4, ease: "easeOut" }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.3 }}
               >
                 {renderContent()}
               </motion.div>
             </AnimatePresence>
           </IonContent>
         </IonPage>
+
       </IonSplitPane>
     </IonPage>
   );

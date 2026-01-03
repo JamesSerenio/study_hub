@@ -207,3 +207,119 @@ ion-content {
     width: 90px;
   }
 }
+
+/*== staff ==*/
+
+/* =========================
+   STAFF MENU BACKGROUND
+========================= */
+
+.staff-menu {
+  --background: linear-gradient(
+    180deg,
+    hsla(37, 18%, 87%, 1),
+    hsla(36, 19%, 73%, 1)
+  );
+}
+
+.staff-menu ion-content {
+  --background: linear-gradient(
+    180deg,
+    hsla(37, 18%, 87%, 1),
+    hsla(36, 19%, 73%, 1)
+  );
+}
+
+/* =========================
+   HEADER BRAND
+========================= */
+
+.staff-menu-header {
+  background: transparent;
+}
+
+.menu-brand {
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  padding: 12px 16px;
+}
+
+.menu-logo {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+  margin-left: 15px;
+}
+
+/* =========================
+   FIGMA TEXT STYLE (EXACT)
+========================= */
+
+.menu-title-text {
+  white-space: nowrap;
+}
+
+.figma-title {
+  font-family: "Porter Sans Block", sans-serif;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 22.52px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: #000;
+
+  /* EMBOSSED / DEPTH EFFECT */
+  text-shadow:
+    1px 1px 0 #bfbfbf,
+    2px 2px 0 #9f9f9f,
+    3px 3px 0 #7f7f7f;
+
+  /* Optional outline */
+  -webkit-text-stroke: 0.3px #000;
+}
+
+/* =========================
+   MENU ITEMS
+========================= */
+
+.menu-item {
+  --background: transparent;
+  margin: 8px 12px;
+  border-radius: 14px;
+  font-weight: 500;
+  transition: background 0.2s ease;
+}
+
+.menu-item.active {
+  background: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(8px);
+}
+
+.menu-item:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.menu-icon {
+  width: 22px;
+  height: 22px;
+  margin-right: 12px;
+}
+
+/* =========================
+   LOGOUT BUTTON
+========================= */
+
+.logout-btn {
+  margin: 20px 12px 0;
+  border-radius: 14px;
+}
+
+/* =========================
+   TOP BAR TITLE
+========================= */
+
+.topbar-title {
+  font-weight: 600;
+  font-size: 16px;
+}
