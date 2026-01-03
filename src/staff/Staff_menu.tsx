@@ -22,7 +22,7 @@ import Staff_Dashboard from "./Staff_Dashboard";
 import Customer_Lists from "./Customer_Lists";
 import Customer_Reservations from "./Customer_Reservations";
 import Customer_Calendar from "./Customer_Calendar";
-import Product_Item_Lists from "./Product_Item_lists"; 
+import Product_Item_Lists from "./Product_Item_lists";
 
 /* Assets */
 import dashboardIcon from "../assets/add_user.png";
@@ -41,7 +41,7 @@ const Staff_menu: React.FC = () => {
     { name: "Customer Lists", key: "customer_lists", icon: listIcon },
     { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
     { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
-    { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon }, 
+    { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
   ];
 
   const renderContent = () => {
@@ -55,7 +55,7 @@ const Staff_menu: React.FC = () => {
       case "customer_calendar":
         return <Customer_Calendar />;
       case "product_item_lists":
-        return <Product_Item_Lists />; // ✅ Render the new page
+        return <Product_Item_Lists />;
       default:
         return <h2>Welcome Staff</h2>;
     }
@@ -72,12 +72,13 @@ const Staff_menu: React.FC = () => {
       <IonSplitPane contentId="main" when="(min-width: 768px)">
         {/* ================= SIDEBAR ================= */}
         <IonMenu contentId="main" className="staff-menu">
-          {/* HEADER */}
           <IonHeader className="staff-menu-header">
             <IonToolbar>
               <div className="menu-brand">
                 <img src={studyHubLogo} alt="Study Hub" className="menu-logo" />
-                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+                <span className="menu-title-text figma-title">
+                  Me Tyme Lounge
+                </span>
               </div>
             </IonToolbar>
           </IonHeader>
@@ -93,11 +94,17 @@ const Staff_menu: React.FC = () => {
                   <IonItem
                     button
                     lines="none"
-                    className={`menu-item ${activePage === item.key ? "active" : ""}`}
+                    className={`menu-item ${
+                      activePage === item.key ? "active" : ""
+                    }`}
                     onClick={() => setActivePage(item.key)}
                   >
-                    <img src={item.icon} alt={item.name} className="menu-icon" />
-                    {item.name}
+                    <img
+                      src={item.icon}
+                      alt={item.name}
+                      className="menu-icon"
+                    />
+                    <span className="menu-text">{item.name}</span>
                   </IonItem>
                 </IonMenuToggle>
               ))}
@@ -105,8 +112,6 @@ const Staff_menu: React.FC = () => {
               {/* LOGOUT */}
               <IonMenuToggle autoHide={false}>
                 <IonButton
-                  expand="block"
-                  color="danger"
                   className="logout-btn"
                   onClick={handleLogout}
                 >

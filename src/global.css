@@ -222,19 +222,11 @@ ion-item {
 ========================= */
 
 .staff-menu {
-  --background: linear-gradient(
-    180deg,
-    hsla(37, 18%, 87%, 1),
-    hsla(36, 19%, 73%, 1)
-  );
+  --background: hsla(175, 5%, 98%, 1);
 }
 
 .staff-menu ion-content {
-  --background: linear-gradient(
-    180deg,
-    hsla(37, 18%, 87%, 1),
-    hsla(36, 19%, 73%, 1)
-  );
+  --background: hsla(175, 5%, 98%, 1);
 }
 
 /* =========================
@@ -273,17 +265,16 @@ ion-item {
   line-height: 22.52px;
   letter-spacing: 0.01em;
   text-transform: uppercase;
-  color: #000;
 
-  /* EMBOSSED / DEPTH EFFECT */
+  color: #56A28E;
+
   text-shadow:
-    1px 1px 0 #bfbfbf,
-    2px 2px 0 #9f9f9f,
-    3px 3px 0 #7f7f7f;
+    1px 1px 0 rgba(0, 0, 0, 0.15),
+    2px 2px 0 rgba(0, 0, 0, 0.1);
 
-  /* Optional outline */
-  -webkit-text-stroke: 0.3px #000;
+  -webkit-text-stroke: 0.3px rgba(0, 0, 0, 0.3);
 }
+
 
 /* =========================
    MENU ITEMS
@@ -291,19 +282,43 @@ ion-item {
 
 .menu-item {
   --background: transparent;
-  margin: 8px 12px;
+  margin: 6px 12px;
   border-radius: 14px;
   font-weight: 500;
-  transition: background 0.2s ease;
+  color: #56a28e;
+  display: flex;
+  align-items: center;
+}
+
+.menu-text {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 4px;
+}
+
+.menu-text::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 2px;
+  background-color: #56a28e;
+  transition: width 0.25s ease;
+}
+
+.menu-item:hover .menu-text::after {
+  width: 100%;
 }
 
 .menu-item.active {
   background: rgba(255, 255, 255, 0.45);
   backdrop-filter: blur(8px);
+  color: #000;
 }
 
-.menu-item:hover {
-  background: rgba(255, 255, 255, 0.3);
+.menu-item.active .menu-text::after {
+  width: 100%;
 }
 
 .menu-icon {
@@ -317,8 +332,18 @@ ion-item {
 ========================= */
 
 .logout-btn {
-  margin: 20px 12px 0;
+  position: fixed;  /* Pin it to the viewport */
+  bottom: 20px;     /* 20px from bottom */
+  right: 20px;      /* 20px from right */
   border-radius: 14px;
+  --background: #56a28e;
+  --background-hover: #4b927f;
+  --color: #ffffff;
+  width: fit-content;
+  padding: 8px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;  /* Remove original margin since we're using position */
 }
 
 /* =========================
