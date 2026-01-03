@@ -20,6 +20,7 @@ import {
   IonModal,
   IonInput,
   IonItem,
+  IonImg,
 } from "@ionic/react";
 import { trash, create, arrowUp, arrowDown } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -35,6 +36,7 @@ interface AddOn {
   stocks: number;
   overall_sales: number;
   expected_sales: number;
+  image_url: string;
 }
 
 const Admin_Item_Lists: React.FC = () => {
@@ -144,6 +146,7 @@ const Admin_Item_Lists: React.FC = () => {
           restocked: editingAddOn.restocked,
           sold: editingAddOn.sold,
           expenses: editingAddOn.expenses,
+          image_url: editingAddOn.image_url,
         })
         .eq("id", editingAddOn.id);
 
@@ -215,6 +218,7 @@ const Admin_Item_Lists: React.FC = () => {
             </IonButton>
             <IonGrid>
               <IonRow>
+                <IonCol>Image</IonCol>
                 <IonCol>Name</IonCol>
                 <IonCol>Category</IonCol>
                 <IonCol>Price</IonCol>
@@ -229,6 +233,13 @@ const Admin_Item_Lists: React.FC = () => {
               {sortedAddOns.length > 0 ? (
                 sortedAddOns.map((addOn) => (
                   <IonRow key={addOn.id}>
+                    <IonCol>
+                      {addOn.image_url ? (
+                        <IonImg src={addOn.image_url} alt={addOn.name} style={{ width: '50px', height: '50px' }} />
+                      ) : (
+                        <IonLabel>No Image</IonLabel>
+                      )}
+                    </IonCol>
                     <IonCol>{addOn.name}</IonCol>
                     <IonCol>{addOn.category}</IonCol>
                     <IonCol>₱{addOn.price.toFixed(2)}</IonCol>
@@ -304,6 +315,13 @@ const Admin_Item_Lists: React.FC = () => {
                   <IonInput
                     value={editingAddOn.category}
                     onIonChange={(e) => setEditingAddOn({ ...editingAddOn, category: e.detail.value! })}
+                  />
+                </IonItem>
+                <IonItem>
+                  <IonLabel position="stacked">Image URL</IonLabel>
+                  <IonInput
+                    value={editingAddOn.image_url}
+                    onIonChange={(e) => setEditingAddOn({ ...editingAddOn, image_url: e.detail.value! })}
                   />
                 </IonItem>
                 <IonItem>

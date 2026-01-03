@@ -20,6 +20,7 @@ const Admin_Add_Ons: React.FC = () => {
   const [restocked, setRestocked] = useState<number | undefined>();
   const [price, setPrice] = useState<number | undefined>();
   const [expenses, setExpenses] = useState<number | undefined>(0);
+  const [imageUrl, setImageUrl] = useState("");
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
 
@@ -38,6 +39,7 @@ const Admin_Add_Ons: React.FC = () => {
           restocked,
           price,
           expenses: expenses || 0,
+          image_url: imageUrl,
         },
       ]);
 
@@ -52,6 +54,7 @@ const Admin_Add_Ons: React.FC = () => {
       setRestocked(undefined);
       setPrice(undefined);
       setExpenses(0);
+      setImageUrl("");
       setToastMessage("Add-on added successfully!");
       setShowToast(true);
     } catch (err) {
@@ -87,6 +90,16 @@ const Admin_Add_Ons: React.FC = () => {
             placeholder="Type item name"
             value={name}
             onIonChange={(e) => setName(e.detail.value!)}
+          />
+        </IonItem>
+
+        {/* Image URL */}
+        <IonItem>
+          <IonLabel position="stacked">Image URL</IonLabel>
+          <IonInput
+            placeholder="Enter image URL (optional)"
+            value={imageUrl}
+            onIonChange={(e) => setImageUrl(e.detail.value!)}
           />
         </IonItem>
 
