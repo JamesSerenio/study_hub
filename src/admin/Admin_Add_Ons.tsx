@@ -1,118 +1,141 @@
-import { useState } from "react";
+// Admin_Add_Ons.tsx
+import React, { useState } from "react";
 import {
   IonPage,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
   IonContent,
+  IonItem,
+  IonLabel,
   IonInput,
   IonButton,
-  IonItem,
-  IonIcon,
   IonToast,
 } from "@ionic/react";
-import { mailOutline, lockClosedOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
-import studyHubLogo from "../assets/study_hub.png";
-import leaves from "../assets/leave.png";
-
-const Login: React.FC = () => {
-  const [emailFocused, setEmailFocused] = useState(false);
-  const [passwordFocused, setPasswordFocused] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [toastMsg, setToastMsg] = useState("");
+const Admin_Add_Ons: React.FC = () => {
+  const [category, setCategory] = useState("");
+  const [name, setName] = useState("");
+  const [restocked, setRestocked] = useState<number | undefined>();
+  const [price, setPrice] = useState<number | undefined>();
+  const [expenses, setExpenses] = useState<number | undefined>(0);
   const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
 
-  const handleLogin = async () => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+  const handleAddOnSubmit = async () => {
+    if (!category || !name || restocked === undefined || price === undefined) {
+      setToastMessage("Please fill in all required fields!");
+      setShowToast(true);
+      return;
+    }
 
-    if (error) {
-      setToastMsg(error.message);
+    try {
+      const { error } = await supabase.from("add_ons").insert([
+        {
+          category,
+          name,
+          restocked,
+          price,
+          expenses: expenses || 0,
+        },
+      ]);
+
+      if (error) {
+        setToastMessage("Error adding item: " + error.message);
+        setShowToast(true);
+        return;
+      }
+
+      setCategory("");
+      setName("");
+      setRestocked(undefined);
+      setPrice(undefined);
+      setExpenses(0);
+      setToastMessage("Add-on added successfully!");
       setShowToast(true);
-    } else {
-      setToastMsg("Login successful!");
+    } catch (err) {
+      console.error(err);
+      setToastMessage("Unexpected error occurred");
       setShowToast(true);
-      console.log("User data:", data.user);
-      // Redirect or do something after login
     }
   };
 
   return (
     <IonPage>
-      <IonContent fullscreen className="login-content">
+      <IonHeader>
+        <IonToolbar>
+          <IonTitle>Admin Add-Ons</IonTitle>
+        </IonToolbar>
+      </IonHeader>
 
-        {/* CORNER LEAVES */}
-        <img src={leaves} className="leaf leaf-top-left" alt="leaf" />
-        <img src={leaves} className="leaf leaf-top-right" alt="leaf" />
-        <img src={leaves} className="leaf leaf-bottom-left" alt="leaf" />
-        <img src={leaves} className="leaf leaf-bottom-right" alt="leaf" />
+      <IonContent className="ion-padding">
+        {/* Category */}
+        <IonItem>
+          <IonLabel position="stacked">Category</IonLabel>
+          <IonInput
+            placeholder="Type category"
+            value={category}
+            onIonChange={(e) => setCategory(e.detail.value!)}
+          />
+        </IonItem>
 
-        <div className="login-wrapper">
-          <div className="login-box">
+        {/* Name */}
+        <IonItem>
+          <IonLabel position="stacked">Item Name</IonLabel>
+          <IonInput
+            placeholder="Type item name"
+            value={name}
+            onIonChange={(e) => setName(e.detail.value!)}
+          />
+        </IonItem>
 
-            {/* TITLE + LOGO */}
-            <div className="login-header">
-              <img
-                src={studyHubLogo}
-                alt="Study Hub Logo"
-                className="login-logo"
-              />
-              <h2>Login</h2>
-            </div>
+        {/* Restocked */}
+        <IonItem>
+          <IonLabel position="stacked">Restocked Quantity</IonLabel>
+          <IonInput
+            type="number"
+            placeholder="Enter restocked quantity"
+            value={restocked}
+            onIonChange={(e) => setRestocked(Number(e.detail.value))}
+          />
+        </IonItem>
 
-            {/* EMAIL */}
-            <IonItem
-              lines="none"
-              className={`input-item ${emailFocused ? "item-has-focus" : ""}`}
-            >
-              <IonIcon icon={mailOutline} className="input-icon" />
-              <IonInput
-                type="email"
-                placeholder="Enter email"
-                value={email}
-                onIonChange={(e) => setEmail(e.detail.value!)}
-                onIonFocus={() => setEmailFocused(true)}
-                onIonBlur={() => setEmailFocused(false)}
-              />
-            </IonItem>
+        {/* Price */}
+        <IonItem>
+          <IonLabel position="stacked">Price</IonLabel>
+          <IonInput
+            type="number"
+            placeholder="Enter price"
+            value={price}
+            onIonChange={(e) => setPrice(Number(e.detail.value))}
+          />
+        </IonItem>
 
-            {/* PASSWORD */}
-            <IonItem
-              lines="none"
-              className={`input-item ${passwordFocused ? "item-has-focus" : ""}`}
-            >
-              <IonIcon icon={lockClosedOutline} className="input-icon" />
-              <IonInput
-                type="password"
-                placeholder="Enter password"
-                value={password}
-                onIonChange={(e) => setPassword(e.detail.value!)}
-                onIonFocus={() => setPasswordFocused(true)}
-                onIonBlur={() => setPasswordFocused(false)}
-              />
-            </IonItem>
+        {/* Expenses */}
+        <IonItem>
+          <IonLabel position="stacked">Expenses</IonLabel>
+          <IonInput
+            type="number"
+            placeholder="Enter expenses (optional)"
+            value={expenses}
+            onIonChange={(e) => setExpenses(Number(e.detail.value))}
+          />
+        </IonItem>
 
-            <IonButton expand="block" className="login-btn" onClick={handleLogin}>
-              Login
-            </IonButton>
+        <IonButton expand="block" className="ion-margin-top" onClick={handleAddOnSubmit}>
+          Add Add-On
+        </IonButton>
 
-          </div>
-        </div>
-
-        {/* TOAST */}
         <IonToast
           isOpen={showToast}
-          onDidDismiss={() => setShowToast(false)}
-          message={toastMsg}
+          message={toastMessage}
           duration={2000}
-          color={toastMsg === "Login successful!" ? "success" : "danger"}
+          onDidDismiss={() => setShowToast(false)}
         />
-
       </IonContent>
     </IonPage>
   );
 };
 
-export default Login;
+export default Admin_Add_Ons;

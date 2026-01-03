@@ -20,10 +20,12 @@ import { motion, AnimatePresence } from "framer-motion";
 /* Pages */
 import Admin_Dashboard from "./Admin_Dashboard";
 import Admin_Add_Ons from "./Admin_Add_Ons";
+import Admin_Item_Lists from "./Admin_Item_Lists"; // ✅ New Page
 
 /* Assets */
 import dashboardIcon from "../assets/graph.png";
 import addOnsIcon from "../assets/ons.png";
+import itemIcon from "../assets/item.png"; // ✅ New Icon
 import studyHubLogo from "../assets/study_hub.png";
 
 const Admin_menu: React.FC = () => {
@@ -33,6 +35,7 @@ const Admin_menu: React.FC = () => {
   const menuItems = [
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
     { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
+    { name: "Item Lists", key: "item_lists", icon: itemIcon }, // ✅ New Menu Item
   ];
 
   const renderContent = () => {
@@ -41,6 +44,8 @@ const Admin_menu: React.FC = () => {
         return <Admin_Dashboard />;
       case "add_ons":
         return <Admin_Add_Ons />;
+      case "item_lists":
+        return <Admin_Item_Lists />; // ✅ Render New Page
       default:
         return <h2>Welcome Admin</h2>;
     }
