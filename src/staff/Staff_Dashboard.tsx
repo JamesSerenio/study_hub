@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useHistory } from "react-router-dom";
 import {
   IonPage,
   IonContent,
@@ -23,8 +22,6 @@ const Login: React.FC = () => {
   const [toastMsg, setToastMsg] = useState("");
   const [showToast, setShowToast] = useState(false);
 
-  const history = useHistory(); // For navigation
-
   const handleLogin = async () => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -34,31 +31,11 @@ const Login: React.FC = () => {
     if (error) {
       setToastMsg(error.message);
       setShowToast(true);
-    } else if (data.user) {
-      // Fetch the user's role from "profiles" table
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", data.user.id)
-        .single();
-
-      if (profileError) {
-        setToastMsg(profileError.message);
-        setShowToast(true);
-        return;
-      }
-
+    } else {
       setToastMsg("Login successful!");
       setShowToast(true);
-
-      // Redirect based on role
-      if (profile.role === "staff") {
-        history.push("/staff-menu");
-      } else if (profile.role === "admin") {
-        history.push("/admin-menu");
-      } else {
-        history.push("/home");
-      }
+      console.log("User data:", data.user);
+      // Redirect or do something after login
     }
   };
 
@@ -66,6 +43,7 @@ const Login: React.FC = () => {
     <IonPage>
       <IonContent fullscreen className="login-content">
 
+        {/* CORNER LEAVES */}
         <img src={leaves} className="leaf leaf-top-left" alt="leaf" />
         <img src={leaves} className="leaf leaf-top-right" alt="leaf" />
         <img src={leaves} className="leaf leaf-bottom-left" alt="leaf" />
@@ -73,12 +51,22 @@ const Login: React.FC = () => {
 
         <div className="login-wrapper">
           <div className="login-box">
+
+            {/* TITLE + LOGO */}
             <div className="login-header">
-              <img src={studyHubLogo} alt="Study Hub Logo" className="login-logo" />
+              <img
+                src={studyHubLogo}
+                alt="Study Hub Logo"
+                className="login-logo"
+              />
               <h2>Login</h2>
             </div>
 
-            <IonItem lines="none" className={`input-item ${emailFocused ? "item-has-focus" : ""}`}>
+            {/* EMAIL */}
+            <IonItem
+              lines="none"
+              className={`input-item ${emailFocused ? "item-has-focus" : ""}`}
+            >
               <IonIcon icon={mailOutline} className="input-icon" />
               <IonInput
                 type="email"
@@ -90,7 +78,11 @@ const Login: React.FC = () => {
               />
             </IonItem>
 
-            <IonItem lines="none" className={`input-item ${passwordFocused ? "item-has-focus" : ""}`}>
+            {/* PASSWORD */}
+            <IonItem
+              lines="none"
+              className={`input-item ${passwordFocused ? "item-has-focus" : ""}`}
+            >
               <IonIcon icon={lockClosedOutline} className="input-icon" />
               <IonInput
                 type="password"
@@ -105,9 +97,11 @@ const Login: React.FC = () => {
             <IonButton expand="block" className="login-btn" onClick={handleLogin}>
               Login
             </IonButton>
+
           </div>
         </div>
 
+        {/* TOAST */}
         <IonToast
           isOpen={showToast}
           onDidDismiss={() => setShowToast(false)}
