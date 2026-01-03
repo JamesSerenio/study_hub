@@ -64,8 +64,7 @@ const Login: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent fullscreen className="login-content">
-
+      <IonContent fullscreen className="login-content" scrollY={false}>
         <img src={leaves} className="leaf leaf-top-left" alt="leaf" />
         <img src={leaves} className="leaf leaf-top-right" alt="leaf" />
         <img src={leaves} className="leaf leaf-bottom-left" alt="leaf" />
@@ -115,7 +114,6 @@ const Login: React.FC = () => {
           duration={2000}
           color={toastMsg === "Login successful!" ? "success" : "danger"}
         />
-
       </IonContent>
     </IonPage>
   );

@@ -1,118 +1,195 @@
-import { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  IonPage,
-  IonContent,
-  IonInput,
   IonButton,
+  IonInput,
   IonItem,
-  IonIcon,
-  IonToast,
+  IonLabel,
+  IonSelect,
+  IonSelectOption,
 } from "@ionic/react";
-import { mailOutline, lockClosedOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
-import studyHubLogo from "../assets/study_hub.png";
-import leaves from "../assets/leave.png";
+const HOURLY_RATE = 20;
 
-const Login: React.FC = () => {
-  const [emailFocused, setEmailFocused] = useState(false);
-  const [passwordFocused, setPasswordFocused] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [toastMsg, setToastMsg] = useState("");
-  const [showToast, setShowToast] = useState(false);
+interface Profile {
+  id: string;
+  email: string;
+  role: "admin" | "staff";
+}
 
-  const handleLogin = async () => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+interface CustomerForm {
+  full_name: string;
+  customer_type: "reviewer" | "student" | "regular" | "";
+  customer_field: string;
+  has_id: boolean;
+}
+
+const Staff_Dashboard: React.FC = () => {
+  const [profile, setProfile] = useState<Profile | null>(null);
+
+  const [form, setForm] = useState<CustomerForm>({
+    full_name: "",
+    customer_type: "",
+    customer_field: "",
+    has_id: false,
+  });
+
+  // 🔹 AUTO time started (PH time)
+  const [timeStarted] = useState<string>(new Date().toISOString());
+
+  // 🔹 STAFF INPUT (HH:MM)
+  const [timeAvail, setTimeAvail] = useState<string>("01:00");
+
+  useEffect(() => {
+    fetchProfile();
+  }, []);
+
+  const fetchProfile = async (): Promise<void> => {
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth?.user) return;
+
+    const { data } = await supabase
+      .from("profiles")
+      .select("id, email, role")
+      .eq("id", auth.user.id)
+      .single<Profile>();
+
+    if (!data || data.role !== "staff") {
+      alert("Staff only");
+      return;
+    }
+
+    setProfile(data);
+  };
+
+  // 🧮 Convert HH:MM → hours
+  const getTotalHours = (): number => {
+    const [h, m] = timeAvail.split(":").map(Number);
+    if (isNaN(h) || isNaN(m)) return 0;
+    return Number((h + m / 60).toFixed(2));
+  };
+
+  // ⏰ Auto end time
+  const getTimeEnded = (): string => {
+    const start = new Date(timeStarted);
+    const [h, m] = timeAvail.split(":").map(Number);
+    start.setHours(start.getHours() + h);
+    start.setMinutes(start.getMinutes() + m);
+    return start.toISOString();
+  };
+
+  const totalHours = getTotalHours();
+  const totalAmount = totalHours * HOURLY_RATE;
+
+  const handleSubmit = async (): Promise<void> => {
+    if (!profile || totalHours <= 0) {
+      alert("Invalid time avail");
+      return;
+    }
+
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth?.user) return;
+
+    const { error } = await supabase.from("customer_sessions").insert({
+      staff_id: auth.user.id,
+      date: new Date().toISOString().split("T")[0],
+
+      full_name: form.full_name,
+      customer_type: form.customer_type,
+      customer_field: form.customer_field,
+      has_id: form.has_id,
+
+      hour_avail: timeAvail,
+      time_started: timeStarted,
+      time_ended: getTimeEnded(),
+
+      total_hours: totalHours,
+      total_amount: totalAmount,
     });
 
     if (error) {
-      setToastMsg(error.message);
-      setShowToast(true);
+      alert(error.message);
     } else {
-      setToastMsg("Login successful!");
-      setShowToast(true);
-      console.log("User data:", data.user);
-      // Redirect or do something after login
+      alert("Customer session saved!");
     }
   };
 
   return (
-    <IonPage>
-      <IonContent fullscreen className="login-content">
+    <div className="staff-dashboard">
+      <h2 className="form-title">Customer Time Form</h2>
 
-        {/* CORNER LEAVES */}
-        <img src={leaves} className="leaf leaf-top-left" alt="leaf" />
-        <img src={leaves} className="leaf leaf-top-right" alt="leaf" />
-        <img src={leaves} className="leaf leaf-bottom-left" alt="leaf" />
-        <img src={leaves} className="leaf leaf-bottom-right" alt="leaf" />
+      <div className="form-container">
+        <IonItem className="form-item">
+          <IonLabel position="stacked">Full Name</IonLabel>
+          <IonInput
+            value={form.full_name}
+            onIonChange={(e) =>
+              setForm({ ...form, full_name: e.detail.value ?? "" })
+            }
+          />
+        </IonItem>
 
-        <div className="login-wrapper">
-          <div className="login-box">
+        <IonItem className="form-item">
+          <IonLabel position="stacked">Customer Type</IonLabel>
+          <IonSelect
+            value={form.customer_type}
+            onIonChange={(e) =>
+              setForm({ ...form, customer_type: e.detail.value })
+            }
+          >
+            <IonSelectOption value="reviewer">Reviewer</IonSelectOption>
+            <IonSelectOption value="student">Student</IonSelectOption>
+            <IonSelectOption value="regular">Regular</IonSelectOption>
+          </IonSelect>
+        </IonItem>
 
-            {/* TITLE + LOGO */}
-            <div className="login-header">
-              <img
-                src={studyHubLogo}
-                alt="Study Hub Logo"
-                className="login-logo"
-              />
-              <h2>Login</h2>
-            </div>
+        <IonItem className="form-item">
+          <IonLabel position="stacked">Customer Field</IonLabel>
+          <IonInput
+            value={form.customer_field}
+            onIonChange={(e) =>
+              setForm({ ...form, customer_field: e.detail.value ?? "" })
+            }
+          />
+        </IonItem>
 
-            {/* EMAIL */}
-            <IonItem
-              lines="none"
-              className={`input-item ${emailFocused ? "item-has-focus" : ""}`}
-            >
-              <IonIcon icon={mailOutline} className="input-icon" />
-              <IonInput
-                type="email"
-                placeholder="Enter email"
-                value={email}
-                onIonChange={(e) => setEmail(e.detail.value!)}
-                onIonFocus={() => setEmailFocused(true)}
-                onIonBlur={() => setEmailFocused(false)}
-              />
-            </IonItem>
+        {/* ⏱ TIME AVAIL - Changed to text input for HH:MM only, no AM/PM */}
+        <IonItem className="form-item">
+          <IonLabel position="stacked">Time Avail (HH:MM)</IonLabel>
+          <IonInput
+            type="text"
+            placeholder="HH:MM (e.g., 01:00 for 1 hour, 00:30 for 30 mins)"
+            value={timeAvail}
+            onIonChange={(e) => {
+              const value = e.detail.value ?? "";
+              // Basic validation: ensure format is HH:MM
+              if (/^\d{2}:\d{2}$/.test(value)) {
+                setTimeAvail(value);
+              } else if (value === "") {
+                setTimeAvail("");
+              }
+              // If invalid, don't update (or you could show an error)
+            }}
+          />
+        </IonItem>
 
-            {/* PASSWORD */}
-            <IonItem
-              lines="none"
-              className={`input-item ${passwordFocused ? "item-has-focus" : ""}`}
-            >
-              <IonIcon icon={lockClosedOutline} className="input-icon" />
-              <IonInput
-                type="password"
-                placeholder="Enter password"
-                value={password}
-                onIonChange={(e) => setPassword(e.detail.value!)}
-                onIonFocus={() => setPasswordFocused(true)}
-                onIonBlur={() => setPasswordFocused(false)}
-              />
-            </IonItem>
-
-            <IonButton expand="block" className="login-btn" onClick={handleLogin}>
-              Login
-            </IonButton>
-
-          </div>
+        <div className="summary-section">
+          <p className="summary-text">
+            Time Started: {new Date(timeStarted).toLocaleTimeString("en-PH")}
+          </p>
+          <p className="summary-text">
+            Time Ended: {new Date(getTimeEnded()).toLocaleTimeString("en-PH")}
+          </p>
+          <p className="summary-text">Total Hours: {totalHours}</p>
+          <p className="summary-text">Total Amount: ₱{totalAmount}</p>
         </div>
 
-        {/* TOAST */}
-        <IonToast
-          isOpen={showToast}
-          onDidDismiss={() => setShowToast(false)}
-          message={toastMsg}
-          duration={2000}
-          color={toastMsg === "Login successful!" ? "success" : "danger"}
-        />
-
-      </IonContent>
-    </IonPage>
+        <IonButton expand="block" className="submit-button" onClick={handleSubmit}>
+          Save Record
+        </IonButton>
+      </div>
+    </div>
   );
 };
 
-export default Login;
+export default Staff_Dashboard;
