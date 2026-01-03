@@ -17,12 +17,18 @@ import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 
-/* Page */
+/* Pages */
 import Staff_Dashboard from "./Staff_Dashboard";
+import Customer_Lists from "./Customer_Lists";
+import Customer_Reservations from "./Customer_Reservations";
+import Customer_Calendar from "./Customer_Calendar";
 
 /* Assets */
 import dashboardIcon from "../assets/add_user.png";
 import studyHubLogo from "../assets/study_hub.png";
+import listIcon from "../assets/list.png";
+import reserveIcon from "../assets/reserve.png";
+import calendarIcon from "../assets/calendar.png";
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
@@ -30,11 +36,24 @@ const Staff_menu: React.FC = () => {
 
   const menuItems = [
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
+    { name: "Customer Lists", key: "customer_lists", icon: listIcon },
+    { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
+    { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
   ];
 
   const renderContent = () => {
-    if (activePage === "dashboard") return <Staff_Dashboard />;
-    return <h2>Welcome Staff</h2>;
+    switch (activePage) {
+      case "dashboard":
+        return <Staff_Dashboard />;
+      case "customer_lists":
+        return <Customer_Lists />;
+      case "customer_reservations":
+        return <Customer_Reservations />;
+      case "customer_calendar":
+        return <Customer_Calendar />;
+      default:
+        return <h2>Welcome Staff</h2>;
+    }
   };
 
   const handleLogout = () => {
@@ -46,24 +65,14 @@ const Staff_menu: React.FC = () => {
   return (
     <IonPage>
       <IonSplitPane contentId="main" when="(min-width: 768px)">
-        
         {/* ================= SIDEBAR ================= */}
         <IonMenu contentId="main" className="staff-menu">
-          
           {/* HEADER */}
           <IonHeader className="staff-menu-header">
             <IonToolbar>
               <div className="menu-brand">
-                <img
-                  src={studyHubLogo}
-                  alt="Me Tyme Lounge"
-                  className="menu-logo"
-                />
-
-                {/* FIGMA STYLE TEXT */}
-                <span className="menu-title-text figma-title">
-                  Me Tyme Lounge
-                </span>
+                <img src={studyHubLogo} alt="Study Hub" className="menu-logo" />
+                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
               </div>
             </IonToolbar>
           </IonHeader>
@@ -79,16 +88,10 @@ const Staff_menu: React.FC = () => {
                   <IonItem
                     button
                     lines="none"
-                    className={`menu-item ${
-                      activePage === item.key ? "active" : ""
-                    }`}
+                    className={`menu-item ${activePage === item.key ? "active" : ""}`}
                     onClick={() => setActivePage(item.key)}
                   >
-                    <img
-                      src={item.icon}
-                      alt={item.name}
-                      className="menu-icon"
-                    />
+                    <img src={item.icon} alt={item.name} className="menu-icon" />
                     {item.name}
                   </IonItem>
                 </IonMenuToggle>
@@ -121,7 +124,7 @@ const Staff_menu: React.FC = () => {
             </IonToolbar>
           </IonHeader>
 
-          <IonContent className="ion-padding">
+          <IonContent className="ion-padding custom-bg">
             <AnimatePresence mode="wait">
               <motion.div
                 key={activePage}
@@ -135,7 +138,6 @@ const Staff_menu: React.FC = () => {
             </AnimatePresence>
           </IonContent>
         </IonPage>
-
       </IonSplitPane>
     </IonPage>
   );
