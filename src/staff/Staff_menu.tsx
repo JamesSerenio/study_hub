@@ -22,6 +22,7 @@ import Staff_Dashboard from "./Staff_Dashboard";
 import Customer_Lists from "./Customer_Lists";
 import Customer_Reservations from "./Customer_Reservations";
 import Customer_Calendar from "./Customer_Calendar";
+import Product_Item_Lists from "./Product_Item_Lists"; // ✅ New page
 
 /* Assets */
 import dashboardIcon from "../assets/add_user.png";
@@ -29,6 +30,7 @@ import studyHubLogo from "../assets/study_hub.png";
 import listIcon from "../assets/list.png";
 import reserveIcon from "../assets/reserve.png";
 import calendarIcon from "../assets/calendar.png";
+import foodIcon from "../assets/food.png"; // ✅ New icon
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
@@ -39,6 +41,7 @@ const Staff_menu: React.FC = () => {
     { name: "Customer Lists", key: "customer_lists", icon: listIcon },
     { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
     { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
+    { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon }, // ✅ Added menu item
   ];
 
   const renderContent = () => {
@@ -51,6 +54,8 @@ const Staff_menu: React.FC = () => {
         return <Customer_Reservations />;
       case "customer_calendar":
         return <Customer_Calendar />;
+      case "product_item_lists":
+        return <Product_Item_Lists />; // ✅ Render the new page
       default:
         return <h2>Welcome Staff</h2>;
     }
