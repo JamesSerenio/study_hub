@@ -12,7 +12,6 @@ import {
 import { supabase } from "../utils/supabaseClient";
 
 const HOURLY_RATE = 20;
-const ITEMS_THRESHOLD = 5; // If more than 5 items in category, use select instead of list
 
 interface Profile {
   id: string;
@@ -158,6 +157,13 @@ const Staff_Dashboard: React.FC = () => {
     });
   };
 
+  const removeCategory = (index: number) => {
+    const categoryToRemove = selectedCategories[index];
+    setSelectedCategories(prev => prev.filter((_, i) => i !== index));
+    // Remove selected add-ons for this category
+    setSelectedAddOns(prev => prev.filter(s => s.category !== categoryToRemove));
+  };
+
   const handleAddOnsClick = () => {
     if (!showAddOns) {
       // First tap: show add-ons and add first category
@@ -167,12 +173,6 @@ const Staff_Dashboard: React.FC = () => {
       // Subsequent taps: add more categories
       setSelectedCategories(prev => [...prev, ""]);
     }
-  };
-
-  const cancelAddOns = () => {
-    setShowAddOns(false);
-    setSelectedCategories([]);
-    setSelectedAddOns([]);
   };
 
   const handleSubmit = async (): Promise<void> => {
@@ -307,85 +307,83 @@ const Staff_Dashboard: React.FC = () => {
           />
         </IonItem>
 
-        {/* Add-Ons Buttons */}
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <IonButton expand="block" onClick={handleAddOnsClick}>
-            {showAddOns ? "Add More Add-Ons" : "Add-Ons"}
-          </IonButton>
-          {showAddOns && (
-            <IonButton expand="block" color="danger" onClick={cancelAddOns}>
-              Cancel Add-Ons
-            </IonButton>
-          )}
-        </div>
+        {/* Add-Ons Button */}
+        <IonButton expand="block" onClick={handleAddOnsClick}>
+          {showAddOns ? "Add More Add-Ons" : "Add-Ons"}
+        </IonButton>
 
         {/* Add-Ons Section - Only show if showAddOns is true */}
         {showAddOns && selectedCategories.map((category, index) => {
           const categoryItems = addOns.filter(a => a.category === category);
-          const useSelect = categoryItems.length > ITEMS_THRESHOLD;
 
           return (
             <div key={index}>
-              <IonItem className="form-item">
-                <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
-                <IonSelect
-                  value={category}
-                  placeholder="Choose a category"
-                  onIonChange={(e) => handleCategoryChange(index, e.detail.value)}
-                >
-                  {categories.map(cat => (
-                    <IonSelectOption key={cat} value={cat}>{cat}</IonSelectOption>
-                  ))}
-                </IonSelect>
-              </IonItem>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <IonItem className="form-item" style={{ flex: 1 }}>
+                  <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                  <IonSelect
+                    value={category}
+                    placeholder="Choose a category"
+                    onIonChange={(e) => handleCategoryChange(index, e.detail.value)}
+                  >
+                    {categories.map(cat => (
+                      <IonSelectOption key={cat} value={cat}>{cat}</IonSelectOption>
+                    ))}
+                  </IonSelect>
+                </IonItem>
+                <IonButton color="danger" onClick={() => removeCategory(index)}>x</IonButton>
+              </div>
 
               {category && (
                 <>
-                  {useSelect ? (
-                    // Use select for many items
-                    <IonItem className="form-item">
-                      <IonLabel position="stacked">Select {category} Item</IonLabel>
-                      <IonSelect
-                        placeholder="Choose an item"
-                        onIonChange={(e) => {
-                          const selectedId = e.detail.value;
-                          if (selectedId) {
-                            const addOn = addOns.find(a => a.id === selectedId);
-                            if (addOn) {
-                              setSelectedAddOns(prev => {
-                                const existing = prev.find(s => s.id === selectedId);
-                                if (!existing) {
-                                  return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
-                                }
-                                return prev;
-                              });
-                            }
+                  <IonItem className="form-item">
+                    <IonLabel position="stacked">Select {category} Item</IonLabel>
+                    <IonSelect
+                      placeholder="Choose an item"
+                      onIonChange={(e) => {
+                        const selectedId = e.detail.value;
+                        if (selectedId) {
+                          const addOn = addOns.find(a => a.id === selectedId);
+                          if (addOn) {
+                            setSelectedAddOns(prev => {
+                              const existing = prev.find(s => s.id === selectedId);
+                              if (!existing) {
+                                return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
+                              }
+                              return prev;
+                            });
                           }
-                        }}
-                      >
-                        {categoryItems.map(addOn => (
-                          <IonSelectOption key={addOn.id} value={addOn.id}>
-                            {addOn.name} - ₱{addOn.price}
-                          </IonSelectOption>
-                        ))}
-                      </IonSelect>
-                    </IonItem>
-                  ) : (
-                    // Use list for few items
-                    <IonList style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                        }
+                      }}
+                    >
+                      {categoryItems.map(addOn => (
+                        <IonSelectOption key={addOn.id} value={addOn.id}>
+                          {addOn.name} - ₱{addOn.price}
+                        </IonSelectOption>
+                      ))}
+                    </IonSelect>
+                  </IonItem>
+
+                  {/* Selected items for this category */}
+                  {selectedAddOns.filter(s => s.category === category).length > 0 && (
+                    <IonList>
                       <IonListHeader>
-                        <IonLabel>{category} Items</IonLabel>
+                        <IonLabel>Selected {category} Items</IonLabel>
                       </IonListHeader>
-                      {categoryItems.map((addOn) => (
-                        <IonItem key={addOn.id}>
-                          <IonLabel>{addOn.name} - ₱{addOn.price}</IonLabel>
-                          <IonInput
-                            type="number"
-                            placeholder="Qty"
-                            min="0"
-                            value={selectedAddOns.find(s => s.id === addOn.id)?.quantity || 0}
-                            onIonChange={(e) => handleAddOnQuantityChange(addOn.id, parseInt(e.detail.value!) || 0)}
-                          />
+                      {selectedAddOns.filter(s => s.category === category).map((selected) => (
+                        <IonItem key={selected.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <IonLabel>{selected.name} - ₱{selected.price}</IonLabel>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <IonLabel style={{ marginRight: '5px' }}>Quantity:</IonLabel>
+                            <IonInput
+                              type="number"
+                              min="0"
+                              value={selected.quantity}
+                              style={{ width: '60px' }}
+                              onIonChange={(e) => handleAddOnQuantityChange(selected.id, parseInt(e.detail.value!) || 0)}
+                            />
+                            <IonButton color="danger" style={{ marginLeft: '10px' }} onClick={() => setSelectedAddOns(prev => prev.filter(s => s.id !== selected.id))}>Remove</IonButton>
+                          </div>
                         </IonItem>
                       ))}
                     </IonList>
