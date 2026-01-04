@@ -6,12 +6,13 @@ import {
   IonLabel,
   IonSelect,
   IonSelectOption,
-  IonToggle,
-  IonDatetime,
+  IonList,
+  IonListHeader,
 } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 
 const HOURLY_RATE = 20;
+const ITEMS_THRESHOLD = 5; // If more than 5 items in category, use select instead of list
 
 interface Profile {
   id: string;
@@ -24,20 +25,42 @@ interface CustomerForm {
   customer_type: "reviewer" | "student" | "regular" | "";
   customer_field: string;
   has_id: boolean;
-  reservation: "yes" | "no";
-  reservation_date: string | null;
+}
+
+interface AddOn {
+  id: string;
+  category: string;
+  name: string;
+  price: number;
+  restocked: number;
+  sold: number;
+  expenses: number;
+  stocks: number;
+  overall_sales: number;
+  expected_sales: number;
+  image_url: string;
+}
+
+interface SelectedAddOn {
+  id: string;
+  name: string;
+  category: string;
+  price: number;
+  quantity: number;
 }
 
 const Staff_Dashboard: React.FC = () => {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [addOns, setAddOns] = useState<AddOn[]>([]);
+  const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [showAddOns, setShowAddOns] = useState<boolean>(false);
 
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
     customer_type: "",
     customer_field: "",
     has_id: false,
-    reservation: "no",
-    reservation_date: null,
   });
 
   // 🔹 AUTO time started (PH time)
@@ -48,6 +71,7 @@ const Staff_Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchProfile();
+    fetchAddOns();
   }, []);
 
   const fetchProfile = async (): Promise<void> => {
@@ -68,6 +92,21 @@ const Staff_Dashboard: React.FC = () => {
     setProfile(data);
   };
 
+  const fetchAddOns = async (): Promise<void> => {
+    try {
+      const { data, error } = await supabase
+        .from("add_ons")
+        .select("*")
+        .order("category", { ascending: true });
+
+      if (error) throw error;
+      setAddOns(data || []);
+    } catch (error) {
+      console.error("Error fetching add-ons:", error);
+      alert("Error loading add-ons.");
+    }
+  };
+
   // 🧮 Convert HH:MM → hours
   const getTotalHours = (): number => {
     const [h, m] = timeAvail.split(":").map(Number);
@@ -85,7 +124,56 @@ const Staff_Dashboard: React.FC = () => {
   };
 
   const totalHours = getTotalHours();
-  const totalAmount = totalHours * HOURLY_RATE;
+  const timeAmount = totalHours * HOURLY_RATE;
+  const addOnsAmount = selectedAddOns.reduce((sum, s) => sum + (s.quantity * s.price), 0);
+  const totalAmount = timeAmount + addOnsAmount;
+
+  // Get unique categories
+  const categories = [...new Set(addOns.map(a => a.category))];
+
+  const handleAddOnQuantityChange = (id: string, quantity: number) => {
+    setSelectedAddOns(prev => {
+      const existing = prev.find(s => s.id === id);
+      if (quantity > 0) {
+        if (existing) {
+          return prev.map(s => s.id === id ? { ...s, quantity } : s);
+        } else {
+          const addOn = addOns.find(a => a.id === id);
+          if (addOn) {
+            return [...prev, { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity }];
+          }
+        }
+      } else {
+        return prev.filter(s => s.id !== id);
+      }
+      return prev;
+    });
+  };
+
+  const handleCategoryChange = (index: number, category: string) => {
+    setSelectedCategories(prev => {
+      const newCategories = [...prev];
+      newCategories[index] = category;
+      return newCategories;
+    });
+  };
+
+  const handleAddOnsClick = () => {
+    if (!showAddOns) {
+      // First tap: show add-ons and add first category
+      setShowAddOns(true);
+      setSelectedCategories([""]);
+    } else {
+      // Subsequent taps: add more categories
+      setSelectedCategories(prev => [...prev, ""]);
+    }
+  };
+
+  const cancelAddOns = () => {
+    setShowAddOns(false);
+    setSelectedCategories([]);
+    setSelectedAddOns([]);
+  };
 
   const handleSubmit = async (): Promise<void> => {
     if (!profile || totalHours <= 0) {
@@ -96,40 +184,67 @@ const Staff_Dashboard: React.FC = () => {
     const { data: auth } = await supabase.auth.getUser();
     if (!auth?.user) return;
 
+    // Validate add-on quantities against stocks
+    for (const selected of selectedAddOns) {
+      const addOn = addOns.find(a => a.id === selected.id);
+      if (!addOn || addOn.stocks < selected.quantity) {
+        alert(`Insufficient stock for ${selected.name}. Available: ${addOn?.stocks || 0}`);
+        return;
+      }
+    }
+
+    // Update add-ons
+    for (const selected of selectedAddOns) {
+      const addOn = addOns.find(a => a.id === selected.id);
+      if (addOn) {
+        const newSold = addOn.sold + selected.quantity;
+        const newOverallSales = addOn.overall_sales + (selected.quantity * addOn.price);
+        const { error } = await supabase
+          .from("add_ons")
+          .update({
+            sold: newSold,
+            overall_sales: newOverallSales,
+          })
+          .eq("id", selected.id);
+        if (error) {
+          alert(`Error updating ${selected.name}: ${error.message}`);
+          return;
+        }
+      }
+    }
+
+    // Insert customer session
     const { error } = await supabase.from("customer_sessions").insert({
       staff_id: auth.user.id,
       date: new Date().toISOString().split("T")[0],
-
       full_name: form.full_name,
       customer_type: form.customer_type,
       customer_field: form.customer_field,
       has_id: form.has_id,
-
       hour_avail: timeAvail,
       time_started: timeStarted,
       time_ended: getTimeEnded(),
-
       total_hours: totalHours,
       total_amount: totalAmount,
-
-      reservation: form.reservation,
-      reservation_date: form.reservation === "yes" ? form.reservation_date : null,
+      add_ons: selectedAddOns, // Assuming you add this field as jsonb in the table
     });
 
     if (error) {
       alert(error.message);
     } else {
       alert("Customer session saved!");
-      // Reset form after successful submit
+      // Reset form
       setForm({
         full_name: "",
         customer_type: "",
         customer_field: "",
         has_id: false,
-        reservation: "no",
-        reservation_date: null,
       });
       setTimeAvail("01:00");
+      setSelectedAddOns([]);
+      setSelectedCategories([]);
+      setShowAddOns(false);
+      fetchAddOns(); // Refresh add-ons to update stocks
     }
   };
 
@@ -172,19 +287,6 @@ const Staff_Dashboard: React.FC = () => {
           />
         </IonItem>
 
-        {/* Has ID Toggle */}
-        <IonItem className="form-item">
-          <IonLabel>ID Status</IonLabel>
-          <IonToggle
-            checked={form.has_id}
-            onIonChange={(e) =>
-              setForm({ ...form, has_id: e.detail.checked })
-            }
-            slot="end"
-          />
-          <IonLabel slot="end">{form.has_id ? "With ID" : "Without ID"}</IonLabel>
-        </IonItem>
-
         {/* ⏱ TIME AVAIL - Changed to text input for HH:MM only, no AM/PM */}
         <IonItem className="form-item">
           <IonLabel position="stacked">Time Avail (HH:MM)</IonLabel>
@@ -205,33 +307,94 @@ const Staff_Dashboard: React.FC = () => {
           />
         </IonItem>
 
-        {/* Reservation Select */}
-        <IonItem className="form-item">
-          <IonLabel position="stacked">Reservation</IonLabel>
-          <IonSelect
-            value={form.reservation}
-            onIonChange={(e) =>
-              setForm({ ...form, reservation: e.detail.value, reservation_date: e.detail.value === "no" ? null : form.reservation_date })
-            }
-          >
-            <IonSelectOption value="no">No</IonSelectOption>
-            <IonSelectOption value="yes">Yes</IonSelectOption>
-          </IonSelect>
-        </IonItem>
+        {/* Add-Ons Buttons */}
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <IonButton expand="block" onClick={handleAddOnsClick}>
+            {showAddOns ? "Add More Add-Ons" : "Add-Ons"}
+          </IonButton>
+          {showAddOns && (
+            <IonButton expand="block" color="danger" onClick={cancelAddOns}>
+              Cancel Add-Ons
+            </IonButton>
+          )}
+        </div>
 
-        {/* Reservation Date - Only show if reservation is yes */}
-        {form.reservation === "yes" && (
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Reservation Date</IonLabel>
-            <IonDatetime
-              value={form.reservation_date || undefined}
-              onIonChange={(e) =>
-                setForm({ ...form, reservation_date: e.detail.value as string | null })
-              }
-              presentation="date"
-            />
-          </IonItem>
-        )}
+        {/* Add-Ons Section - Only show if showAddOns is true */}
+        {showAddOns && selectedCategories.map((category, index) => {
+          const categoryItems = addOns.filter(a => a.category === category);
+          const useSelect = categoryItems.length > ITEMS_THRESHOLD;
+
+          return (
+            <div key={index}>
+              <IonItem className="form-item">
+                <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                <IonSelect
+                  value={category}
+                  placeholder="Choose a category"
+                  onIonChange={(e) => handleCategoryChange(index, e.detail.value)}
+                >
+                  {categories.map(cat => (
+                    <IonSelectOption key={cat} value={cat}>{cat}</IonSelectOption>
+                  ))}
+                </IonSelect>
+              </IonItem>
+
+              {category && (
+                <>
+                  {useSelect ? (
+                    // Use select for many items
+                    <IonItem className="form-item">
+                      <IonLabel position="stacked">Select {category} Item</IonLabel>
+                      <IonSelect
+                        placeholder="Choose an item"
+                        onIonChange={(e) => {
+                          const selectedId = e.detail.value;
+                          if (selectedId) {
+                            const addOn = addOns.find(a => a.id === selectedId);
+                            if (addOn) {
+                              setSelectedAddOns(prev => {
+                                const existing = prev.find(s => s.id === selectedId);
+                                if (!existing) {
+                                  return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
+                                }
+                                return prev;
+                              });
+                            }
+                          }
+                        }}
+                      >
+                        {categoryItems.map(addOn => (
+                          <IonSelectOption key={addOn.id} value={addOn.id}>
+                            {addOn.name} - ₱{addOn.price}
+                          </IonSelectOption>
+                        ))}
+                      </IonSelect>
+                    </IonItem>
+                  ) : (
+                    // Use list for few items
+                    <IonList style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                      <IonListHeader>
+                        <IonLabel>{category} Items</IonLabel>
+                      </IonListHeader>
+                      {categoryItems.map((addOn) => (
+                        <IonItem key={addOn.id}>
+                          <IonLabel>{addOn.name} - ₱{addOn.price}</IonLabel>
+                          <IonInput
+                            type="number"
+                            placeholder="Qty"
+                            min="0"
+                            value={selectedAddOns.find(s => s.id === addOn.id)?.quantity || 0}
+                            onIonChange={(e) => handleAddOnQuantityChange(addOn.id, parseInt(e.detail.value!) || 0)}
+                          />
+                        </IonItem>
+                      ))}
+                    </IonList>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
 
         <div className="summary-section">
           <p className="summary-text">
@@ -241,7 +404,19 @@ const Staff_Dashboard: React.FC = () => {
             Time Ended: {new Date(getTimeEnded()).toLocaleTimeString("en-PH")}
           </p>
           <p className="summary-text">Total Hours: {totalHours}</p>
-          <p className="summary-text">Total Amount: ₱{totalAmount}</p>
+          <p className="summary-text">Time Amount: ₱{timeAmount.toFixed(2)}</p>
+          {selectedAddOns.length > 0 && (
+            <div>
+              <p className="summary-text">Selected Add-Ons:</p>
+              {selectedAddOns.map(s => (
+                <p key={s.id} className="summary-text">
+                  {s.name} x{s.quantity} - ₱{(s.quantity * s.price).toFixed(2)}
+                </p>
+              ))}
+              <p className="summary-text">Add-Ons Total: ₱{addOnsAmount.toFixed(2)}</p>
+            </div>
+          )}
+          <p className="summary-text"><strong>Overall Total Amount: ₱{totalAmount.toFixed(2)}</strong></p>
         </div>
 
         <IonButton expand="block" className="submit-button" onClick={handleSubmit}>

@@ -265,15 +265,19 @@ ion-item {
   line-height: 22.52px;
   letter-spacing: 0.01em;
   text-transform: uppercase;
+  color: #000;
 
-  color: #56A28E;
-
+  /* EMBOSSED / DEPTH EFFECT */
   text-shadow:
-    1px 1px 0 rgba(0, 0, 0, 0.15),
-    2px 2px 0 rgba(0, 0, 0, 0.1);
+    1px 1px 0 #bfbfbf,
+    2px 2px 0 #9f9f9f,
+    3px 3px 0 #7f7f7f;
 
-  -webkit-text-stroke: 0.3px rgba(0, 0, 0, 0.3);
+  /* Optional outline */
+  -webkit-text-stroke: 0.3px #000;
 }
+
+
 
 
 /* =========================
@@ -284,7 +288,7 @@ ion-item {
   --background: transparent;
   margin: 6px 12px;
   border-radius: 14px;
-  font-weight: 500;
+  font-weight: 600; 
   color: #56a28e;
   display: flex;
   align-items: center;
@@ -294,7 +298,9 @@ ion-item {
   position: relative;
   display: inline-block;
   padding-bottom: 4px;
+  font-weight: 600; 
 }
+
 
 .menu-text::after {
   content: "";

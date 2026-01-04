@@ -20,12 +20,12 @@ import { motion, AnimatePresence } from "framer-motion";
 /* Pages */
 import Admin_Dashboard from "./Admin_Dashboard";
 import Admin_Add_Ons from "./Admin_Add_Ons";
-import Admin_Item_Lists from "./Admin_Item_Lists"; // ✅ New Page
+import Admin_Item_Lists from "./Admin_Item_Lists";
 
 /* Assets */
 import dashboardIcon from "../assets/graph.png";
 import addOnsIcon from "../assets/ons.png";
-import itemIcon from "../assets/item.png"; // ✅ New Icon
+import itemIcon from "../assets/item.png";
 import studyHubLogo from "../assets/study_hub.png";
 
 const Admin_menu: React.FC = () => {
@@ -35,7 +35,7 @@ const Admin_menu: React.FC = () => {
   const menuItems = [
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
     { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
-    { name: "Item Lists", key: "item_lists", icon: itemIcon }, // ✅ New Menu Item
+    { name: "Item Lists", key: "item_lists", icon: itemIcon },
   ];
 
   const renderContent = () => {
@@ -45,7 +45,7 @@ const Admin_menu: React.FC = () => {
       case "add_ons":
         return <Admin_Add_Ons />;
       case "item_lists":
-        return <Admin_Item_Lists />; // ✅ Render New Page
+        return <Admin_Item_Lists />;
       default:
         return <h2>Welcome Admin</h2>;
     }
@@ -63,16 +63,10 @@ const Admin_menu: React.FC = () => {
         
         {/* ================= SIDEBAR ================= */}
         <IonMenu contentId="main" className="staff-menu">
-          
-          {/* HEADER */}
           <IonHeader className="staff-menu-header">
             <IonToolbar>
               <div className="menu-brand">
-                <img
-                  src={studyHubLogo}
-                  alt="Me Tyme Lounge"
-                  className="menu-logo"
-                />
+                <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
                 <span className="menu-title-text figma-title">
                   Me Tyme Lounge
                 </span>
@@ -101,19 +95,14 @@ const Admin_menu: React.FC = () => {
                       alt={item.name}
                       className="menu-icon"
                     />
-                    {item.name}
+                    <span className="menu-text">{item.name}</span>
                   </IonItem>
                 </IonMenuToggle>
               ))}
 
               {/* LOGOUT */}
               <IonMenuToggle autoHide={false}>
-                <IonButton
-                  expand="block"
-                  color="danger"
-                  className="logout-btn"
-                  onClick={handleLogout}
-                >
+                <IonButton className="logout-btn" onClick={handleLogout}>
                   <IonIcon icon={logOutOutline} slot="start" />
                   Logout
                 </IonButton>
@@ -133,7 +122,7 @@ const Admin_menu: React.FC = () => {
             </IonToolbar>
           </IonHeader>
 
-          <IonContent className="ion-padding">
+          <IonContent className="ion-padding custom-bg">
             <AnimatePresence mode="wait">
               <motion.div
                 key={activePage}
