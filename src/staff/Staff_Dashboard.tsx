@@ -16,7 +16,7 @@ interface CustomerForm {
   customer_field: string;
   has_id: boolean;
   id_number: string;
-  seat_number: string;
+  seat_number: string[];  // Changed to array for multiple selection
 }
 
 interface AddOn {
@@ -58,7 +58,7 @@ const Staff_Dashboard: React.FC = () => {
     customer_field: "",
     has_id: false,
     id_number: "",
-    seat_number: "",
+    seat_number: [],  // Initialize as empty array
   });
 
   const [timeStarted] = useState<string>(new Date().toISOString());
@@ -196,8 +196,8 @@ const Staff_Dashboard: React.FC = () => {
       alert("Invalid time avail - Please enter a valid time (e.g., 01:00)");
       return;
     }
-    if (!form.seat_number) {
-      alert("Please select a seat.");
+    if (form.seat_number.length === 0) {  // Changed to check array length
+      alert("Please select at least one seat.");
       return;
     }
     const { data: auth } = await supabase.auth.getUser();
@@ -226,7 +226,7 @@ const Staff_Dashboard: React.FC = () => {
         time_ended: getTimeEnded(),
         total_hours: totalHours,
         total_amount: totalAmount,
-        seat_number: form.seat_number,
+        seat_number: form.seat_number.join(', '),  // Store as comma-separated string
       })
       .select("id")
       .single();
@@ -260,7 +260,7 @@ const Staff_Dashboard: React.FC = () => {
       customer_field: "",
       has_id: false,
       id_number: "",
-      seat_number: "",
+      seat_number: [],  // Reset to empty array
     });
     setTimeAvail("01:00");
     setSelectedAddOns([]);
@@ -339,14 +339,19 @@ const Staff_Dashboard: React.FC = () => {
         <div className="form-item" style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
           {allSeats.map(seat => {
             const isOccupied = occupiedSeats.includes(seat);
-            const isSelected = form.seat_number === seat;
+            const isSelected = form.seat_number.includes(seat);  // Changed to check if in array
             if (isOccupied) return null;
             return (
               <IonButton
                 key={seat}
                 color={isSelected ? "success" : "medium"}
                 size="small"
-                onClick={() => setForm({ ...form, seat_number: seat })}
+                onClick={() => setForm(prev => ({
+                  ...prev,
+                  seat_number: prev.seat_number.includes(seat)
+                    ? prev.seat_number.filter(s => s !== seat)  // Remove if already selected
+                    : [...prev.seat_number, seat]  // Add if not selected
+                }))}
               >
                 {seat}
               </IonButton>
@@ -439,7 +444,7 @@ const Staff_Dashboard: React.FC = () => {
             </div>
           )}
           <p className="summary-text"><strong>Overall Total Amount: ₱{totalAmount.toFixed(2)}</strong></p>
-          <p className="summary-text"><strong>Seat Selected: {form.seat_number || "None"}</strong></p>
+          <p className="summary-text"><strong>Seats Selected: {form.seat_number.length > 0 ? form.seat_number.join(', ') : "None"}</strong></p>  {/* Updated to show multiple seats */}
         </div>
 
         <IonButton expand="block" className="submit-button" onClick={handleSubmit}>

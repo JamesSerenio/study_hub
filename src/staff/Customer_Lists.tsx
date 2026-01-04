@@ -17,6 +17,13 @@ interface CustomerSession {
   total_amount: number;
   reservation: string;
   reservation_date: string | null;
+  seat_number: string;  // Added seat_number
+  customer_session_add_ons: {  // Changed from add_ons to customer_session_add_ons
+    add_ons: { name: string };
+    quantity: number;
+    price: number;
+    total: number;
+  }[];
 }
 
 const Customer_Lists: React.FC = () => {
@@ -33,7 +40,15 @@ const Customer_Lists: React.FC = () => {
     setLoading(true);
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select("*")
+      .select(`
+        *,
+        customer_session_add_ons(
+          add_ons(name),
+          quantity,
+          price,
+          total
+        )
+      `)
       .neq("reservation", "yes")
       .order("date", { ascending: false });
 
@@ -65,12 +80,14 @@ const Customer_Lists: React.FC = () => {
               <th>Type</th>
               <th>Field</th>
               <th>Has ID</th>
-              <th>ID Number</th>
+              <th>Specific ID</th>
               <th>Hours</th>
               <th>Time In</th>
               <th>Time Out</th>
               <th>Total Hours</th>
               <th>Total Amount</th>
+              <th>Seat</th>
+              <th>Add-Ons</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -89,6 +106,12 @@ const Customer_Lists: React.FC = () => {
                 <td>{new Date(session.time_ended).toLocaleTimeString()}</td>
                 <td>{session.total_hours}</td>
                 <td>₱{session.total_amount.toFixed(2)}</td>
+                <td>{session.seat_number}</td>
+                <td>
+                  {session.customer_session_add_ons && session.customer_session_add_ons.length > 0
+                    ? session.customer_session_add_ons.map((addOn) => `${addOn.add_ons.name} x${addOn.quantity}`).join(', ')
+                    : 'None'}
+                </td>
                 <td>
                   <button
                     className="receipt-btn"
@@ -141,6 +164,11 @@ const Customer_Lists: React.FC = () => {
               <span>{selectedSession.customer_field}</span>
             </div>
 
+            <div className="receipt-row">
+              <span>Seat</span>
+              <span>{selectedSession.seat_number}</span>
+            </div>
+
             <hr />
 
             <div className="receipt-row">
@@ -163,6 +191,19 @@ const Customer_Lists: React.FC = () => {
               <span>Total Hours</span>
               <span>{selectedSession.total_hours}</span>
             </div>
+
+            {selectedSession.customer_session_add_ons && selectedSession.customer_session_add_ons.length > 0 && (
+              <>
+                <hr />
+                <h4>Add-Ons</h4>
+                {selectedSession.customer_session_add_ons.map((addOn, index) => (
+                  <div key={index} className="receipt-row">
+                    <span>{addOn.add_ons.name} x{addOn.quantity}</span>
+                    <span>₱{addOn.total.toFixed(2)}</span>
+                  </div>
+                ))}
+              </>
+            )}
 
             <hr />
 
