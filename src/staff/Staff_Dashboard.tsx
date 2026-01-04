@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { IonButton, IonInput, IonItem, IonLabel, IonSelect, IonSelectOption, IonList, IonListHeader, IonToggle, } from "@ionic/react";
+import { IonButton, IonInput, IonItem, IonLabel, IonSelect, IonSelectOption, IonList, IonListHeader, IonToggle } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 
 const HOURLY_RATE = 20;
@@ -15,7 +15,8 @@ interface CustomerForm {
   customer_type: "reviewer" | "student" | "regular" | "";
   customer_field: string;
   has_id: boolean;
-  id_number: string; // Specific ID
+  id_number: string;
+  seat_number: string;
 }
 
 interface AddOn {
@@ -40,6 +41,11 @@ interface SelectedAddOn {
   quantity: number;
 }
 
+interface CustomerSession {
+  seat_number: string;
+  time_ended: string;
+}
+
 const Staff_Dashboard: React.FC = () => {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [addOns, setAddOns] = useState<AddOn[]>([]);
@@ -51,16 +57,25 @@ const Staff_Dashboard: React.FC = () => {
     customer_type: "",
     customer_field: "",
     has_id: false,
-    id_number: "", // Initialize
+    id_number: "",
+    seat_number: "",
   });
 
-  // 🔹 AUTO time started (PH time)
-  const [timeStarted] = useState<string>(new Date().toISOString()); // 🔹 STAFF INPUT (HH:MM) - Prevent empty
+  const [timeStarted] = useState<string>(new Date().toISOString());
   const [timeAvail, setTimeAvail] = useState<string>("01:00");
+  const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
+
+  const allSeats = [
+    "1","2","3","4","5","6","7a","7b","8a","8b","9","10","11",
+    "12a","12b","12c","13","14","15","16","17","18","19","20","21","22","23","24","25"
+  ];
 
   useEffect(() => {
     fetchProfile();
     fetchAddOns();
+    fetchOccupiedSeats();
+    const interval = setInterval(fetchOccupiedSeats, 60000); // refresh every 1 min
+    return () => clearInterval(interval);
   }, []);
 
   const fetchProfile = async (): Promise<void> => {
@@ -92,7 +107,23 @@ const Staff_Dashboard: React.FC = () => {
     }
   };
 
-  // 🧮 Convert HH:MM → hours (improved to handle edge cases)
+  const fetchOccupiedSeats = async () => {
+    try {
+      const now = new Date().toISOString();
+      const { data } = await supabase
+        .from("customer_sessions")
+        .select("seat_number, time_ended")
+        .gt("time_ended", now); // only sessions that haven't ended
+
+      if (data) {
+        const seats = (data as CustomerSession[]).map(s => s.seat_number);
+        setOccupiedSeats(seats);
+      }
+    } catch (err) {
+      console.error("Error fetching occupied seats:", err);
+    }
+  };
+
   const getTotalHours = (): number => {
     if (!timeAvail || !timeAvail.includes(":")) return 0;
     const [h, m] = timeAvail.split(":").map(Number);
@@ -100,7 +131,6 @@ const Staff_Dashboard: React.FC = () => {
     return Number((h + m / 60).toFixed(2));
   };
 
-  // ⏰ Auto end time
   const getTimeEnded = (): string => {
     const start = new Date(timeStarted);
     const [h, m] = timeAvail.split(":").map(Number);
@@ -113,8 +143,6 @@ const Staff_Dashboard: React.FC = () => {
   const timeAmount = totalHours * HOURLY_RATE;
   const addOnsAmount = selectedAddOns.reduce((sum, s) => sum + (s.quantity * s.price), 0);
   const totalAmount = timeAmount + addOnsAmount;
-
-  // Get unique categories
   const categories = [...new Set(addOns.map(a => a.category))];
 
   const handleAddOnQuantityChange = (id: string, quantity: number) => {
@@ -147,23 +175,19 @@ const Staff_Dashboard: React.FC = () => {
   const removeCategory = (index: number) => {
     const categoryToRemove = selectedCategories[index];
     setSelectedCategories(prev => prev.filter((_, i) => i !== index));
-    // Remove selected add-ons for this category
     setSelectedAddOns(prev => prev.filter(s => s.category !== categoryToRemove));
   };
 
   const handleAddOnsClick = () => {
     if (!showAddOns) {
-      // First tap: show add-ons and add first category
       setShowAddOns(true);
       setSelectedCategories([""]);
     } else {
-      // Subsequent taps: add more categories
       setSelectedCategories(prev => [...prev, ""]);
     }
   };
 
   const handleSubmit = async (): Promise<void> => {
-    console.log("timeAvail:", timeAvail, "totalHours:", totalHours); // Debug
     if (!profile) {
       alert("You must be logged in as staff to save records.");
       return;
@@ -172,9 +196,13 @@ const Staff_Dashboard: React.FC = () => {
       alert("Invalid time avail - Please enter a valid time (e.g., 01:00)");
       return;
     }
+    if (!form.seat_number) {
+      alert("Please select a seat.");
+      return;
+    }
     const { data: auth } = await supabase.auth.getUser();
     if (!auth?.user) return;
-    // Validate add-on quantities against stocks
+
     for (const selected of selectedAddOns) {
       const addOn = addOns.find(a => a.id === selected.id);
       if (!addOn || addOn.stocks < selected.quantity) {
@@ -182,7 +210,7 @@ const Staff_Dashboard: React.FC = () => {
         return;
       }
     }
-    // Insert customer session first
+
     const { data: sessionData, error: sessionError } = await supabase
       .from("customer_sessions")
       .insert({
@@ -198,15 +226,18 @@ const Staff_Dashboard: React.FC = () => {
         time_ended: getTimeEnded(),
         total_hours: totalHours,
         total_amount: totalAmount,
+        seat_number: form.seat_number,
       })
       .select("id")
       .single();
+
     if (sessionError) {
       alert(`Error saving session: ${sessionError.message}`);
       return;
     }
+
     const sessionId = sessionData.id;
-    // Insert add-ons into customer_session_add_ons (trigger will update sales)
+
     for (const selected of selectedAddOns) {
       const { error: addOnError } = await supabase
         .from("customer_session_add_ons")
@@ -221,30 +252,35 @@ const Staff_Dashboard: React.FC = () => {
         return;
       }
     }
+
     alert("Customer session saved!");
-    // Reset form
     setForm({
       full_name: "",
       customer_type: "",
       customer_field: "",
       has_id: false,
       id_number: "",
+      seat_number: "",
     });
     setTimeAvail("01:00");
     setSelectedAddOns([]);
     setSelectedCategories([]);
     setShowAddOns(false);
-    fetchAddOns(); // Refresh add-ons to update stocks
+    fetchAddOns();
+    fetchOccupiedSeats();
   };
 
   return (
     <div className="staff-dashboard">
       <h2 className="form-title">Customer Time Form</h2>
       <div className="form-container">
+        {/* Full Name */}
         <IonItem className="form-item">
           <IonLabel position="stacked">Full Name</IonLabel>
           <IonInput value={form.full_name} onIonChange={(e) => setForm({ ...form, full_name: e.detail.value ?? "" })} />
         </IonItem>
+
+        {/* Customer Type */}
         <IonItem className="form-item">
           <IonLabel position="stacked">Customer Type</IonLabel>
           <IonSelect value={form.customer_type} onIonChange={(e) => setForm({ ...form, customer_type: e.detail.value })}>
@@ -253,55 +289,76 @@ const Staff_Dashboard: React.FC = () => {
             <IonSelectOption value="regular">Regular</IonSelectOption>
           </IonSelect>
         </IonItem>
+
+        {/* Customer Field */}
         <IonItem className="form-item">
           <IonLabel position="stacked">Customer Field</IonLabel>
           <IonInput value={form.customer_field} onIonChange={(e) => setForm({ ...form, customer_field: e.detail.value ?? "" })} />
         </IonItem>
-        {/* ID Toggle with With/Without labels */}
+
+        {/* ID Toggle */}
         <IonItem className="form-item">
           <IonLabel>ID</IonLabel>
           <IonToggle checked={form.has_id} onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })} />
           <IonLabel slot="end">{form.has_id ? 'With' : 'Without'}</IonLabel>
         </IonItem>
-        {/* Conditional Specific ID Input */}
+
         {form.has_id && (
           <IonItem className="form-item">
             <IonLabel position="stacked">Specific ID</IonLabel>
-            <IonInput value={form.id_number} placeholder="e.g., National ID, Student ID, etc." onIonChange={(e) => setForm({ ...form, id_number: e.detail.value ?? "" })} />
+            <IonInput value={form.id_number} placeholder="e.g., National ID, Student ID" onIonChange={(e) => setForm({ ...form, id_number: e.detail.value ?? "" })} />
           </IonItem>
         )}
-        {/* ⏱ TIME AVAIL - Improved validation to accept 1:0 or 01:00, auto-pad both hours and minutes, prevent empty or zero time */}
+
+        {/* Time Avail */}
         <IonItem className="form-item">
           <IonLabel position="stacked">Time Avail (HH:MM)</IonLabel>
           <IonInput
             type="text"
-            placeholder="HH:MM (e.g., 1:00 for 1 hour, 0:30 for 30 mins)"
+            placeholder="HH:MM"
             value={timeAvail}
             onIonChange={(e) => {
               const value = e.detail.value ?? "";
-              // Improved validation: allow 1:0 or 01:00, auto-pad both hours and minutes, prevent empty or zero time
               const match = value.match(/^(\d{1,2}):(\d{1,2})$/);
               if (match) {
                 const h = parseInt(match[1], 10);
                 const m = parseInt(match[2], 10);
                 if (h >= 0 && h <= 23 && m >= 0 && m <= 59 && (h > 0 || m > 0)) {
-                  // Prevent 00:00
                   const paddedH = h.toString().padStart(2, '0');
                   const paddedM = m.toString().padStart(2, '0');
                   setTimeAvail(`${paddedH}:${paddedM}`);
                 }
               } else if (value === "") {
-                // Prevent empty, reset to default
                 setTimeAvail("01:00");
               }
             }}
           />
         </IonItem>
-        {/* Add-Ons Button */}
+
+        {/* Seat Selection */}
+        <div className="form-item" style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+          {allSeats.map(seat => {
+            const isOccupied = occupiedSeats.includes(seat);
+            const isSelected = form.seat_number === seat;
+            if (isOccupied) return null;
+            return (
+              <IonButton
+                key={seat}
+                color={isSelected ? "success" : "medium"}
+                size="small"
+                onClick={() => setForm({ ...form, seat_number: seat })}
+              >
+                {seat}
+              </IonButton>
+            );
+          })}
+        </div>
+
+        {/* Add-Ons */}
         <IonButton expand="block" onClick={handleAddOnsClick}>
           {showAddOns ? "Add More Add-Ons" : "Add-Ons"}
         </IonButton>
-        {/* Add-Ons Section - Only show if showAddOns is true */}
+
         {showAddOns && selectedCategories.map((category, index) => {
           const categoryItems = addOns.filter(a => a.category === category);
           return (
@@ -343,7 +400,6 @@ const Staff_Dashboard: React.FC = () => {
                       ))}
                     </IonSelect>
                   </IonItem>
-                  {/* Selected items for this category */}
                   {selectedAddOns.filter(s => s.category === category).length > 0 && (
                     <IonList>
                       <IonListHeader>
@@ -366,6 +422,8 @@ const Staff_Dashboard: React.FC = () => {
             </div>
           );
         })}
+
+        {/* Summary */}
         <div className="summary-section">
           <p className="summary-text">Time Started: {new Date(timeStarted).toLocaleTimeString("en-PH")}</p>
           <p className="summary-text">Time Ended: {new Date(getTimeEnded()).toLocaleTimeString("en-PH")}</p>
@@ -375,15 +433,15 @@ const Staff_Dashboard: React.FC = () => {
             <div>
               <p className="summary-text">Selected Add-Ons:</p>
               {selectedAddOns.map(s => (
-                <p key={s.id} className="summary-text">
-                  {s.name} x{s.quantity} - ₱{(s.quantity * s.price).toFixed(2)}
-                </p>
+                <p key={s.id} className="summary-text">{s.name} x{s.quantity} - ₱{(s.quantity * s.price).toFixed(2)}</p>
               ))}
               <p className="summary-text">Add-Ons Total: ₱{addOnsAmount.toFixed(2)}</p>
             </div>
           )}
           <p className="summary-text"><strong>Overall Total Amount: ₱{totalAmount.toFixed(2)}</strong></p>
+          <p className="summary-text"><strong>Seat Selected: {form.seat_number || "None"}</strong></p>
         </div>
+
         <IonButton expand="block" className="submit-button" onClick={handleSubmit}>
           Save Record
         </IonButton>
