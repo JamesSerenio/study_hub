@@ -1,195 +1,96 @@
+// Customer_Lists.tsx
 import React, { useEffect, useState } from "react";
-import {
-  IonButton,
-  IonInput,
-  IonItem,
-  IonLabel,
-  IonSelect,
-  IonSelectOption,
-} from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 
-const HOURLY_RATE = 20;
-
-interface Profile {
+interface CustomerSession {
   id: string;
-  email: string;
-  role: "admin" | "staff";
-}
-
-interface CustomerForm {
+  date: string;
   full_name: string;
-  customer_type: "reviewer" | "student" | "regular" | "";
+  customer_type: string;
   customer_field: string;
   has_id: boolean;
+  id_number: string;
+  hour_avail: string;
+  time_started: string;
+  time_ended: string;
+  total_hours: number;
+  total_amount: number;
+  reservation: string;
+  reservation_date: string | null;
 }
 
-const Staff_Dashboard: React.FC = () => {
-  const [profile, setProfile] = useState<Profile | null>(null);
-
-  const [form, setForm] = useState<CustomerForm>({
-    full_name: "",
-    customer_type: "",
-    customer_field: "",
-    has_id: false,
-  });
-
-  // 🔹 AUTO time started (PH time)
-  const [timeStarted] = useState<string>(new Date().toISOString());
-
-  // 🔹 STAFF INPUT (HH:MM)
-  const [timeAvail, setTimeAvail] = useState<string>("01:00");
+const Customer_Lists: React.FC = () => {
+  const [sessions, setSessions] = useState<CustomerSession[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    fetchProfile();
+    fetchCustomerSessions();
   }, []);
 
-  const fetchProfile = async (): Promise<void> => {
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth?.user) return;
+  const fetchCustomerSessions = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('customer_sessions')
+        .select('*')
+        .neq('reservation', 'yes') // Fetch sessions where reservation is not 'yes'
+        .order('date', { ascending: false }); // Order by date descending
 
-    const { data } = await supabase
-      .from("profiles")
-      .select("id, email, role")
-      .eq("id", auth.user.id)
-      .single<Profile>();
-
-    if (!data || data.role !== "staff") {
-      alert("Staff only");
-      return;
-    }
-
-    setProfile(data);
-  };
-
-  // 🧮 Convert HH:MM → hours
-  const getTotalHours = (): number => {
-    const [h, m] = timeAvail.split(":").map(Number);
-    if (isNaN(h) || isNaN(m)) return 0;
-    return Number((h + m / 60).toFixed(2));
-  };
-
-  // ⏰ Auto end time
-  const getTimeEnded = (): string => {
-    const start = new Date(timeStarted);
-    const [h, m] = timeAvail.split(":").map(Number);
-    start.setHours(start.getHours() + h);
-    start.setMinutes(start.getMinutes() + m);
-    return start.toISOString();
-  };
-
-  const totalHours = getTotalHours();
-  const totalAmount = totalHours * HOURLY_RATE;
-
-  const handleSubmit = async (): Promise<void> => {
-    if (!profile || totalHours <= 0) {
-      alert("Invalid time avail");
-      return;
-    }
-
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth?.user) return;
-
-    const { error } = await supabase.from("customer_sessions").insert({
-      staff_id: auth.user.id,
-      date: new Date().toISOString().split("T")[0],
-
-      full_name: form.full_name,
-      customer_type: form.customer_type,
-      customer_field: form.customer_field,
-      has_id: form.has_id,
-
-      hour_avail: timeAvail,
-      time_started: timeStarted,
-      time_ended: getTimeEnded(),
-
-      total_hours: totalHours,
-      total_amount: totalAmount,
-    });
-
-    if (error) {
-      alert(error.message);
-    } else {
-      alert("Customer session saved!");
+      if (error) throw error;
+      setSessions(data || []);
+    } catch (error) {
+      console.error('Error fetching customer sessions:', error);
+      alert('Error loading customer lists.');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="staff-dashboard">
-      <h2 className="form-title">Customer Time Form</h2>
-
-      <div className="form-container">
-        <IonItem className="form-item">
-          <IonLabel position="stacked">Full Name</IonLabel>
-          <IonInput
-            value={form.full_name}
-            onIonChange={(e) =>
-              setForm({ ...form, full_name: e.detail.value ?? "" })
-            }
-          />
-        </IonItem>
-
-        <IonItem className="form-item">
-          <IonLabel position="stacked">Customer Type</IonLabel>
-          <IonSelect
-            value={form.customer_type}
-            onIonChange={(e) =>
-              setForm({ ...form, customer_type: e.detail.value })
-            }
-          >
-            <IonSelectOption value="reviewer">Reviewer</IonSelectOption>
-            <IonSelectOption value="student">Student</IonSelectOption>
-            <IonSelectOption value="regular">Regular</IonSelectOption>
-          </IonSelect>
-        </IonItem>
-
-        <IonItem className="form-item">
-          <IonLabel position="stacked">Customer Field</IonLabel>
-          <IonInput
-            value={form.customer_field}
-            onIonChange={(e) =>
-              setForm({ ...form, customer_field: e.detail.value ?? "" })
-            }
-          />
-        </IonItem>
-
-        {/* ⏱ TIME AVAIL - Changed to text input for HH:MM only, no AM/PM */}
-        <IonItem className="form-item">
-          <IonLabel position="stacked">Time Avail (HH:MM)</IonLabel>
-          <IonInput
-            type="text"
-            placeholder="HH:MM (e.g., 01:00 for 1 hour, 00:30 for 30 mins)"
-            value={timeAvail}
-            onIonChange={(e) => {
-              const value = e.detail.value ?? "";
-              // Basic validation: ensure format is HH:MM
-              if (/^\d{2}:\d{2}$/.test(value)) {
-                setTimeAvail(value);
-              } else if (value === "") {
-                setTimeAvail("");
-              }
-              // If invalid, don't update (or you could show an error)
-            }}
-          />
-        </IonItem>
-
-        <div className="summary-section">
-          <p className="summary-text">
-            Time Started: {new Date(timeStarted).toLocaleTimeString("en-PH")}
-          </p>
-          <p className="summary-text">
-            Time Ended: {new Date(getTimeEnded()).toLocaleTimeString("en-PH")}
-          </p>
-          <p className="summary-text">Total Hours: {totalHours}</p>
-          <p className="summary-text">Total Amount: ₱{totalAmount}</p>
-        </div>
-
-        <IonButton expand="block" className="submit-button" onClick={handleSubmit}>
-          Save Record
-        </IonButton>
-      </div>
+    <div className="customer-lists-container">
+      <h2 className="customer-lists-title">Customer Lists - Non-Reservation Sessions</h2>
+      {loading ? (
+        <p className="loading-text">Loading...</p>
+      ) : sessions.length === 0 ? (
+        <p className="no-data-text">No customer sessions found.</p>
+      ) : (
+        <table className="customer-table">
+          <thead>
+            <tr>
+              <th className="table-header">Date</th>
+              <th className="table-header">Full Name</th>
+              <th className="table-header">Customer Type</th>
+              <th className="table-header">Customer Field</th>
+              <th className="table-header">Has ID</th>
+              <th className="table-header">ID Number</th>
+              <th className="table-header">Hour Avail</th>
+              <th className="table-header">Time Started</th>
+              <th className="table-header">Time Ended</th>
+              <th className="table-header">Total Hours</th>
+              <th className="table-header">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.map((session) => (
+              <tr key={session.id}>
+                <td className="table-cell">{session.date}</td>
+                <td className="table-cell">{session.full_name}</td>
+                <td className="table-cell">{session.customer_type}</td>
+                <td className="table-cell">{session.customer_field}</td>
+                <td className="table-cell">{session.has_id ? 'Yes' : 'No'}</td>
+                <td className="table-cell">{session.id_number || 'N/A'}</td>
+                <td className="table-cell">{session.hour_avail}</td>
+                <td className="table-cell">{new Date(session.time_started).toLocaleString()}</td>
+                <td className="table-cell">{new Date(session.time_ended).toLocaleString()}</td>
+                <td className="table-cell">{session.total_hours}</td>
+                <td className="table-cell">₱{session.total_amount.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 };
 
-export default Staff_Dashboard;
+export default Customer_Lists;
