@@ -1,6 +1,6 @@
-// Customer_Lists.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
+import logo from "../assets/study_hub.png";
 
 interface CustomerSession {
   id: string;
@@ -21,7 +21,9 @@ interface CustomerSession {
 
 const Customer_Lists: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
+  const [selectedSession, setSelectedSession] =
+    useState<CustomerSession | null>(null);
 
   useEffect(() => {
     fetchCustomerSessions();
@@ -29,65 +31,159 @@ const Customer_Lists: React.FC = () => {
 
   const fetchCustomerSessions = async () => {
     setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('customer_sessions')
-        .select('*')
-        .neq('reservation', 'yes') // Fetch sessions where reservation is not 'yes'
-        .order('date', { ascending: false }); // Order by date descending
+    const { data, error } = await supabase
+      .from("customer_sessions")
+      .select("*")
+      .neq("reservation", "yes")
+      .order("date", { ascending: false });
 
-      if (error) throw error;
+    if (error) {
+      console.error(error);
+      alert("Error loading customer lists");
+    } else {
       setSessions(data || []);
-    } catch (error) {
-      console.error('Error fetching customer sessions:', error);
-      alert('Error loading customer lists.');
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   };
 
   return (
     <div className="customer-lists-container">
-      <h2 className="customer-lists-title">Customer Lists - Non-Reservation Sessions</h2>
+      <h2 className="customer-lists-title">
+        Customer Lists - Non Reservation
+      </h2>
+
       {loading ? (
-        <p className="loading-text">Loading...</p>
+        <p>Loading...</p>
       ) : sessions.length === 0 ? (
-        <p className="no-data-text">No customer sessions found.</p>
+        <p>No data found</p>
       ) : (
         <table className="customer-table">
           <thead>
             <tr>
-              <th className="table-header">Date</th>
-              <th className="table-header">Full Name</th>
-              <th className="table-header">Customer Type</th>
-              <th className="table-header">Customer Field</th>
-              <th className="table-header">Has ID</th>
-              <th className="table-header">ID Number</th>
-              <th className="table-header">Hour Avail</th>
-              <th className="table-header">Time Started</th>
-              <th className="table-header">Time Ended</th>
-              <th className="table-header">Total Hours</th>
-              <th className="table-header">Total Amount</th>
+              <th>Date</th>
+              <th>Full Name</th>
+              <th>Type</th>
+              <th>Field</th>
+              <th>Has ID</th>
+              <th>ID Number</th>
+              <th>Hours</th>
+              <th>Time In</th>
+              <th>Time Out</th>
+              <th>Total Hours</th>
+              <th>Total Amount</th>
+              <th>Action</th>
             </tr>
           </thead>
+
           <tbody>
             {sessions.map((session) => (
               <tr key={session.id}>
-                <td className="table-cell">{session.date}</td>
-                <td className="table-cell">{session.full_name}</td>
-                <td className="table-cell">{session.customer_type}</td>
-                <td className="table-cell">{session.customer_field}</td>
-                <td className="table-cell">{session.has_id ? 'Yes' : 'No'}</td>
-                <td className="table-cell">{session.id_number || 'N/A'}</td>
-                <td className="table-cell">{session.hour_avail}</td>
-                <td className="table-cell">{new Date(session.time_started).toLocaleString()}</td>
-                <td className="table-cell">{new Date(session.time_ended).toLocaleString()}</td>
-                <td className="table-cell">{session.total_hours}</td>
-                <td className="table-cell">₱{session.total_amount.toFixed(2)}</td>
+                <td>{session.date}</td>
+                <td>{session.full_name}</td>
+                <td>{session.customer_type}</td>
+                <td>{session.customer_field}</td>
+                <td>{session.has_id ? "Yes" : "No"}</td>
+                <td>{session.id_number || "N/A"}</td>
+                <td>{session.hour_avail}</td>
+                <td>{new Date(session.time_started).toLocaleTimeString()}</td>
+                <td>{new Date(session.time_ended).toLocaleTimeString()}</td>
+                <td>{session.total_hours}</td>
+                <td>₱{session.total_amount.toFixed(2)}</td>
+                <td>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setSelectedSession(session)}
+                  >
+                    View Receipt
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* RECEIPT MODAL */}
+      {selectedSession && (
+        <div
+          className="receipt-overlay"
+          onClick={() => setSelectedSession(null)}
+        >
+          <div
+            className="receipt-container"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* LOGO */}
+            <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+
+            <h3 className="receipt-title">ME TYME LOUNGE</h3>
+            <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
+
+            <hr />
+
+            <div className="receipt-row">
+              <span>Date</span>
+              <span>{selectedSession.date}</span>
+            </div>
+
+            <div className="receipt-row">
+              <span>Customer</span>
+              <span>{selectedSession.full_name}</span>
+            </div>
+
+            <div className="receipt-row">
+              <span>Type</span>
+              <span>{selectedSession.customer_type}</span>
+            </div>
+
+            <div className="receipt-row">
+              <span>Field</span>
+              <span>{selectedSession.customer_field}</span>
+            </div>
+
+            <hr />
+
+            <div className="receipt-row">
+              <span>Time In</span>
+              <span>
+                {new Date(
+                  selectedSession.time_started
+                ).toLocaleTimeString()}
+              </span>
+            </div>
+
+            <div className="receipt-row">
+              <span>Time Out</span>
+              <span>
+                {new Date(selectedSession.time_ended).toLocaleTimeString()}
+              </span>
+            </div>
+
+            <div className="receipt-row">
+              <span>Total Hours</span>
+              <span>{selectedSession.total_hours}</span>
+            </div>
+
+            <hr />
+
+            <div className="receipt-total">
+              <span>TOTAL</span>
+              <span>₱{selectedSession.total_amount.toFixed(2)}</span>
+            </div>
+
+            <p className="receipt-footer">
+              Thank you for choosing <br />
+              <strong>Me Tyme Lounge</strong>
+            </p>
+
+            <button
+              className="close-btn"
+              onClick={() => setSelectedSession(null)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
