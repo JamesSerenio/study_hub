@@ -47,6 +47,9 @@ interface SelectedAddOn {
 interface CustomerSession {
   seat_number: string;
   time_ended: string;
+  reservation: string;
+  reservation_date?: string;
+  time_started: string;
 }
 
 const Staff_Dashboard: React.FC = () => {
@@ -84,41 +87,47 @@ const Staff_Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // New useEffect to refetch occupied seats when reservation details change
+  useEffect(() => {
+    if (form.reservation && form.reservation_date) {
+      fetchOccupiedSeats(form.reservation_date, form.time_started);
+    } else {
+      fetchOccupiedSeats();
+    }
+  }, [form.reservation, form.reservation_date, form.time_started]);
+
   // Function to parse 12-hour time input to 24-hour ISO string, optionally using a specific date
-const parseTimeToISO = (timeInput: string, date: string): string => {
-  const match = timeInput.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  const parseTimeToISO = (timeInput: string, date: string): string => {
+    const match = timeInput.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
 
-  if (!match) return new Date(date).toISOString();
+    if (!match) return new Date(date).toISOString();
 
-  const h = match[1];
-  const m = match[2];
-  const period = match[3];
+    const h = match[1];
+    const m = match[2];
+    const period = match[3];
 
-  let hour = parseInt(h, 10);
-  const minute = parseInt(m, 10);
+    let hour = parseInt(h, 10);
+    const minute = parseInt(m, 10);
 
-  if (period.toLowerCase() === "pm" && hour !== 12) hour += 12;
-  if (period.toLowerCase() === "am" && hour === 12) hour = 0;
+    if (period.toLowerCase() === "pm" && hour !== 12) hour += 12;
+    if (period.toLowerCase() === "am" && hour === 12) hour = 0;
 
-  const d = new Date(date);
-  d.setHours(hour, minute, 0, 0);
+    const d = new Date(date);
+    d.setHours(hour, minute, 0, 0);
 
-  return d.toISOString();
-};
-
-
+    return d.toISOString();
+  };
 
   // Update form.time_started whenever timeStartedInput or reservation_date changes (for reservations)
-useEffect(() => {
-  if (form.reservation && form.reservation_date) {
-    const iso = parseTimeToISO(timeStartedInput, form.reservation_date);
-    setForm(prev => ({
-      ...prev,
-      time_started: iso
-    }));
-  }
-}, [timeStartedInput, form.reservation_date, form.reservation]);
-
+  useEffect(() => {
+    if (form.reservation && form.reservation_date) {
+      const iso = parseTimeToISO(timeStartedInput, form.reservation_date);
+      setForm(prev => ({
+        ...prev,
+        time_started: iso
+      }));
+    }
+  }, [timeStartedInput, form.reservation_date, form.reservation]);
 
   const fetchProfile = async (): Promise<void> => {
     const { data: auth } = await supabase.auth.getUser();
@@ -149,13 +158,19 @@ useEffect(() => {
     }
   };
 
-  const fetchOccupiedSeats = async () => {
+  const fetchOccupiedSeats = async (date?: string, time?: string) => {
     try {
-      const now = new Date().toISOString();
-      const { data } = await supabase
-        .from("customer_sessions")
-        .select("seat_number, time_ended")
-        .gt("time_ended", now); // only sessions that haven't ended
+      let query = supabase.from("customer_sessions").select("seat_number, time_ended, reservation, reservation_date, time_started");
+
+      if (date && time) {
+        // For reservations: check sessions on the specific date where the time overlaps
+        query = query.or(`and(reservation.eq.no,and(time_ended.gt.${new Date().toISOString()})),and(reservation.eq.yes,and(reservation_date.eq.${date},and(time_started.lte.${time},time_ended.gt.${time})))`);
+      } else {
+        // Default: only ongoing sessions
+        query = query.gt("time_ended", new Date().toISOString());
+      }
+
+      const { data } = await query;
 
       if (data) {
         // Split seat_number by comma and trim, then flatten the array
@@ -174,16 +189,15 @@ useEffect(() => {
     return Number((h + m / 60).toFixed(2));
   };
 
-const getTimeEnded = (): string => {
-  const start = new Date(form.time_started);
-  const [h, m] = timeAvail.split(":").map(Number);
+  const getTimeEnded = (): string => {
+    const start = new Date(form.time_started);
+    const [h, m] = timeAvail.split(":").map(Number);
 
-  start.setHours(start.getHours() + h);
-  start.setMinutes(start.getMinutes() + m);
+    start.setHours(start.getHours() + h);
+    start.setMinutes(start.getMinutes() + m);
 
-  return start.toISOString();
-};
-
+    return start.toISOString();
+  };
 
   const totalHours = getTotalHours();
   const timeAmount = totalHours * HOURLY_RATE;
@@ -323,7 +337,7 @@ const getTimeEnded = (): string => {
     setSelectedCategories([]);
     setShowAddOns(false);
     fetchAddOns();
-    fetchOccupiedSeats();
+    fetchOccupiedSeats();  // Reset to default after submit
   };
 
   return (
@@ -373,35 +387,34 @@ const getTimeEnded = (): string => {
           <IonLabel slot="end">{form.reservation ? 'Yes' : 'No'}</IonLabel>
         </IonItem>
 
-      {form.reservation && (
-        <>
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Reservation Date</IonLabel>
-            <IonDatetime
-              presentation="date"
-              min={new Date().toISOString().split("T")[0]}
-              value={form.reservation_date}
-              onIonChange={(e) => {
-                const value = e.detail.value;
-                if (typeof value === "string") {
-                  setForm({ ...form, reservation_date: value });
-                }
-              }}
-            />
-          </IonItem>
+        {form.reservation && (
+          <>
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Reservation Date</IonLabel>
+              <IonDatetime
+                presentation="date"
+                min={new Date().toISOString().split("T")[0]}
+                value={form.reservation_date}
+                onIonChange={(e) => {
+                  const value = e.detail.value;
+                  if (typeof value === "string") {
+                    setForm({ ...form, reservation_date: value });
+                  }
+                }}
+              />
+            </IonItem>
 
-          {/* 👇 HINDI TINANGGAL – EDITABLE TIME STARTED */}
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Time Started</IonLabel>
-            <IonInput
-              value={timeStartedInput}
-              placeholder="e.g., 09:00 am"
-              onIonChange={(e) => setTimeStartedInput(e.detail.value ?? "")}
-            />
-          </IonItem>
-        </>
-      )}
-
+            {/* 👇 HINDI TINANGGAL – EDITABLE TIME STARTED */}
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Time Started</IonLabel>
+              <IonInput
+                value={timeStartedInput}
+                placeholder="e.g., 09:00 am"
+                onIonChange={(e) => setTimeStartedInput(e.detail.value ?? "")}
+              />
+            </IonItem>
+          </>
+        )}
 
         {/* Time Avail */}
         <IonItem className="form-item">
@@ -463,7 +476,7 @@ const getTimeEnded = (): string => {
             <div key={index}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 <IonItem className="form-item" style={{ flex: 1 }}>
-                  <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                                    <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
                   <IonSelect value={category} placeholder="Choose a category" onIonChange={(e) => handleCategoryChange(index, e.detail.value)}>
                     {categories.map(cat => (
                       <IonSelectOption key={cat} value={cat}>{cat}</IonSelectOption>
@@ -475,47 +488,47 @@ const getTimeEnded = (): string => {
               {category && (
                 <>
                  <IonItem className="form-item">
-  <IonLabel position="stacked">Select {category} Item</IonLabel>
-  <IonSelect placeholder="Choose an item" onIonChange={(e) => {
-    const selectedId = e.detail.value;
-    if (selectedId) {
-      const addOn = addOns.find(a => a.id === selectedId);
-      if (addOn) {
-        setSelectedAddOns(prev => {
-          const existing = prev.find(s => s.id === selectedId);
-          if (!existing) {
-            return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
-          }
-          return prev;
-        });
-      }
-    }
-  }}>
-    {categoryItems.map(addOn => (
-      <IonSelectOption key={addOn.id} value={addOn.id}>
-        {addOn.name} - ₱{addOn.price}
-      </IonSelectOption>
-    ))}
-  </IonSelect>
-</IonItem>
-{selectedAddOns.filter(s => s.category === category).length > 0 && (
-  <IonList>
-    <IonListHeader>
-      <IonLabel>Selected {category} Items</IonLabel>
-    </IonListHeader>
-    {selectedAddOns.filter(s => s.category === category).map((selected) => (
-      <IonItem key={selected.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <IonLabel>{selected.name} - ₱{selected.price}</IonLabel>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <IonLabel style={{ marginRight: '5px' }}>Quantity:</IonLabel>
-          <IonInput type="number" min="0" value={selected.quantity} style={{ width: '60px' }} onIonChange={(e) => handleAddOnQuantityChange(selected.id, parseInt(e.detail.value!) || 0)} />
-          <IonButton color="danger" style={{ marginLeft: '10px' }} onClick={() => setSelectedAddOns(prev => prev.filter(s => s.id !== selected.id))}>Remove</IonButton>
-        </div>
-      </IonItem>
-    ))}
-  </IonList>
-)}
-</>
+                    <IonLabel position="stacked">Select {category} Item</IonLabel>
+                    <IonSelect placeholder="Choose an item" onIonChange={(e) => {
+                      const selectedId = e.detail.value;
+                      if (selectedId) {
+                        const addOn = addOns.find(a => a.id === selectedId);
+                        if (addOn) {
+                          setSelectedAddOns(prev => {
+                            const existing = prev.find(s => s.id === selectedId);
+                            if (!existing) {
+                              return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
+                            }
+                            return prev;
+                          });
+                        }
+                      }
+                    }}>
+                      {categoryItems.map(addOn => (
+                        <IonSelectOption key={addOn.id} value={addOn.id}>
+                          {addOn.name} - ₱{addOn.price}
+                        </IonSelectOption>
+                      ))}
+                    </IonSelect>
+                  </IonItem>
+                  {selectedAddOns.filter(s => s.category === category).length > 0 && (
+                    <IonList>
+                      <IonListHeader>
+                        <IonLabel>Selected {category} Items</IonLabel>
+                      </IonListHeader>
+                      {selectedAddOns.filter(s => s.category === category).map((selected) => (
+                        <IonItem key={selected.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <IonLabel>{selected.name} - ₱{selected.price}</IonLabel>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <IonLabel style={{ marginRight: '5px' }}>Quantity:</IonLabel>
+                            <IonInput type="number" min="0" value={selected.quantity} style={{ width: '60px' }} onIonChange={(e) => handleAddOnQuantityChange(selected.id, parseInt(e.detail.value!) || 0)} />
+                            <IonButton color="danger" style={{ marginLeft: '10px' }} onClick={() => setSelectedAddOns(prev => prev.filter(s => s.id !== selected.id))}>Remove</IonButton>
+                          </div>
+                        </IonItem>
+                      ))}
+                    </IonList>
+                  )}
+                  </>
               )}
             </div>
           );
@@ -552,4 +565,3 @@ const getTimeEnded = (): string => {
 };
 
 export default Staff_Dashboard;
-                          
