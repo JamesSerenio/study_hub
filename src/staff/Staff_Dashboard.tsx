@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { IonButton, IonInput, IonItem, IonLabel, IonSelect, IonSelectOption, IonList, IonListHeader, IonToggle } from "@ionic/react";
+import { IonButton, IonInput, IonItem, IonLabel, IonSelect, IonSelectOption, IonList, IonListHeader, IonToggle, IonDatetime } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 
 const HOURLY_RATE = 20;
@@ -17,6 +17,9 @@ interface CustomerForm {
   has_id: boolean;
   id_number: string;
   seat_number: string[];  // Changed to array for multiple selection
+  reservation: boolean;
+  reservation_date?: string;
+  time_started: string;  // Make editable for reservation
 }
 
 interface AddOn {
@@ -59,10 +62,13 @@ const Staff_Dashboard: React.FC = () => {
     has_id: false,
     id_number: "",
     seat_number: [],  // Initialize as empty array
+    reservation: false,
+    reservation_date: undefined,
+    time_started: new Date().toISOString(),  // Default to current time
   });
 
-  const [timeStarted] = useState<string>(new Date().toISOString());
   const [timeAvail, setTimeAvail] = useState<string>("01:00");
+  const [timeStartedInput, setTimeStartedInput] = useState<string>("09:00 am"); // New state for time input in 12-hour format
   const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
 
   const allSeats = [
@@ -77,6 +83,27 @@ const Staff_Dashboard: React.FC = () => {
     const interval = setInterval(fetchOccupiedSeats, 60000); // refresh every 1 min
     return () => clearInterval(interval);
   }, []);
+
+  // Function to parse 12-hour time input to 24-hour ISO string
+  const parseTimeToISO = (timeInput: string): string => {
+    const match = timeInput.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+    if (!match) return new Date().toISOString(); // Fallback to current time if invalid
+    const [, hours, minutes, period] = match; // Destructure, skipping the full match
+    let h = parseInt(hours, 10);
+    const m = parseInt(minutes, 10);
+    if (period.toLowerCase() === 'pm' && h !== 12) h += 12;
+    if (period.toLowerCase() === 'am' && h === 12) h = 0;
+    const now = new Date();
+    now.setHours(h, m, 0, 0);
+    return now.toISOString();
+  };
+
+  // Update form.time_started whenever timeStartedInput changes
+  useEffect(() => {
+    if (form.reservation) {
+      setForm(prev => ({ ...prev, time_started: parseTimeToISO(timeStartedInput) }));
+    }
+  }, [timeStartedInput, form.reservation]);
 
   const fetchProfile = async (): Promise<void> => {
     const { data: auth } = await supabase.auth.getUser();
@@ -116,7 +143,8 @@ const Staff_Dashboard: React.FC = () => {
         .gt("time_ended", now); // only sessions that haven't ended
 
       if (data) {
-        const seats = (data as CustomerSession[]).map(s => s.seat_number);
+        // Split seat_number by comma and trim, then flatten the array
+        const seats = (data as CustomerSession[]).flatMap(s => s.seat_number.split(', ').map(seat => seat.trim()));
         setOccupiedSeats(seats);
       }
     } catch (err) {
@@ -132,7 +160,7 @@ const Staff_Dashboard: React.FC = () => {
   };
 
   const getTimeEnded = (): string => {
-    const start = new Date(timeStarted);
+    const start = new Date(form.time_started);
     const [h, m] = timeAvail.split(":").map(Number);
     start.setHours(start.getHours() + h);
     start.setMinutes(start.getMinutes() + m);
@@ -200,6 +228,10 @@ const Staff_Dashboard: React.FC = () => {
       alert("Please select at least one seat.");
       return;
     }
+    if (form.reservation && !form.reservation_date) {
+      alert("Please select a reservation date.");
+      return;
+    }
     const { data: auth } = await supabase.auth.getUser();
     if (!auth?.user) return;
 
@@ -215,18 +247,20 @@ const Staff_Dashboard: React.FC = () => {
       .from("customer_sessions")
       .insert({
         staff_id: auth.user.id,
-        date: new Date().toISOString().split("T")[0],
+        date: form.reservation ? form.reservation_date!.split('T')[0] : new Date().toISOString().split("T")[0],
         full_name: form.full_name,
         customer_type: form.customer_type,
         customer_field: form.customer_field,
         has_id: form.has_id,
         id_number: form.id_number,
         hour_avail: timeAvail,
-        time_started: timeStarted,
+        time_started: form.time_started,
         time_ended: getTimeEnded(),
         total_hours: totalHours,
         total_amount: totalAmount,
         seat_number: form.seat_number.join(', '),  // Store as comma-separated string
+        reservation: form.reservation ? 'yes' : 'no',
+        reservation_date: form.reservation_date,
       })
       .select("id")
       .single();
@@ -261,8 +295,12 @@ const Staff_Dashboard: React.FC = () => {
       has_id: false,
       id_number: "",
       seat_number: [],  // Reset to empty array
+      reservation: false,
+      reservation_date: undefined,
+      time_started: new Date().toISOString(),
     });
     setTimeAvail("01:00");
+    setTimeStartedInput("09:00 am"); // Reset time input
     setSelectedAddOns([]);
     setSelectedCategories([]);
     setShowAddOns(false);
@@ -309,6 +347,42 @@ const Staff_Dashboard: React.FC = () => {
             <IonInput value={form.id_number} placeholder="e.g., National ID, Student ID" onIonChange={(e) => setForm({ ...form, id_number: e.detail.value ?? "" })} />
           </IonItem>
         )}
+
+        {/* Reservation Toggle */}
+        <IonItem className="form-item">
+          <IonLabel>Reservation</IonLabel>
+          <IonToggle checked={form.reservation} onIonChange={(e) => setForm({ ...form, reservation: e.detail.checked })} />
+          <IonLabel slot="end">{form.reservation ? 'Yes' : 'No'}</IonLabel>
+        </IonItem>
+
+          {form.reservation && (
+            <>
+              <IonItem className="form-item">
+                <IonLabel position="stacked">Reservation Date</IonLabel>
+                <IonDatetime
+                  presentation="date"
+                  min={new Date().toISOString().split("T")[0]}
+                  value={form.reservation_date}
+                  onIonChange={(e) => {
+                    const value = e.detail.value;
+                    if (typeof value === "string") {
+                      setForm({ ...form, reservation_date: value });
+                    }
+                  }}
+                />
+              </IonItem>
+
+              {/* 👇 HINDI TINANGGAL – EDITABLE TIME STARTED */}
+              <IonItem className="form-item">
+                <IonLabel position="stacked">Time Started</IonLabel>
+                <IonInput
+                  value={timeStartedInput}
+                  placeholder="e.g., 09:00 am"
+                  onIonChange={(e) => setTimeStartedInput(e.detail.value ?? "")}
+                />
+              </IonItem>
+            </>
+          )}
 
         {/* Time Avail */}
         <IonItem className="form-item">
@@ -393,7 +467,7 @@ const Staff_Dashboard: React.FC = () => {
                             if (!existing) {
                               return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
                             }
-                            return prev;
+                                                        return prev;
                           });
                         }
                       }
@@ -430,7 +504,7 @@ const Staff_Dashboard: React.FC = () => {
 
         {/* Summary */}
         <div className="summary-section">
-          <p className="summary-text">Time Started: {new Date(timeStarted).toLocaleTimeString("en-PH")}</p>
+          <p className="summary-text">Time Started: {new Date(form.time_started).toLocaleTimeString("en-PH")}</p>
           <p className="summary-text">Time Ended: {new Date(getTimeEnded()).toLocaleTimeString("en-PH")}</p>
           <p className="summary-text">Total Hours: {totalHours}</p>
           <p className="summary-text">Time Amount: ₱{timeAmount.toFixed(2)}</p>
@@ -444,7 +518,10 @@ const Staff_Dashboard: React.FC = () => {
             </div>
           )}
           <p className="summary-text"><strong>Overall Total Amount: ₱{totalAmount.toFixed(2)}</strong></p>
-          <p className="summary-text"><strong>Seats Selected: {form.seat_number.length > 0 ? form.seat_number.join(', ') : "None"}</strong></p>  {/* Updated to show multiple seats */}
+          <p className="summary-text"><strong>Seats Selected: {form.seat_number.length > 0 ? form.seat_number.join(', ') : "None"}</strong></p>
+          {form.reservation && (
+            <p className="summary-text"><strong>Reservation Date: {form.reservation_date ? new Date(form.reservation_date).toLocaleDateString() : "None"}</strong></p>
+          )}
         </div>
 
         <IonButton expand="block" className="submit-button" onClick={handleSubmit}>
