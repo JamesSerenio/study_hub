@@ -29,15 +29,32 @@ import "./global.css";
 
 setupIonicReact();
 
+/* 🔔 ALERT TIMES */
 const ALERT_MINUTES = [5, 3, 1];
 
 const App: React.FC = () => {
   const [showAlert, setShowAlert] = useState(false);
   const [alertMessage, setAlertMessage] = useState("");
 
-  /* 🧠 Track triggered alerts (NO re-render) */
+  /* 🧠 Track fired alerts (avoid repeat) */
   const triggeredRef = useRef<Set<string>>(new Set());
 
+  /* 🔓 UNLOCK AUDIO (browser restriction fix) */
+  useEffect(() => {
+    const unlock = () => {
+      const audio = new Audio("/assets/alarm.mp3");
+      audio.play()
+        .then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+        })
+        .catch(() => {});
+      window.removeEventListener("click", unlock);
+    };
+    window.addEventListener("click", unlock);
+  }, []);
+
+  /* ⏰ GLOBAL SESSION CHECKER */
   useEffect(() => {
     const interval = setInterval(async () => {
       const now = new Date();
@@ -62,22 +79,25 @@ const App: React.FC = () => {
 
         triggeredRef.current.add(key);
 
-        setAlertMessage(
-          `⏰ ${diffMinutes} minute(s) remaining\n\n` +
-          `Customer: ${session.full_name}\n` +
-          `Seat: ${session.seat_number}`
-        );
+        /* ✅ HTML MESSAGE (for modal rendering) */
+        setAlertMessage(`
+          <h2>⏰ ${diffMinutes} MINUTE(S) LEFT</h2>
+          <p>
+            <strong>Customer:</strong> ${session.full_name}<br/>
+            <strong>Seat:</strong> ${session.seat_number}
+          </p>
+        `);
 
         setShowAlert(true);
       });
-    }, 30000); // 🔥 every 30 seconds (accurate)
+    }, 30000); // every 30 seconds
 
     return () => clearInterval(interval);
   }, []);
 
   return (
     <IonApp>
-      {/* 🔔 GLOBAL ALERT */}
+      {/* 🔔 GLOBAL ALERT MODAL */}
       <TimeAlertModal
         isOpen={showAlert}
         message={alertMessage}
@@ -90,6 +110,7 @@ const App: React.FC = () => {
           <Route exact path="/staff-menu" component={Staff_menu} />
           <Route exact path="/admin-menu" component={Admin_menu} />
           <Route exact path="/home" component={Home} />
+
           <Route exact path="/">
             <Redirect to="/login" />
           </Route>

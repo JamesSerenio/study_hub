@@ -66,7 +66,7 @@ const Staff_Dashboard: React.FC = () => {
     id_number: "",
     seat_number: [],  // Initialize as empty array
     reservation: false,
-    reservation_date: undefined,
+    reservation_date: undefined,  // Fixed: was incomplete
     time_started: new Date().toISOString(),  // Default to current time
   });
 
@@ -90,11 +90,11 @@ const Staff_Dashboard: React.FC = () => {
   // New useEffect to refetch occupied seats when reservation details change
   useEffect(() => {
     if (form.reservation && form.reservation_date) {
-      fetchOccupiedSeats(form.reservation_date, form.time_started);
+      fetchOccupiedSeats(form.reservation_date, form.time_started, getTimeEnded());
     } else {
       fetchOccupiedSeats();
     }
-  }, [form.reservation, form.reservation_date, form.time_started]);
+  }, [form.reservation, form.reservation_date, form.time_started, timeAvail]); // Added timeAvail dependency
 
   // Function to parse 12-hour time input to 24-hour ISO string, optionally using a specific date
   const parseTimeToISO = (timeInput: string, date: string): string => {
@@ -158,16 +158,16 @@ const Staff_Dashboard: React.FC = () => {
     }
   };
 
-  const fetchOccupiedSeats = async (date?: string, time?: string) => {
+  const fetchOccupiedSeats = async (date?: string, start?: string, end?: string) => {
     try {
       let query = supabase.from("customer_sessions").select("seat_number, time_ended, reservation, reservation_date, time_started");
 
-      if (date && time) {
-        // For reservations: check sessions on the specific date where the time overlaps
-        query = query.or(`and(reservation.eq.no,and(time_ended.gt.${new Date().toISOString()})),and(reservation.eq.yes,and(reservation_date.eq.${date},and(time_started.lte.${time},time_ended.gt.${time})))`);
+      if (date && start && end) {
+        // For reservations: check only overlapping reservations on the specific date (do not include ongoing non-reservations, as they are not on that date)
+        query = query.eq("reservation", "yes").eq("reservation_date", date).lt("time_started", end).gt("time_ended", start);
       } else {
-        // Default: only ongoing sessions
-        query = query.gt("time_ended", new Date().toISOString());
+        // Default: only ongoing sessions (started and not ended yet)
+        query = query.lte("time_started", new Date().toISOString()).gt("time_ended", new Date().toISOString());
       }
 
       const { data } = await query;
@@ -446,7 +446,7 @@ const Staff_Dashboard: React.FC = () => {
           {allSeats.map(seat => {
             const isOccupied = occupiedSeats.includes(seat);
             const isSelected = form.seat_number.includes(seat);  // Changed to check if in array
-            if (isOccupied) return null;
+            if (isOccupied) return null;  // This hides occupied seats, so they disappear until session ends
             return (
               <IonButton
                 key={seat}
@@ -471,12 +471,12 @@ const Staff_Dashboard: React.FC = () => {
         </IonButton>
 
         {showAddOns && selectedCategories.map((category, index) => {
-          const categoryItems = addOns.filter(a => a.category === category);
+                    const categoryItems = addOns.filter(a => a.category === category);
           return (
             <div key={index}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 <IonItem className="form-item" style={{ flex: 1 }}>
-                                    <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                  <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
                   <IonSelect value={category} placeholder="Choose a category" onIonChange={(e) => handleCategoryChange(index, e.detail.value)}>
                     {categories.map(cat => (
                       <IonSelectOption key={cat} value={cat}>{cat}</IonSelectOption>
