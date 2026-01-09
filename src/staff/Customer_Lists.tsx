@@ -88,6 +88,7 @@ const Customer_Lists: React.FC = () => {
               <th>Total Amount</th>
               <th>Seat</th>
               <th>Add-Ons</th>
+              <th>Status</th>  {/* New column for status */}
               <th>Action</th>
             </tr>
           </thead>
@@ -112,6 +113,7 @@ const Customer_Lists: React.FC = () => {
                     ? session.customer_session_add_ons.map((addOn) => `${addOn.add_ons.name} x${addOn.quantity}`).join(', ')
                     : 'None'}
                 </td>
+                <td>{new Date() > new Date(session.time_ended) ? "Finished" : "Ongoing"}</td>  {/* New status cell */}
                 <td>
                   <button
                     className="receipt-btn"
