@@ -425,12 +425,12 @@ const Staff_Dashboard: React.FC = () => {
             value={timeAvail}
             onIonChange={(e) => {
               const value = e.detail.value ?? "";
-              const match = value.match(/^(\d{1,2}):(\d{1,2})$/);
+              const match = value.match(/^(\d{1,3}):(\d{1,2})$/);  // Updated regex to allow up to 3 digits for hours (e.g., 100:00)
               if (match) {
                 const h = parseInt(match[1], 10);
                 const m = parseInt(match[2], 10);
-                if (h >= 0 && h <= 23 && m >= 0 && m <= 59 && (h > 0 || m > 0)) {
-                  const paddedH = h.toString().padStart(2, '0');
+                if (h >= 0 && h <= 999 && m >= 0 && m <= 59 && (h > 0 || m > 0)) {  // Updated to allow up to 999 hours
+                  const paddedH = h.toString().padStart(2, '0');  // Note: This will pad to 2 digits, but for 100+ it will be longer, which is fine
                   const paddedM = m.toString().padStart(2, '0');
                   setTimeAvail(`${paddedH}:${paddedM}`);
                 }
@@ -465,13 +465,13 @@ const Staff_Dashboard: React.FC = () => {
           })}
         </div>
 
-        {/* Add-Ons */}
+                {/* Add-Ons */}
         <IonButton expand="block" onClick={handleAddOnsClick}>
           {showAddOns ? "Add More Add-Ons" : "Add-Ons"}
         </IonButton>
 
         {showAddOns && selectedCategories.map((category, index) => {
-                    const categoryItems = addOns.filter(a => a.category === category);
+          const categoryItems = addOns.filter(a => a.category === category);
           return (
             <div key={index}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -487,7 +487,7 @@ const Staff_Dashboard: React.FC = () => {
               </div>
               {category && (
                 <>
-                 <IonItem className="form-item">
+                  <IonItem className="form-item">
                     <IonLabel position="stacked">Select {category} Item</IonLabel>
                     <IonSelect placeholder="Choose an item" onIonChange={(e) => {
                       const selectedId = e.detail.value;
@@ -528,7 +528,7 @@ const Staff_Dashboard: React.FC = () => {
                       ))}
                     </IonList>
                   )}
-                  </>
+                </>
               )}
             </div>
           );
