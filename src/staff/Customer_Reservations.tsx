@@ -63,6 +63,20 @@ const Customer_Reservations: React.FC = () => {
     setLoading(false);
   };
 
+  const getStatus = (session: CustomerSession) => {
+    const now = new Date();
+    const start = new Date(session.time_started);
+    const end = new Date(session.time_ended);
+
+    if (now < start) {
+      return "Upcoming";
+    } else if (now >= start && now <= end) {
+      return "Ongoing";
+    } else {
+      return "Finished";
+    }
+  };
+
   return (
     <div className="customer-lists-container">
       <h2 className="customer-lists-title">
@@ -90,6 +104,7 @@ const Customer_Reservations: React.FC = () => {
               <th>Total Amount</th>
               <th>Seat</th>
               <th>Add-Ons</th>
+              <th>Status</th>  {/* New Status column */}
               <th>Action</th>
             </tr>
           </thead>
@@ -126,6 +141,7 @@ const Customer_Reservations: React.FC = () => {
                         .join(", ")
                     : "None"}
                 </td>
+                <td>{getStatus(session)}</td>  {/* New Status cell */}
                 <td>
                   <button
                     className="receipt-btn"
