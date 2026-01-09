@@ -650,3 +650,42 @@ ion-item {
   100% { transform: translateX(0); }
 }
 
+/* Customer calendar */
+
+.calendar-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.calendar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 2px 0;
+}
+
+.calendar-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.calendar-count {
+  font-size: 10px;
+  font-weight: bold;
+  color: #333;
+  margin-top: 2px;
+}
+
+/* Optional: Style the calendar container */
+.customer-calendar-container {
+  padding: 20px;
+  text-align: center;
+}
+
+.customer-calendar-container h2 {
+  margin-bottom: 20px;
+}
