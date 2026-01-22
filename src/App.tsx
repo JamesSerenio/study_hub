@@ -8,6 +8,7 @@ import Login from "./pages/Login";
 import Home from "./pages/Home";
 import Staff_menu from "./staff/Staff_menu";
 import Admin_menu from "./admin/Admin_menu";
+import Book_Add from "./pages/Book_Add";
 
 /* Components */
 import TimeAlertModal from "./components/TimeAlertModal";
@@ -30,33 +31,25 @@ import "./global.css";
 setupIonicReact();
 
 /* 🔔 ALERT TIMES */
-const ALERT_MINUTES = [5, 3, 1];
+const ALERT_MINUTES: number[] = [5, 3, 1];
+
+type CustomerSessionRow = {
+  id: string;
+  full_name: string;
+  seat_number: string | string[] | null;
+  time_ended: string;
+};
 
 const App: React.FC = () => {
-  const [showAlert, setShowAlert] = useState(false);
-  const [alertMessage, setAlertMessage] = useState("");
+  const [showAlert, setShowAlert] = useState<boolean>(false);
+  const [alertMessage, setAlertMessage] = useState<string>("");
 
-  /* 🧠 Track fired alerts (avoid repeat) */
+  /* avoid duplicate alerts */
   const triggeredRef = useRef<Set<string>>(new Set());
-
-  /* 🔓 UNLOCK AUDIO (browser restriction fix) */
-  useEffect(() => {
-    const unlock = () => {
-      const audio = new Audio("/assets/alarm.mp3");
-      audio.play()
-        .then(() => {
-          audio.pause();
-          audio.currentTime = 0;
-        })
-        .catch(() => {});
-      window.removeEventListener("click", unlock);
-    };
-    window.addEventListener("click", unlock);
-  }, []);
 
   /* ⏰ GLOBAL SESSION CHECKER */
   useEffect(() => {
-    const interval = setInterval(async () => {
+    const intervalId = window.setInterval(async () => {
       const now = new Date();
 
       const { data, error } = await supabase
@@ -66,7 +59,9 @@ const App: React.FC = () => {
 
       if (error || !data) return;
 
-      data.forEach((session) => {
+      const sessions = data as CustomerSessionRow[];
+
+      sessions.forEach((session) => {
         const end = new Date(session.time_ended);
         const diffMinutes = Math.floor(
           (end.getTime() - now.getTime()) / 60000
@@ -79,20 +74,23 @@ const App: React.FC = () => {
 
         triggeredRef.current.add(key);
 
-        /* ✅ HTML MESSAGE (for modal rendering) */
+        const seatText = Array.isArray(session.seat_number)
+          ? session.seat_number.join(", ")
+          : session.seat_number ?? "";
+
         setAlertMessage(`
           <h2>⏰ ${diffMinutes} MINUTE(S) LEFT</h2>
           <p>
             <strong>Customer:</strong> ${session.full_name}<br/>
-            <strong>Seat:</strong> ${session.seat_number}
+            <strong>Seat:</strong> ${seatText}
           </p>
         `);
 
         setShowAlert(true);
       });
-    }, 30000); // every 30 seconds
+    }, 30000);
 
-    return () => clearInterval(interval);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   return (
@@ -106,13 +104,15 @@ const App: React.FC = () => {
 
       <IonReactRouter>
         <IonRouterOutlet>
+          <Route exact path="/book-add" component={Book_Add} />
           <Route exact path="/login" component={Login} />
           <Route exact path="/staff-menu" component={Staff_menu} />
           <Route exact path="/admin-menu" component={Admin_menu} />
           <Route exact path="/home" component={Home} />
 
+          {/* ✅ DEFAULT PAGE */}
           <Route exact path="/">
-            <Redirect to="/login" />
+            <Redirect to="/book-add" />
           </Route>
         </IonRouterOutlet>
       </IonReactRouter>

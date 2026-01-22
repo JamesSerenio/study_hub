@@ -14,17 +14,22 @@ import {
 } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 
-const Admin_Add_Ons: React.FC = () => {
-  const [category, setCategory] = useState("");
-  const [name, setName] = useState("");
-  const [restocked, setRestocked] = useState<number | undefined>();
-  const [price, setPrice] = useState<number | undefined>();
-  const [expenses, setExpenses] = useState<number | undefined>(0);
-  const [imageUrl, setImageUrl] = useState("");
-  const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState("");
+type Profile = {
+  role: string;
+};
 
-  const handleAddOnSubmit = async () => {
+const Admin_Add_Ons: React.FC = () => {
+  const [category, setCategory] = useState<string>("");
+  const [name, setName] = useState<string>("");
+  const [restocked, setRestocked] = useState<number | undefined>(undefined);
+  const [price, setPrice] = useState<number | undefined>(undefined);
+  const [expenses, setExpenses] = useState<number>(0);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+
+  const [showToast, setShowToast] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string>("");
+
+  const handleAddOnSubmit = async (): Promise<void> => {
     if (!category || !name || restocked === undefined || price === undefined) {
       setToastMessage("Please fill in all required fields!");
       setShowToast(true);
@@ -32,34 +37,80 @@ const Admin_Add_Ons: React.FC = () => {
     }
 
     try {
-      const { error } = await supabase.from("add_ons").insert([
+      // 1) Must be logged in
+      const { data: userRes, error: userErr } = await supabase.auth.getUser();
+      if (userErr) throw userErr;
+      if (!userRes?.user) throw new Error("Not logged in");
+
+      const userId: string = userRes.user.id;
+
+      // 2) Must be admin (profiles.role = 'admin')
+      const { data: profile, error: profErr } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", userId)
+        .single<Profile>();
+
+      if (profErr) throw profErr;
+      if (!profile || profile.role !== "admin") {
+        throw new Error("Admin only");
+      }
+
+      // 3) Upload image (admin-only storage policy)
+      let imageUrl: string | null = null;
+
+      if (imageFile) {
+        const extRaw: string | undefined = imageFile.name.split(".").pop();
+        const fileExt: string = (extRaw ? extRaw.toLowerCase() : "jpg").trim();
+        const fileName: string = `${Date.now()}.${fileExt}`;
+
+        // Recommended path: per-user folder
+        const filePath: string = `${userId}/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("add-ons")
+          .upload(filePath, imageFile, {
+            contentType: imageFile.type,
+            upsert: false,
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from("add-ons")
+          .getPublicUrl(filePath);
+
+        imageUrl = urlData.publicUrl;
+      }
+
+      // 4) Insert row to add_ons (include admin_id to satisfy RLS)
+      const { error: insertErr } = await supabase.from("add_ons").insert([
         {
+          admin_id: userId,
           category,
           name,
           restocked,
           price,
-          expenses: expenses || 0,
+          expenses,
           image_url: imageUrl,
         },
       ]);
 
-      if (error) {
-        setToastMessage("Error adding item: " + error.message);
-        setShowToast(true);
-        return;
-      }
+      if (insertErr) throw insertErr;
 
+      // Reset form
       setCategory("");
       setName("");
       setRestocked(undefined);
       setPrice(undefined);
       setExpenses(0);
-      setImageUrl("");
+      setImageFile(null);
+
       setToastMessage("Add-on added successfully!");
       setShowToast(true);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error(err);
-      setToastMessage("Unexpected error occurred");
+      setToastMessage(err instanceof Error ? err.message : "Unexpected error occurred");
       setShowToast(true);
     }
   };
@@ -73,66 +124,67 @@ const Admin_Add_Ons: React.FC = () => {
       </IonHeader>
 
       <IonContent className="ion-padding">
-        {/* Category */}
         <IonItem>
           <IonLabel position="stacked">Category</IonLabel>
           <IonInput
-            placeholder="Type category"
             value={category}
-            onIonChange={(e) => setCategory(e.detail.value!)}
+            onIonChange={(e) => setCategory((e.detail.value ?? "").toString())}
           />
         </IonItem>
 
-        {/* Name */}
         <IonItem>
           <IonLabel position="stacked">Item Name</IonLabel>
           <IonInput
-            placeholder="Type item name"
             value={name}
-            onIonChange={(e) => setName(e.detail.value!)}
+            onIonChange={(e) => setName((e.detail.value ?? "").toString())}
           />
         </IonItem>
 
-        {/* Image URL */}
         <IonItem>
-          <IonLabel position="stacked">Image URL</IonLabel>
-          <IonInput
-            placeholder="Enter image URL (optional)"
-            value={imageUrl}
-            onIonChange={(e) => setImageUrl(e.detail.value!)}
+          <IonLabel position="stacked">Image</IonLabel>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              const fileList: FileList | null = e.target.files;
+              setImageFile(fileList && fileList.length > 0 ? fileList[0] : null);
+            }}
           />
         </IonItem>
 
-        {/* Restocked */}
         <IonItem>
           <IonLabel position="stacked">Restocked Quantity</IonLabel>
           <IonInput
             type="number"
-            placeholder="Enter restocked quantity"
             value={restocked}
-            onIonChange={(e) => setRestocked(Number(e.detail.value))}
+            onIonChange={(e) => {
+              const v: string = (e.detail.value ?? "").toString();
+              setRestocked(v === "" ? undefined : Number(v));
+            }}
           />
         </IonItem>
 
-        {/* Price */}
         <IonItem>
           <IonLabel position="stacked">Price</IonLabel>
           <IonInput
             type="number"
-            placeholder="Enter price"
             value={price}
-            onIonChange={(e) => setPrice(Number(e.detail.value))}
+            onIonChange={(e) => {
+              const v: string = (e.detail.value ?? "").toString();
+              setPrice(v === "" ? undefined : Number(v));
+            }}
           />
         </IonItem>
 
-        {/* Expenses */}
         <IonItem>
           <IonLabel position="stacked">Expenses</IonLabel>
           <IonInput
             type="number"
-            placeholder="Enter expenses (optional)"
             value={expenses}
-            onIonChange={(e) => setExpenses(Number(e.detail.value))}
+            onIonChange={(e) => {
+              const v: string = (e.detail.value ?? "").toString();
+              setExpenses(v === "" ? 0 : Number(v));
+            }}
           />
         </IonItem>
 
