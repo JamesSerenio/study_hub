@@ -3,7 +3,7 @@ import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
 const HOURLY_RATE = 20;
-const FREE_MINUTES = 5;
+const FREE_MINUTES = 5; // system-only (HIDDEN on receipt)
 const DOWN_PAYMENT = 50;
 
 interface CustomerSession {
@@ -18,7 +18,7 @@ interface CustomerSession {
   time_started: string;
   time_ended: string;
   total_hours: number;
-  total_amount: number; // total cost after free minutes
+  total_amount: number;
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
@@ -34,7 +34,7 @@ const Customer_Lists: React.FC = () => {
     void fetchCustomerSessions();
   }, []);
 
-  const fetchCustomerSessions = async () => {
+  const fetchCustomerSessions = async (): Promise<void> => {
     setLoading(true);
 
     const { data, error } = await supabase
@@ -59,6 +59,7 @@ const Customer_Lists: React.FC = () => {
     return end.getFullYear() >= 2999;
   };
 
+  // minutes difference (integer)
   const diffMinutes = (startIso: string, endIso: string): number => {
     const start = new Date(startIso).getTime();
     const end = new Date(endIso).getTime();
@@ -74,12 +75,18 @@ const Customer_Lists: React.FC = () => {
     return Number(hours.toFixed(2));
   };
 
+  // ✅ Billing starts after first FREE_MINUTES
   const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
     const minutesUsed = diffMinutes(startIso, endIso);
     const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
     const perMinute = HOURLY_RATE / 60;
-    const amount = chargeMinutes * perMinute;
-    return Number(amount.toFixed(2));
+    return Number((chargeMinutes * perMinute).toFixed(2));
+  };
+
+  // ✅ Live cost for OPEN sessions (display only)
+  const getLiveTotalCost = (s: CustomerSession): number => {
+    const nowIso = new Date().toISOString();
+    return computeCostWithFreeMinutes(s.time_started, nowIso);
   };
 
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
@@ -125,19 +132,17 @@ const Customer_Lists: React.FC = () => {
     return new Date() > new Date(s.time_ended) ? "Finished" : "Ongoing";
   };
 
-  const getPaymentSummary = (s: CustomerSession) => {
-    const totalCost = Number(s.total_amount || 0);
-    const down = DOWN_PAYMENT;
 
-    const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
-    const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
-
-    return { totalCost, down, change, balance };
-  };
-
+  // ✅ Minutes used on receipt (OPEN sessions show running minutes)
   const getUsedMinutesForReceipt = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
     return diffMinutes(s.time_started, s.time_ended);
+  };
+
+  // ✅ Charge minutes shown on receipt (optional, no FREE row)
+  const getChargeMinutesForReceipt = (s: CustomerSession): number => {
+    const used = getUsedMinutesForReceipt(s);
+    return Math.max(0, used - FREE_MINUTES);
   };
 
   return (
@@ -184,8 +189,18 @@ const Customer_Lists: React.FC = () => {
                   <td>{session.hour_avail}</td>
                   <td>{new Date(session.time_started).toLocaleTimeString()}</td>
                   <td>{renderTimeOut(session)}</td>
+
+                  {/* if OPEN, total_hours may be 0 in DB; keep showing DB value */}
                   <td>{session.total_hours}</td>
-                  <td>₱{Number(session.total_amount || 0).toFixed(2)}</td>
+
+                  {/* ✅ if OPEN, show live cost (after free mins); else show saved */}
+                  <td>
+                    ₱
+                    {open
+                      ? getLiveTotalCost(session).toFixed(2)
+                      : Number(session.total_amount || 0).toFixed(2)}
+                  </td>
+
                   <td>{session.seat_number}</td>
                   <td>{renderStatus(session)}</td>
 
@@ -211,6 +226,7 @@ const Customer_Lists: React.FC = () => {
         </table>
       )}
 
+      {/* RECEIPT MODAL */}
       {selectedSession && (
         <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
           <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -259,18 +275,15 @@ const Customer_Lists: React.FC = () => {
             </div>
 
             <div className="receipt-row">
-              <span>Total Hours</span>
-              <span>{selectedSession.total_hours}</span>
-            </div>
-
-            <div className="receipt-row">
               <span>Minutes Used</span>
               <span>{getUsedMinutesForReceipt(selectedSession)} min</span>
             </div>
 
+            {/* ✅ no FREE MINUTES row */}
+
             <div className="receipt-row">
-              <span>Free Minutes</span>
-              <span>{FREE_MINUTES} min</span>
+              <span>Charge Minutes</span>
+              <span>{getChargeMinutesForReceipt(selectedSession)} min</span>
             </div>
 
             {isOpenTimeSession(selectedSession) && (
@@ -289,7 +302,14 @@ const Customer_Lists: React.FC = () => {
             <hr />
 
             {(() => {
-              const { totalCost, down, change, balance } = getPaymentSummary(selectedSession);
+              // ✅ for OPEN session receipt, compute live cost; else use saved
+              const totalCost = isOpenTimeSession(selectedSession)
+                ? getLiveTotalCost(selectedSession)
+                : Number(selectedSession.total_amount || 0);
+
+              const down = DOWN_PAYMENT;
+              const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
+              const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
 
               const isChange = change > 0;
               const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
@@ -321,7 +341,6 @@ const Customer_Lists: React.FC = () => {
                     </div>
                   )}
 
-                  {/* ✅ Replaced TOTAL with TOTAL CHANGE / TOTAL BALANCE */}
                   <div className="receipt-total">
                     <span>{totalLabel}</span>
                     <span>₱{Number(totalValue || 0).toFixed(2)}</span>

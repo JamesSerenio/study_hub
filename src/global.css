@@ -2,7 +2,7 @@
    GLOBAL FONT
 ========================= */
 * {
-  font-family: 'Poppins', sans-serif;
+  font-family: "Poppins", sans-serif;
 }
 
 /* REMOVE IONIC BLUE */
@@ -16,13 +16,19 @@ ion-item {
    BACKGROUND
 ========================= */
 .login-content {
-  --background: linear-gradient(
-    180deg,
-    rgb(240, 219, 185),
-    rgb(220, 181, 119)
-  );
+  --background: linear-gradient(180deg, rgb(240, 219, 185), rgb(220, 181, 119));
   position: relative;
   overflow: hidden;
+}
+
+/* ✅ prevent horizontal overflow anywhere */
+html,
+body,
+ion-app,
+ion-content,
+.login-content {
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .login-content ion-content {
@@ -33,23 +39,19 @@ ion-item {
 .login-content ::-webkit-scrollbar {
   display: none;
 }
-
 .login-content {
   scrollbar-width: none; /* Firefox */
 }
 
+/* =========================
+   LEAVES (responsive)
+========================= */
 .leaf {
   position: absolute;
-  width: 250px;
+  width: clamp(90px, 22vw, 250px); /* ✅ auto scale */
   opacity: 0.9;
   pointer-events: none;
   z-index: 0;
-}
-
-@media (max-width: 768px) {
-  .leaf {
-    width: 180px;
-  }
 }
 
 /* TOP LEFT */
@@ -87,67 +89,75 @@ ion-item {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100%;
+
+  min-height: 100vh;          /* ✅ better than height:100% */
+  padding: clamp(12px, 3vw, 20px); /* ✅ breathing space */
+
   position: relative;
   z-index: 2;
 }
 
 /* =========================
-   CARD
+   CARD (responsive)
 ========================= */
 .login-box {
-  width: 90%;
-  max-width: 360px;
-  padding: 28px 24px;
+  width: min(92vw, 360px); /* ✅ fit on small screens */
+  padding: clamp(18px, 4vw, 28px) clamp(16px, 4vw, 24px);
   border-radius: 16px;
 
-  background: rgba(230, 222, 222, 0.586); /* Semi-white + transparent */
-  backdrop-filter: blur(20px); /* Glass effect */
-  -webkit-backdrop-filter: blur(20px); /* Safari support */
+  background: rgba(230, 222, 222, 0.586);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 
-  border: 1px solid rgba(0, 0, 0, 0.3); /* Black border with slight transparency */
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
 
   animation: fadeUp 0.6s ease;
 }
 
 /* =========================
-   TITLE + LOGO
+   TITLE + LOGO (responsive)
 ========================= */
 .login-header {
   display: flex;
   align-items: center;
+  justify-content: center; /* ✅ center for any device */
   gap: 10px;
-  margin-bottom: 35px;
-  padding-left: 63px;
+  margin-bottom: clamp(18px, 4vw, 35px);
+
+  padding-left: 0; /* ✅ remove fixed padding that breaks mobile */
+  flex-wrap: wrap;
+  text-align: center;
 }
 
 .login-header h2 {
-  margin: 5px;
+  margin: 0;
   font-weight: 700;
-  font-size: 30px;
+  font-size: clamp(20px, 5vw, 30px); /* ✅ auto scale */
   color: #000;
 }
 
 .login-logo {
-  width: 40px;
-  height: 40px;
+  width: clamp(32px, 8vw, 40px);
+  height: clamp(32px, 8vw, 40px);
   object-fit: contain;
   border-radius: 8px;
 }
 
 /* =========================
-   INPUT
+   INPUT (touch-friendly)
 ========================= */
 .input-item {
   --background: transparent;
-  margin-bottom: 25px;
+  margin-bottom: 18px;
   border-radius: 10px;
 
   border: 1.6px solid rgba(0, 0, 0, 0.4);
   display: flex;
   align-items: center;
+
   padding-left: 10px;
+  min-height: 48px; /* ✅ easier tap */
 
   transition: border-color 0.25s ease;
 }
@@ -168,7 +178,7 @@ ion-item {
 .input-item ion-input {
   --padding-start: 10px;
   --padding-end: 12px;
-  font-size: 15px;
+  font-size: clamp(14px, 3.5vw, 15px);
   font-weight: 500;
   color: #000;
 }
@@ -178,11 +188,12 @@ ion-item {
 }
 
 /* =========================
-   BUTTON
+   BUTTON (full width)
 ========================= */
 .login-btn {
-  margin-top: 22px;
-  height: 44px;
+  margin-top: 18px;
+  height: 46px;
+  width: 100%;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.6px;
@@ -206,14 +217,6 @@ ion-item {
   }
 }
 
-/* =========================
-   RESPONSIVE
-========================= */
-@media (max-width: 480px) {
-  .leaf {
-    width: 90px;
-  }
-}
 
 /*== staff ==*/
 
@@ -227,6 +230,8 @@ ion-item {
 
 .staff-menu ion-content {
   --background: hsla(175, 5%, 98%, 1);
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 /* =========================
@@ -237,48 +242,52 @@ ion-item {
   background: transparent;
 }
 
+/* logo + text wrapper */
 .menu-brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
+  padding: clamp(10px, 3vw, 16px);
+  max-width: 100%;
 }
 
+/* logo responsive */
 .menu-logo {
-  width: 28px;
-  height: 28px;
+  width: clamp(24px, 6vw, 28px);
+  height: clamp(24px, 6vw, 28px);
   object-fit: contain;
+  flex-shrink: 0;
 }
 
 /* =========================
-   FIGMA TEXT STYLE (EXACT)
+   FIGMA TEXT STYLE
 ========================= */
 
 .menu-title-text {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* responsive figma title */
 .figma-title {
   font-family: "Porter Sans Block", sans-serif;
   font-weight: 400;
-  font-size: 16px;
-  line-height: 22.52px;
+
+  font-size: clamp(14px, 3.6vw, 16px);
+  line-height: 1.35;
+
   letter-spacing: 0.01em;
   text-transform: uppercase;
   color: #000;
 
-  /* EMBOSSED / DEPTH EFFECT */
   text-shadow:
     1px 1px 0 #bfbfbf,
     2px 2px 0 #9f9f9f,
     3px 3px 0 #7f7f7f;
 
-  /* Optional outline */
   -webkit-text-stroke: 0.3px #000;
 }
-
-
-
 
 /* =========================
    MENU ITEMS
@@ -286,22 +295,37 @@ ion-item {
 
 .menu-item {
   --background: transparent;
-  margin: 6px 12px;
+  margin: 6px clamp(8px, 3vw, 12px);
   border-radius: 14px;
-  font-weight: 600; 
+
+  font-weight: 600;
   color: #56a28e;
+
   display: flex;
   align-items: center;
+
+  min-height: 46px; /* ✅ touch-friendly */
+  max-width: 100%;
 }
 
+/* menu icon */
+.menu-icon {
+  width: clamp(20px, 5vw, 22px);
+  height: clamp(20px, 5vw, 22px);
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+/* text */
 .menu-text {
   position: relative;
   display: inline-block;
   padding-bottom: 4px;
-  font-weight: 600; 
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-
+/* underline animation */
 .menu-text::after {
   content: "";
   position: absolute;
@@ -313,154 +337,205 @@ ion-item {
   transition: width 0.25s ease;
 }
 
-.menu-item:hover .menu-text::after {
+.menu-item:hover .menu-text::after,
+.menu-item.active .menu-text::after {
   width: 100%;
 }
 
+/* active item */
 .menu-item.active {
   background: rgba(255, 255, 255, 0.45);
   backdrop-filter: blur(8px);
   color: #000;
 }
 
-.menu-item.active .menu-text::after {
-  width: 100%;
-}
-
-.menu-icon {
-  width: 22px;
-  height: 22px;
-  margin-right: 12px;
-}
-
 /* =========================
-   LOGOUT BUTTON
+   LOGOUT BUTTON (SAFE)
 ========================= */
 
 .logout-btn {
-  position: fixed;  /* Pin it to the viewport */
-  bottom: 20px;     /* 20px from bottom */
-  right: 20px;      /* 20px from right */
+  position: fixed;
+  bottom: clamp(12px, 3vw, 20px);
+  right: clamp(12px, 3vw, 20px);
+
   border-radius: 14px;
+
   --background: #56a28e;
   --background-hover: #4b927f;
   --color: #ffffff;
-  width: fit-content;
+
   padding: 8px 14px;
-  font-size: 14px;
+  font-size: clamp(13px, 3.4vw, 14px);
   font-weight: 500;
-  margin: 0;  /* Remove original margin since we're using position */
+
+  width: fit-content;
+  max-width: calc(100vw - 32px);
+  white-space: nowrap;
+
+  z-index: 999;
 }
 
- /* customer-lists*/
+/* =========================
+   SMALL PHONE FIX
+========================= */
+
+@media (max-width: 360px) {
+  .menu-text {
+    font-size: 13px;
+  }
+
+  .logout-btn {
+    padding: 7px 12px;
+  }
+}
+
+
+/* =========================
+   CUSTOMER LISTS (RESPONSIVE)
+========================= */
 
 .customer-lists-container {
-  padding: 20px;
+  padding: clamp(12px, 3vw, 20px);
+  max-width: 100%;
+  overflow-x: auto;                 /* ✅ allow scroll on small screens */
+  -webkit-overflow-scrolling: touch;/* ✅ smooth mobile scroll */
 }
 
 .customer-table {
   width: 100%;
   border-collapse: collapse;
+
+  /* ✅ prevents breaking on phones */
+  min-width: 720px;                 /* adjust if you have fewer columns */
 }
 
 .customer-table th,
 .customer-table td {
   border: 1px solid #ddd;
   padding: 8px;
-  font-size: 13px;
+  font-size: clamp(12px, 2.8vw, 13px);
   text-align: center;
+  white-space: nowrap;              /* ✅ keep values aligned */
 }
 
 .customer-table th {
   background: #f4f4f4;
+  position: sticky;                 /* ✅ optional: header stays */
+  top: 0;
+  z-index: 1;
 }
 
-/* BUTTON */
+/* Optional: tighter table on very small phones */
+@media (max-width: 360px) {
+  .customer-table th,
+  .customer-table td {
+    padding: 6px;
+  }
+}
+
+/* =========================
+   BUTTON (RESPONSIVE)
+========================= */
 .receipt-btn {
   background: #222;
   color: #fff;
   border: none;
   padding: 6px 10px;
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
+
+  max-width: 100%;
+  white-space: nowrap;
 }
 
-/* MODAL */
+/* =========================
+   MODAL OVERLAY (SAFE)
+========================= */
 .receipt-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0; /* ✅ replaces top/left/width/height */
   background: rgba(0, 0, 0, 0.45);
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   z-index: 999;
+
+  padding: 16px; /* ✅ prevents edge clipping on phones */
 }
 
-/* RECEIPT */
+/* =========================
+   RECEIPT CONTAINER (RESPONSIVE)
+========================= */
 .receipt-container {
-  width: 300px;
+  width: min(92vw, 340px); /* ✅ fit to any device */
   background: #fff;
-  padding: 20px;
-  border-radius: 8px;
+  padding: clamp(14px, 4vw, 20px);
+  border-radius: 10px;
   font-family: monospace;
+
+  max-height: min(80vh, 620px); /* ✅ avoid overflow */
+  overflow: auto;               /* ✅ scroll if long */
 }
 
 /* LOGO */
 .receipt-logo {
   display: block;
-  margin: 0 auto 5px;
-  width: 80px;
+  margin: 0 auto 6px;
+  width: clamp(64px, 18vw, 80px);
 }
 
 .receipt-title {
   text-align: center;
-  font-size: 18px;
+  font-size: clamp(16px, 4.5vw, 18px);
   margin-bottom: 2px;
 }
 
 .receipt-subtitle {
   text-align: center;
-  font-size: 12px;
+  font-size: clamp(11px, 3.2vw, 12px);
   margin-bottom: 10px;
 }
 
 .receipt-row {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  gap: 10px; /* ✅ prevent overlap */
+  font-size: clamp(12px, 3.2vw, 13px);
   margin: 4px 0;
 }
 
 .receipt-total {
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   font-weight: bold;
-  font-size: 16px;
+  font-size: clamp(14px, 4vw, 16px);
   margin-top: 10px;
 }
 
 .receipt-footer {
   text-align: center;
-  font-size: 12px;
+  font-size: clamp(11px, 3.2vw, 12px);
   margin-top: 15px;
 }
 
 .close-btn {
   width: 100%;
   margin-top: 10px;
-  padding: 8px;
+  padding: 10px;
   background: #222;
   color: #fff;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
-/* TimeAlertModal */
+/* =========================
+   TimeAlertModal (RESPONSIVE)
+========================= */
 
 /* MODAL TRANSPARENT */
 .time-alert-modal {
@@ -487,6 +562,8 @@ ion-item {
 
   z-index: 10000;
   animation: popIn 0.35s ease-out;
+
+  width: min(92vw, 420px); /* ✅ keep wrapper responsive */
 }
 
 /* ALERT BOX */
@@ -494,18 +571,20 @@ ion-item {
   background: #fff3cd;
   border: 3px solid #ff0000;
   border-radius: 14px;
-  padding: 18px;
-  font-size: 16px;
-  color: #842029;
-  width: 340px;
+  padding: clamp(14px, 4vw, 18px);
 
+  font-size: clamp(14px, 3.8vw, 16px);
+  color: #842029;
+
+  width: 100%; /* ✅ was 340px */
   animation: pulse 1s infinite;
+  box-sizing: border-box;
 }
 
 /* BUTTON + SHAKE */
 .alert-btn {
   margin-top: 12px;
-  width: 340px;
+  width: 100%;          /* ✅ was 340px */
   height: 46px;
   animation: shake 1.2s infinite;
 }
