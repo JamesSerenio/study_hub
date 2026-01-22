@@ -830,3 +830,11 @@ ion-item {
   width: 70px;
   min-width: 70px;
 }
+/* Hide scrollbar specifically for book add page */
+.bookadd-content ::-webkit-scrollbar {
+  display: none;
+}
+
+.bookadd-content {
+  scrollbar-width: none; /* Firefox */
+}

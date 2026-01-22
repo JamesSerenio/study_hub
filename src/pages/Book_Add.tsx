@@ -432,7 +432,7 @@ const Book_Add: React.FC = () => {
     <IonPage className="bookadd-page">
       <IonHeader />
 
-      <IonContent fullscreen className="bookadd-content">
+      <IonContent fullscreen className="bookadd-content"scrollY={false}>
         {/* Background leaves */}
         <img src={leaves} className="leaf leaf-top-left" alt="leaf" />
         <img src={leaves} className="leaf leaf-top-right" alt="leaf" />
