@@ -1210,3 +1210,46 @@ ion-content,
   border-radius: 14px;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
 }
+
+/* =========================
+   CUSTOMER ADD-ONS (RESPONSIVE)
+========================= */
+
+.customer-addons-container {
+  padding: clamp(12px, 3vw, 20px);
+  max-width: 100%;
+  overflow-x: auto;                  /* ✅ allow scroll on small screens */
+  -webkit-overflow-scrolling: touch; /* ✅ smooth mobile scroll */
+}
+
+.customer-addons-table {
+  width: 100%;
+  border-collapse: collapse;
+
+  /* ✅ prevents breaking on phones */
+  min-width: 720px;                  /* same as customer lists */
+}
+
+.customer-addons-table th,
+.customer-addons-table td {
+  border: 1px solid #ddd;
+  padding: 8px;
+  font-size: clamp(12px, 2.8vw, 13px);
+  text-align: center;
+  white-space: nowrap;               /* ✅ keep values aligned */
+}
+
+.customer-addons-table th {
+  background: #f4f4f4;
+  position: sticky;                  /* ✅ header stays visible */
+  top: 0;
+  z-index: 1;
+}
+
+/* Optional: tighter table on very small phones */
+@media (max-width: 360px) {
+  .customer-addons-table th,
+  .customer-addons-table td {
+    padding: 6px;
+  }
+}

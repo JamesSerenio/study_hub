@@ -23,6 +23,7 @@ import Customer_Lists from "./Customer_Lists";
 import Customer_Reservations from "./Customer_Reservations";
 import Customer_Calendar from "./Customer_Calendar";
 import Product_Item_Lists from "./Product_Item_lists";
+import Customer_Add_ons from "./Customer_Add_ons";
 
 /* Assets */
 import dashboardIcon from "../assets/add_user.png";
@@ -31,35 +32,41 @@ import listIcon from "../assets/list.png";
 import reserveIcon from "../assets/reserve.png";
 import calendarIcon from "../assets/calendar.png";
 import foodIcon from "../assets/food.png";
+import onsIcon from "../assets/ons.png";
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState("dashboard");
 
-  const menuItems = [
-    { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
-    { name: "Customer Lists", key: "customer_lists", icon: listIcon },
-    { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
-    { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
-    { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
-  ];
+const menuItems = [
+  { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
+  { name: "Customer Lists", key: "customer_lists", icon: listIcon },
+  { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
+  { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
+  { name: "Customer Add-Ons", key: "customer_add_ons", icon: onsIcon },
+  { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
+];
 
-  const renderContent = () => {
-    switch (activePage) {
-      case "dashboard":
-        return <Staff_Dashboard />;
-      case "customer_lists":
-        return <Customer_Lists />;
-      case "customer_reservations":
-        return <Customer_Reservations />;
-      case "customer_calendar":
-        return <Customer_Calendar />;
-      case "product_item_lists":
-        return <Product_Item_Lists />;
-      default:
-        return <h2>Welcome Staff</h2>;
-    }
-  };
+
+const renderContent = () => {
+  switch (activePage) {
+    case "dashboard":
+      return <Staff_Dashboard />;
+    case "customer_lists":
+      return <Customer_Lists />;
+    case "customer_reservations":
+      return <Customer_Reservations />;
+    case "customer_calendar":
+      return <Customer_Calendar />;
+    case "customer_add_ons":
+      return <Customer_Add_ons />;
+    case "product_item_lists":
+      return <Product_Item_Lists />;
+    default:
+      return <h2>Welcome Staff</h2>;
+  }
+};
+
 
   const handleLogout = () => {
     localStorage.clear();
