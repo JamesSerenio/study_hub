@@ -5,9 +5,6 @@ import {
   IonHeader,
   IonContent,
   IonButton,
-  IonGrid,
-  IonRow,
-  IonCol,
   IonInput,
   IonItem,
   IonLabel,
@@ -596,28 +593,47 @@ const Book_Add: React.FC = () => {
         <img src={leaves} className="leaf leaf-bottom-left" alt="leaf" />
         <img src={leaves} className="leaf leaf-bottom-right" alt="leaf" />
 
-        <div className="bookadd-wrapper">
-          <IonGrid className="bookadd-top-buttons">
-            <IonRow>
-              <IonCol size="6">
-                <IonButton expand="block" onClick={openAddOnsModal}>
-                  Add_Ons
-                </IonButton>
-              </IonCol>
-              <IonCol size="6">
-                <IonButton
-                  expand="block"
-                  onClick={() => {
-                    setTimeSnapshotIso(new Date().toISOString());
-                    setIsBookingOpen(true);
-                  }}
-                >
-                  Booking
-                </IonButton>
-              </IonCol>
-            </IonRow>
-          </IonGrid>
-        </div>
+          <div className="bookadd-wrapper">
+            <div className="bookadd-hero-card">
+              {/* TITLE + DESCRIPTION */}
+              <div className="bookadd-topbar">
+                <p className="bookadd-topbar-title">Choose Action</p>
+                <p className="bookadd-topbar-subtitle">
+                  Booking = seat and time record. Add-Ons = select items before saving.
+                </p>
+              </div>
+
+              {/* BUTTONS (NO IonGrid para hindi pangit layout) */}
+              <div className="bookadd-actions">
+                {/* BOOKING */}
+                <div className="bookadd-btn-card bookadd-btn-booking">
+                  <span className="bookadd-btn-label">Booking</span>
+                  <p className="bookadd-btn-desc">Create customer session and select seats.</p>
+
+                  <IonButton
+                    expand="block"
+                    onClick={() => {
+                      setTimeSnapshotIso(new Date().toISOString());
+                      setIsBookingOpen(true);
+                    }}
+                  >
+                    Booking
+                  </IonButton>
+                </div>
+
+                {/* ADD-ONS */}
+                <div className="bookadd-btn-card bookadd-btn-addons">
+                  <span className="bookadd-btn-label">Add-Ons</span>
+                  <p className="bookadd-btn-desc">Add drinks, snacks, and quantities.</p>
+
+                  <IonButton expand="block" onClick={openAddOnsModal}>
+                    Add_Ons
+                  </IonButton>
+                </div>
+              </div>
+            </div>
+          </div>
+
 
         {/* BOOKING MODAL */}
         <IonModal isOpen={isBookingOpen} onDidDismiss={() => setIsBookingOpen(false)}>

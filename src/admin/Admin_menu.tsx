@@ -28,8 +28,8 @@ import Admin_customer_reservation from "./Admin_customer_reservation";
 import dashboardIcon from "../assets/graph.png";
 import addOnsIcon from "../assets/ons.png";
 import itemIcon from "../assets/item.png";
-import customerListIcon from "../assets/list.png";     // ✅ new
-import reservationIcon from "../assets/reserve.png";   // ✅ new
+import customerListIcon from "../assets/list.png";     
+import reservationIcon from "../assets/reserve.png";   
 import studyHubLogo from "../assets/study_hub.png";
 
 const Admin_menu: React.FC = () => {
