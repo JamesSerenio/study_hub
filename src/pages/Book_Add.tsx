@@ -23,7 +23,7 @@ import {
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 import leaves from "../assets/leave.png";
-
+import studyHubLogo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 
 interface Profile {
@@ -594,45 +594,66 @@ const Book_Add: React.FC = () => {
         <img src={leaves} className="leaf leaf-bottom-right" alt="leaf" />
 
           <div className="bookadd-wrapper">
-            <div className="bookadd-hero-card">
-              {/* TITLE + DESCRIPTION */}
-              <div className="bookadd-topbar">
-                <p className="bookadd-topbar-title">Choose Action</p>
-                <p className="bookadd-topbar-subtitle">
-                  Booking = seat and time record. Add-Ons = select items before saving.
-                </p>
+          <div className="bookadd-hero-card">
+
+            {/* ✅ BUSINESS HEADER */}
+            <div className="bookadd-hero-header">
+              <div className="bookadd-hero-brand">
+                <img src={studyHubLogo} className="bookadd-hero-logo" alt="Study Hub" />
+                <div className="bookadd-hero-text">
+                  <p className="bookadd-hero-title">Welcome to Me Tyme Lounge!</p>
+                  <p className="bookadd-hero-subtitle">
+                    Rest, relax, and focus in a peaceful environment.
+                  </p>
+                </div>
               </div>
 
-              {/* BUTTONS (NO IonGrid para hindi pangit layout) */}
-              <div className="bookadd-actions">
-                {/* BOOKING */}
-                <div className="bookadd-btn-card bookadd-btn-booking">
-                  <span className="bookadd-btn-label">Booking</span>
-                  <p className="bookadd-btn-desc">Create customer session and select seats.</p>
-
-                  <IonButton
-                    expand="block"
-                    onClick={() => {
-                      setTimeSnapshotIso(new Date().toISOString());
-                      setIsBookingOpen(true);
-                    }}
-                  >
-                    Booking
-                  </IonButton>
-                </div>
-
-                {/* ADD-ONS */}
-                <div className="bookadd-btn-card bookadd-btn-addons">
-                  <span className="bookadd-btn-label">Add-Ons</span>
-                  <p className="bookadd-btn-desc">Add drinks, snacks, and quantities.</p>
-
-                  <IonButton expand="block" onClick={openAddOnsModal}>
-                    Add_Ons
-                  </IonButton>
-                </div>
+              <div className="bookadd-hero-chip">
+                <span className="bookadd-hero-chip-dot" />
+                <span className="bookadd-hero-chip-text">Ready for booking</span>
               </div>
             </div>
+
+            {/* ✅ ACTION DESCRIPTION */}
+            <div className="bookadd-topbar">
+              <p className="bookadd-topbar-title">Choose Action</p>
+              <p className="bookadd-topbar-subtitle">
+                Book your seat and customize your experience.
+              </p>
+            </div>
+
+            {/* ✅ BUTTONS */}
+            <div className="bookadd-actions">
+              {/* BOOKING */}
+              <div className="bookadd-btn-card bookadd-btn-booking">
+                <span className="bookadd-btn-label">Booking</span>
+                <p className="bookadd-btn-desc">Choose your seat and booking time.</p>
+
+                <IonButton
+                  expand="block"
+                  onClick={() => {
+                    setTimeSnapshotIso(new Date().toISOString());
+                    setIsBookingOpen(true);
+                  }}
+                >
+                  Booking
+                </IonButton>
+              </div>
+
+              {/* ADD-ONS */}
+              <div className="bookadd-btn-card bookadd-btn-addons">
+                <span className="bookadd-btn-label">Add-Ons</span>
+                <p className="bookadd-btn-desc">Choose drinks, food, and other add-ons.</p>
+
+                <IonButton expand="block" onClick={openAddOnsModal}>
+                  Add_Ons
+                </IonButton>
+              </div>
+            </div>
+
           </div>
+        </div>
+
 
 
         {/* BOOKING MODAL */}
