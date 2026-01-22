@@ -689,3 +689,144 @@ ion-item {
 .customer-calendar-container h2 {
   margin-bottom: 20px;
 }
+
+/* =========================
+   BOOK_ADD BACKGROUND (same as login)
+========================= */
+.bookadd-content {
+  --background: linear-gradient(
+    180deg,
+    rgb(240, 219, 185),
+    rgb(220, 181, 119)
+  );
+  position: relative;
+  overflow: hidden;
+}
+
+.bookadd-content ion-content {
+  --overflow: hidden;
+}
+
+/* Hide scrollbar specifically for Book_Add page */
+.bookadd-content ::-webkit-scrollbar {
+  display: none;
+}
+.bookadd-content {
+  scrollbar-width: none; /* Firefox */
+}
+
+/* ✅ Leaves (same as login) */
+.bookadd-content .leaf {
+  position: absolute;
+  width: 250px;
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@media (max-width: 768px) {
+  .bookadd-content .leaf {
+    width: 180px;
+  }
+}
+
+/* TOP LEFT */
+.bookadd-content .leaf-top-left {
+  top: -10px;
+  left: -10px;
+  transform: scaleY(-1);
+}
+
+/* TOP RIGHT */
+.bookadd-content .leaf-top-right {
+  top: -10px;
+  right: -10px;
+  transform: rotate(180deg);
+}
+
+/* BOTTOM LEFT */
+.bookadd-content .leaf-bottom-left {
+  bottom: -10px;
+  left: -10px;
+  transform: scaleY(1);
+}
+
+/* BOTTOM RIGHT */
+.bookadd-content .leaf-bottom-right {
+  bottom: -10px;
+  right: -10px;
+  transform: rotate(-90deg);
+}
+
+/* ✅ Content wrapper above leaves */
+.bookadd-wrapper {
+  position: relative;
+  z-index: 1;
+  padding: 16px;
+}
+
+/* =========================
+   GLASS CARD (same style idea as login box)
+========================= */
+.bookadd-card {
+  width: 100%;
+  max-width: 560px;
+  margin: 12px auto;
+  padding: 18px 16px;
+  border-radius: 16px;
+
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+}
+
+/* small hint text */
+.bookadd-hint {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* seat button wrap */
+.seat-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+/* add-ons layout helpers */
+.addon-block {
+  margin-top: 12px;
+}
+
+.addon-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.addon-flex {
+  flex: 1;
+}
+
+.addon-item {
+  --inner-padding-end: 6px;
+}
+
+.addon-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qty-label {
+  white-space: nowrap;
+}
+
+.qty-input {
+  width: 70px;
+  min-width: 70px;
+}
