@@ -3,13 +3,8 @@ import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
 const HOURLY_RATE = 20;
-
-interface CustomerSessionAddOn {
-  add_ons: { name: string };
-  quantity: number;
-  price: number;
-  total: number;
-}
+const FREE_MINUTES = 5;
+const DOWN_PAYMENT = 50;
 
 interface CustomerSession {
   id: string;
@@ -23,11 +18,10 @@ interface CustomerSession {
   time_started: string;
   time_ended: string;
   total_hours: number;
-  total_amount: number;
+  total_amount: number; // total cost after free minutes
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
-  customer_session_add_ons: CustomerSessionAddOn[];
 }
 
 const Customer_Lists: React.FC = () => {
@@ -45,17 +39,7 @@ const Customer_Lists: React.FC = () => {
 
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select(
-        `
-        *,
-        customer_session_add_ons(
-          add_ons(name),
-          quantity,
-          price,
-          total
-        )
-      `
-      )
+      .select("*")
       .neq("reservation", "yes")
       .order("date", { ascending: false });
 
@@ -75,52 +59,47 @@ const Customer_Lists: React.FC = () => {
     return end.getFullYear() >= 2999;
   };
 
-  const getAddOnsTotal = (s: CustomerSession): number => {
-    return (s.customer_session_add_ons || []).reduce((sum, a) => sum + (Number(a.total) || 0), 0);
+  const diffMinutes = (startIso: string, endIso: string): number => {
+    const start = new Date(startIso).getTime();
+    const end = new Date(endIso).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+    return Math.floor((end - start) / (1000 * 60));
   };
 
   const computeHours = (startIso: string, endIso: string): number => {
     const start = new Date(startIso).getTime();
     const end = new Date(endIso).getTime();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
-
-    const diffHours = (end - start) / (1000 * 60 * 60);
-    return Number(diffHours.toFixed(2));
+    const hours = (end - start) / (1000 * 60 * 60);
+    return Number(hours.toFixed(2));
   };
 
-  // ✅ STOP OPEN TIME: set time_out now, compute totals, and make Stop button disappear
+  const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
+    const minutesUsed = diffMinutes(startIso, endIso);
+    const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
+    const perMinute = HOURLY_RATE / 60;
+    const amount = chargeMinutes * perMinute;
+    return Number(amount.toFixed(2));
+  };
+
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
       setStoppingId(session.id);
 
       const nowIso = new Date().toISOString();
       const totalHours = computeHours(session.time_started, nowIso);
+      const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
-      const addOnsTotal = getAddOnsTotal(session);
-      const timeAmount = totalHours * HOURLY_RATE;
-      const totalAmount = Number((timeAmount + addOnsTotal).toFixed(2));
-
-      // IMPORTANT: hour_avail must NOT remain "OPEN" after stop
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
           time_ended: nowIso,
           total_hours: totalHours,
-          total_amount: totalAmount,
+          total_amount: totalCost,
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
-        .select(
-          `
-          *,
-          customer_session_add_ons(
-            add_ons(name),
-            quantity,
-            price,
-            total
-          )
-        `
-        )
+        .select("*")
         .single();
 
       if (error || !updated) {
@@ -128,10 +107,7 @@ const Customer_Lists: React.FC = () => {
         return;
       }
 
-      // ✅ Update table instantly (Time Out shows time + Stop button disappears)
       setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
-
-      // ✅ Update receipt instantly if open
       setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
       console.error(e);
@@ -141,13 +117,27 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  const renderTimeOut = (s: CustomerSession) => {
-    return isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleTimeString();
-  };
+  const renderTimeOut = (s: CustomerSession) =>
+    isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleTimeString();
 
   const renderStatus = (s: CustomerSession) => {
     if (isOpenTimeSession(s)) return "Ongoing";
     return new Date() > new Date(s.time_ended) ? "Finished" : "Ongoing";
+  };
+
+  const getPaymentSummary = (s: CustomerSession) => {
+    const totalCost = Number(s.total_amount || 0);
+    const down = DOWN_PAYMENT;
+
+    const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
+    const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
+
+    return { totalCost, down, change, balance };
+  };
+
+  const getUsedMinutesForReceipt = (s: CustomerSession): number => {
+    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
+    return diffMinutes(s.time_started, s.time_ended);
   };
 
   return (
@@ -174,7 +164,6 @@ const Customer_Lists: React.FC = () => {
               <th>Total Hours</th>
               <th>Total Amount</th>
               <th>Seat</th>
-              <th>Add-Ons</th>
               <th>Status</th>
               <th>Action</th>
             </tr>
@@ -198,19 +187,9 @@ const Customer_Lists: React.FC = () => {
                   <td>{session.total_hours}</td>
                   <td>₱{Number(session.total_amount || 0).toFixed(2)}</td>
                   <td>{session.seat_number}</td>
-
-                  <td>
-                    {session.customer_session_add_ons && session.customer_session_add_ons.length > 0
-                      ? session.customer_session_add_ons
-                          .map((addOn) => `${addOn.add_ons.name} x${addOn.quantity}`)
-                          .join(", ")
-                      : "None"}
-                  </td>
-
                   <td>{renderStatus(session)}</td>
 
                   <td style={{ display: "flex", gap: 8 }}>
-                    {/* ✅ Only show Stop Time if OPEN */}
                     {open && (
                       <button
                         className="receipt-btn"
@@ -232,7 +211,6 @@ const Customer_Lists: React.FC = () => {
         </table>
       )}
 
-      {/* RECEIPT MODAL */}
       {selectedSession && (
         <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
           <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -285,7 +263,16 @@ const Customer_Lists: React.FC = () => {
               <span>{selectedSession.total_hours}</span>
             </div>
 
-            {/* ✅ Stop button inside receipt only if OPEN */}
+            <div className="receipt-row">
+              <span>Minutes Used</span>
+              <span>{getUsedMinutesForReceipt(selectedSession)} min</span>
+            </div>
+
+            <div className="receipt-row">
+              <span>Free Minutes</span>
+              <span>{FREE_MINUTES} min</span>
+            </div>
+
             {isOpenTimeSession(selectedSession) && (
               <div style={{ marginTop: 12 }}>
                 <button
@@ -299,27 +286,49 @@ const Customer_Lists: React.FC = () => {
               </div>
             )}
 
-            {selectedSession.customer_session_add_ons && selectedSession.customer_session_add_ons.length > 0 && (
-              <>
-                <hr />
-                <h4>Add-Ons</h4>
-                {selectedSession.customer_session_add_ons.map((addOn, index) => (
-                  <div key={index} className="receipt-row">
-                    <span>
-                      {addOn.add_ons.name} x{addOn.quantity}
-                    </span>
-                    <span>₱{Number(addOn.total || 0).toFixed(2)}</span>
-                  </div>
-                ))}
-              </>
-            )}
-
             <hr />
 
-            <div className="receipt-total">
-              <span>TOTAL</span>
-              <span>₱{Number(selectedSession.total_amount || 0).toFixed(2)}</span>
-            </div>
+            {(() => {
+              const { totalCost, down, change, balance } = getPaymentSummary(selectedSession);
+
+              const isChange = change > 0;
+              const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
+              const totalValue = isChange ? change : balance;
+
+              return (
+                <>
+                  <div className="receipt-row">
+                    <span>Total Cost</span>
+                    <span>₱{totalCost.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Down Payment</span>
+                    <span>₱{down.toFixed(2)}</span>
+                  </div>
+
+                  {change > 0 && (
+                    <div className="receipt-row">
+                      <span>Change</span>
+                      <span>₱{change.toFixed(2)}</span>
+                    </div>
+                  )}
+
+                  {balance > 0 && (
+                    <div className="receipt-row">
+                      <span>Balance</span>
+                      <span>₱{balance.toFixed(2)}</span>
+                    </div>
+                  )}
+
+                  {/* ✅ Replaced TOTAL with TOTAL CHANGE / TOTAL BALANCE */}
+                  <div className="receipt-total">
+                    <span>{totalLabel}</span>
+                    <span>₱{Number(totalValue || 0).toFixed(2)}</span>
+                  </div>
+                </>
+              );
+            })()}
 
             <p className="receipt-footer">
               Thank you for choosing <br />

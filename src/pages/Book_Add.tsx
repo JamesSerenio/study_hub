@@ -1,5 +1,5 @@
 // Book_Add.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
   IonHeader,
@@ -43,8 +43,8 @@ interface CustomerForm {
   id_number: string;
   seat_number: string[];
   reservation: boolean;
-  reservation_date?: string;
-  time_started: string; // ISO
+  reservation_date?: string; // ISO date or datetime from IonDatetime (string)
+  time_started: string; // ISO (used for overlap checking + display)
 }
 
 interface AddOn {
@@ -77,6 +77,26 @@ interface CustomerSessionRow {
   time_started: string;
 }
 
+type SeatGroup = {
+  title: string;
+  seats: string[];
+};
+
+const SEAT_GROUPS: SeatGroup[] = [
+  {
+    title: "1stF",
+    seats: ["1", "2", "3", "4", "5", "6", "7a", "7b", "8a", "8b", "9", "10", "11"],
+  },
+  {
+    title: "TATAMI AREA",
+    seats: ["12a", "12b", "12c"],
+  },
+  {
+    title: "2ndF",
+    seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"],
+  },
+];
+
 const Book_Add: React.FC = () => {
   const [isBookingOpen, setIsBookingOpen] = useState<boolean>(false);
   const [isAddOnsOpen, setIsAddOnsOpen] = useState<boolean>(false);
@@ -104,43 +124,14 @@ const Book_Add: React.FC = () => {
   // ✅ raw input (so user can type freely without “bug”)
   const [timeAvailInput, setTimeAvailInput] = useState<string>("01:00");
 
-  const [timeStartedInput, setTimeStartedInput] = useState<string>("09:00 am");
-  const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
+  // ✅ Reservation time started input (required when reservation = ON)
+  const [timeStartedInput, setTimeStartedInput] = useState<string>("00:00 am");
 
-  // ✅ "Open Time" mode (no time out)
+  const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
   const [openTime, setOpenTime] = useState<boolean>(false);
 
-  const allSeats: string[] = [
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7a",
-    "7b",
-    "8a",
-    "8b",
-    "9",
-    "10",
-    "11",
-    "12a",
-    "12b",
-    "12c",
-    "13",
-    "14",
-    "15",
-    "16",
-    "17",
-    "18",
-    "19",
-    "20",
-    "21",
-    "22",
-    "23",
-    "24",
-    "25",
-  ];
+  // ✅ snapshot for display (not realtime ticking)
+  const [timeSnapshotIso, setTimeSnapshotIso] = useState<string>(new Date().toISOString());
 
   useEffect(() => {
     void fetchProfile();
@@ -151,41 +142,100 @@ const Book_Add: React.FC = () => {
     return () => window.clearInterval(interval);
   }, []);
 
+  // ✅ whenever booking modal opens, take a snapshot time (NOT realtime)
   useEffect(() => {
-    if (form.reservation && form.reservation_date) {
-      void fetchOccupiedSeats(form.reservation_date, form.time_started, getTimeEnded());
-    } else {
-      void fetchOccupiedSeats();
+    if (isBookingOpen) {
+      const snap = new Date().toISOString();
+      setTimeSnapshotIso(snap);
+      setForm((prev) => ({ ...prev, time_started: snap }));
+      setTimeStartedInput("00:00 am");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.reservation, form.reservation_date, form.time_started, timeAvail, openTime]);
+  }, [isBookingOpen]);
 
-  const parseTimeToISO = (timeInput: string, date: string): string => {
-    const match = timeInput.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
-    if (!match) return new Date(date).toISOString();
+  // ---------- TIME HELPERS ----------
 
-    const h = match[1];
-    const m = match[2];
-    const period = match[3];
-
-    let hour = parseInt(h, 10);
-    const minute = parseInt(m, 10);
-
-    if (period.toLowerCase() === "pm" && hour !== 12) hour += 12;
-    if (period.toLowerCase() === "am" && hour === 12) hour = 0;
-
-    const d = new Date(date);
-    d.setHours(hour, minute, 0, 0);
-    return d.toISOString();
+  const formatTime12 = (hour24: number, minute: number): string => {
+    const isPM = hour24 >= 12;
+    let h12 = hour24 % 12;
+    if (h12 === 0) h12 = 12;
+    const hh = h12.toString().padStart(2, "0");
+    const mm = minute.toString().padStart(2, "0");
+    return `${hh}:${mm} ${isPM ? "pm" : "am"}`;
   };
 
-  useEffect(() => {
-    if (form.reservation && form.reservation_date) {
-      const iso = parseTimeToISO(timeStartedInput, form.reservation_date);
-      setForm((prev) => ({ ...prev, time_started: iso }));
+  // ✅ shortcuts:
+  // "2pm" -> "02:00 pm"
+  // "2am" -> "02:00 am"
+  // "2:30pm" -> "02:30 pm"
+  // "14:00" -> "02:00 pm"
+  // "1400" -> "02:00 pm"
+  const normalizeTimeShortcut = (raw: string): string | null => {
+    const v = raw.trim().toLowerCase().replace(/\s+/g, "");
+
+    let m = v.match(/^(\d{1,2})(am|pm)$/);
+    if (m) {
+      const h = parseInt(m[1], 10);
+      if (h < 1 || h > 12) return null;
+      const hh = h.toString().padStart(2, "0");
+      return `${hh}:00 ${m[2]}`;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeStartedInput, form.reservation_date, form.reservation]);
+
+    m = v.match(/^(\d{1,2}):(\d{2})(am|pm)$/);
+    if (m) {
+      const h = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      if (h < 1 || h > 12) return null;
+      if (mm < 0 || mm > 59) return null;
+      const hh = h.toString().padStart(2, "0");
+      const mmm = mm.toString().padStart(2, "0");
+      return `${hh}:${mmm} ${m[3]}`;
+    }
+
+    m = v.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      const h = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      if (h < 0 || h > 23) return null;
+      if (mm < 0 || mm > 59) return null;
+      return formatTime12(h, mm);
+    }
+
+    m = v.match(/^(\d{3,4})$/);
+    if (m) {
+      const s = m[1].padStart(4, "0");
+      const h = parseInt(s.slice(0, 2), 10);
+      const mm = parseInt(s.slice(2), 10);
+      if (h < 0 || h > 23) return null;
+      if (mm < 0 || mm > 59) return null;
+      return formatTime12(h, mm);
+    }
+
+    return null;
+  };
+
+  const parseTimeToISO = (timeInput: string, dateIsoOrDate: string): string | null => {
+    const match = timeInput.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+    if (!match) return null;
+
+    let hour = parseInt(match[1], 10);
+    const minute = parseInt(match[2], 10);
+    const period = match[3].toLowerCase();
+
+    if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
+    if (hour < 1 || hour > 12) return null;
+    if (minute < 0 || minute > 59) return null;
+
+    if (period === "pm" && hour !== 12) hour += 12;
+    if (period === "am" && hour === 12) hour = 0;
+
+    const base = new Date(dateIsoOrDate);
+    if (!Number.isFinite(base.getTime())) return null;
+
+    base.setHours(hour, minute, 0, 0);
+    return base.toISOString();
+  };
+
+  // ---------- FETCHES ----------
 
   const fetchProfile = async (): Promise<void> => {
     const { data: auth } = await supabase.auth.getUser();
@@ -222,7 +272,11 @@ const Book_Add: React.FC = () => {
         .select("seat_number, time_ended, reservation, reservation_date, time_started");
 
       if (date && start && end) {
-        query = query.eq("reservation", "yes").eq("reservation_date", date).lt("time_started", end).gt("time_ended", start);
+        query = query
+          .eq("reservation", "yes")
+          .eq("reservation_date", date)
+          .lt("time_started", end)
+          .gt("time_ended", start);
       } else {
         const nowIso = new Date().toISOString();
         query = query.lte("time_started", nowIso).gt("time_ended", nowIso);
@@ -231,13 +285,17 @@ const Book_Add: React.FC = () => {
       const { data } = await query;
 
       if (data) {
-        const seats = (data as CustomerSessionRow[]).flatMap((s) => s.seat_number.split(",").map((seat) => seat.trim()));
+        const seats = (data as CustomerSessionRow[]).flatMap((s) =>
+          s.seat_number.split(",").map((seat) => seat.trim())
+        );
         setOccupiedSeats(seats);
       }
     } catch (err) {
       console.error(err);
     }
   };
+
+  // ---------- TIME AVAIL ----------
 
   const normalizeTimeAvail = (value: string): string | null => {
     const v = value.trim();
@@ -258,29 +316,23 @@ const Book_Add: React.FC = () => {
   };
 
   const getTotalHours = (): number => {
-    if (!timeAvail.includes(":")) return 0;
     const [h, m] = timeAvail.split(":").map(Number);
     if (Number.isNaN(h) || Number.isNaN(m) || h < 0 || m < 0 || m > 59) return 0;
     return Number((h + m / 60).toFixed(2));
   };
 
-  const getTimeEnded = (): string => {
-    // ✅ Open Time: no time out (return start so UI won't crash; we will display "OPEN")
-    if (openTime) return form.time_started;
-
-    const start = new Date(form.time_started);
+  const getTimeEndedFrom = (startIso: string): string => {
+    if (openTime) return startIso;
+    const start = new Date(startIso);
     const [h, m] = timeAvail.split(":").map(Number);
     start.setHours(start.getHours() + h);
     start.setMinutes(start.getMinutes() + m);
     return start.toISOString();
   };
 
-  const totalHours = getTotalHours();
-  const timeAmount = openTime ? 0 : totalHours * HOURLY_RATE;
-  const addOnsAmount = selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0);
-  const totalAmount = timeAmount + addOnsAmount;
+  // ---------- ADD-ONS ----------
 
-  const categories = [...new Set(addOns.map((a) => a.category))];
+  const categories = useMemo(() => [...new Set(addOns.map((a) => a.category))], [addOns]);
 
   const handleAddOnQuantityChange = (id: string, quantity: number): void => {
     setSelectedAddOns((prev) => {
@@ -329,27 +381,70 @@ const Book_Add: React.FC = () => {
     }
   };
 
-  // ✅ button: set time_started = present time
-  const setTimeInNow = (): void => {
-    const iso = new Date().toISOString();
-    setForm((prev) => ({ ...prev, time_started: iso }));
-  };
+  const addOnsByCategory = (category: string) => selectedAddOns.filter((s) => s.category === category);
+
+  // ---------- OCCUPIED CHECK (reservation overlap) ----------
+  useEffect(() => {
+    if (form.reservation && form.reservation_date) {
+      const normalized = normalizeTimeShortcut(timeStartedInput) ?? timeStartedInput;
+      const parsed = parseTimeToISO(normalized, form.reservation_date);
+      const startIso = parsed ?? form.time_started;
+
+      const endIso = openTime ? startIso : getTimeEndedFrom(startIso);
+      void fetchOccupiedSeats(form.reservation_date, startIso, endIso);
+    } else {
+      void fetchOccupiedSeats();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.reservation, form.reservation_date, openTime, timeStartedInput, timeAvail]);
+
+  // ---------- SUBMIT ----------
 
   const handleSubmit = async (): Promise<void> => {
+    const trimmedName = form.full_name.trim();
+    if (!trimmedName) {
+      alert("Full Name is required.");
+      return;
+    }
+
     if (!profile) {
       alert("You must be logged in to save records.");
       return;
     }
-    if (!openTime && totalHours <= 0) {
-      alert("Invalid time avail - Please enter a valid time (e.g., 01:00)");
-      return;
-    }
+
     if (form.seat_number.length === 0) {
       alert("Please select at least one seat.");
       return;
     }
+
     if (form.reservation && !form.reservation_date) {
       alert("Please select a reservation date.");
+      return;
+    }
+
+    // ✅ Reservation always requires Time Started (openTime or not)
+    let startIsoToStore = new Date().toISOString();
+
+    if (form.reservation) {
+      const normalized = normalizeTimeShortcut(timeStartedInput);
+      if (!normalized) {
+        alert('Please enter a valid Time Started (e.g., "2pm", "2:30pm", "14:00", "1400").');
+        return;
+      }
+      const parsed = parseTimeToISO(normalized, form.reservation_date as string);
+      if (!parsed) {
+        alert("Invalid Time Started.");
+        return;
+      }
+      startIsoToStore = parsed;
+    } else {
+      // non-reservation always uses current time at save
+      startIsoToStore = new Date().toISOString();
+    }
+
+    // ✅ if not reservation AND not open time => require time avail
+    if (!form.reservation && !openTime && getTotalHours() <= 0) {
+      alert("Invalid time avail - Please enter a valid time (e.g., 01:00)");
       return;
     }
 
@@ -359,6 +454,7 @@ const Book_Add: React.FC = () => {
       return;
     }
 
+    // stock check
     for (const selected of selectedAddOns) {
       const addOn = addOns.find((a) => a.id === selected.id);
       if (!addOn || addOn.stocks < selected.quantity) {
@@ -368,25 +464,33 @@ const Book_Add: React.FC = () => {
     }
 
     const dateToStore =
-      form.reservation && form.reservation_date ? form.reservation_date.split("T")[0] : new Date().toISOString().split("T")[0];
+      form.reservation && form.reservation_date
+        ? form.reservation_date.split("T")[0]
+        : new Date().toISOString().split("T")[0];
 
-    // ✅ Open Time -> store a far future time_ended so seats stay occupied
-    const timeEndedToStore = openTime ? new Date("2999-12-31T23:59:59.000Z").toISOString() : getTimeEnded();
+    const timeEndedToStore = openTime
+      ? new Date("2999-12-31T23:59:59.000Z").toISOString()
+      : getTimeEndedFrom(startIsoToStore);
+
+    const totalHours = openTime ? 0 : getTotalHours();
+    const timeAmount = openTime ? 0 : totalHours * HOURLY_RATE;
+    const addOnsAmount = selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0);
+    const totalAmount = timeAmount + addOnsAmount;
 
     const { data: sessionData, error: sessionError } = await supabase
       .from("customer_sessions")
       .insert({
         staff_id: auth.user.id,
         date: dateToStore,
-        full_name: form.full_name,
+        full_name: trimmedName,
         customer_type: form.customer_type,
         customer_field: form.customer_field,
         has_id: form.has_id,
         id_number: form.id_number,
         hour_avail: openTime ? "OPEN" : timeAvail,
-        time_started: form.time_started,
+        time_started: startIsoToStore,
         time_ended: timeEndedToStore,
-        total_hours: openTime ? 0 : totalHours,
+        total_hours: totalHours,
         total_amount: totalAmount,
         seat_number: form.seat_number.join(", "),
         reservation: form.reservation ? "yes" : "no",
@@ -432,7 +536,7 @@ const Book_Add: React.FC = () => {
 
     setTimeAvail("01:00");
     setTimeAvailInput("01:00");
-    setTimeStartedInput("09:00 am");
+    setTimeStartedInput("00:00 am");
     setSelectedAddOns([]);
     setSelectedCategories([]);
     setShowAddOns(false);
@@ -445,6 +549,8 @@ const Book_Add: React.FC = () => {
     setIsAddOnsOpen(false);
   };
 
+  // ---------- DISPLAY (NOT realtime ticking) ----------
+
   const formatPH = (d: Date) =>
     d.toLocaleString("en-PH", {
       year: "numeric",
@@ -455,17 +561,36 @@ const Book_Add: React.FC = () => {
       second: "2-digit",
     });
 
-  const timeInDisplay = formatPH(new Date(form.time_started));
-  const timeOutDisplay = openTime ? "OPEN TIME" : formatPH(new Date(getTimeEnded()));
+  // summary start:
+  // - reservation => based on typed time + reservation date
+  // - non-reservation => snapshot (not ticking)
+  const summaryStartIso = useMemo(() => {
+    if (form.reservation && form.reservation_date) {
+      const normalized = normalizeTimeShortcut(timeStartedInput) ?? "00:00 am";
+      const parsed = parseTimeToISO(normalized, form.reservation_date);
+      return parsed ?? timeSnapshotIso;
+    }
+    return timeSnapshotIso;
+  }, [form.reservation, form.reservation_date, timeStartedInput, timeSnapshotIso]);
 
-  const addOnsByCategory = (category: string) => selectedAddOns.filter((s) => s.category === category);
+  const summaryEndIso = useMemo(() => {
+    if (openTime) return summaryStartIso;
+    return getTimeEndedFrom(summaryStartIso);
+  }, [openTime, summaryStartIso, timeAvail]);
+
+  const totalHoursPreview = getTotalHours();
+  const timeAmountPreview = openTime ? 0 : totalHoursPreview * HOURLY_RATE;
+  const addOnsAmountPreview = selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0);
+  const totalAmountPreview = timeAmountPreview + addOnsAmountPreview;
+
+  const timeInDisplay = formatPH(new Date(summaryStartIso));
+  const timeOutDisplay = openTime ? "OPEN TIME" : formatPH(new Date(summaryEndIso));
 
   return (
     <IonPage className="bookadd-page">
       <IonHeader />
 
       <IonContent fullscreen className="bookadd-content" scrollY={false}>
-        {/* Background leaves */}
         <img src={leaves} className="leaf leaf-top-left" alt="leaf" />
         <img src={leaves} className="leaf leaf-top-right" alt="leaf" />
         <img src={leaves} className="leaf leaf-bottom-left" alt="leaf" />
@@ -480,7 +605,13 @@ const Book_Add: React.FC = () => {
                 </IonButton>
               </IonCol>
               <IonCol size="6">
-                <IonButton expand="block" onClick={() => setIsBookingOpen(true)}>
+                <IonButton
+                  expand="block"
+                  onClick={() => {
+                    setTimeSnapshotIso(new Date().toISOString());
+                    setIsBookingOpen(true);
+                  }}
+                >
                   Booking
                 </IonButton>
               </IonCol>
@@ -503,20 +634,19 @@ const Book_Add: React.FC = () => {
 
           <IonContent className="ion-padding">
             <div className="bookadd-card">
-              {/* ✅ OPEN TIME toggle + set time-in now */}
               <IonItem className="form-item">
                 <IonLabel>Open Time</IonLabel>
                 <IonToggle checked={openTime} onIonChange={(e) => setOpenTime(e.detail.checked)} />
                 <IonLabel slot="end">{openTime ? "Yes" : "No"}</IonLabel>
               </IonItem>
 
-              <IonButton expand="block" fill="outline" onClick={setTimeInNow}>
-                Set Time In (Now)
-              </IonButton>
-
               <IonItem className="form-item">
-                <IonLabel position="stacked">Full Name</IonLabel>
-                <IonInput value={form.full_name} onIonChange={(e) => setForm({ ...form, full_name: e.detail.value ?? "" })} />
+                <IonLabel position="stacked">Full Name *</IonLabel>
+                <IonInput
+                  value={form.full_name}
+                  onIonChange={(e) => setForm({ ...form, full_name: e.detail.value ?? "" })}
+                  placeholder="Enter full name"
+                />
               </IonItem>
 
               <IonItem className="form-item">
@@ -582,18 +712,24 @@ const Book_Add: React.FC = () => {
                     />
                   </IonItem>
 
+                  {/* ✅ Reservation always has Time Started (openTime ON or OFF) */}
                   <IonItem className="form-item">
-                    <IonLabel position="stacked">Time Started</IonLabel>
+                    <IonLabel position="stacked">Time Started (Reservation)</IonLabel>
                     <IonInput
                       value={timeStartedInput}
-                      placeholder="e.g., 09:00 am"
+                      placeholder='e.g., "2pm" / "2:30pm" / "14:00"'
                       onIonChange={(e) => setTimeStartedInput(e.detail.value ?? "")}
+                      onIonBlur={() => {
+                        const normalized = normalizeTimeShortcut(timeStartedInput);
+                        if (normalized) setTimeStartedInput(normalized);
+                        else setTimeStartedInput("00:00 am");
+                      }}
                     />
                   </IonItem>
                 </>
               )}
 
-              {/* ✅ Time Avail: editable without bug */}
+              {/* ✅ Time Avail disabled if Open Time is ON */}
               <IonItem className="form-item">
                 <IonLabel position="stacked">Time Avail (HH:MM)</IonLabel>
                 <IonInput
@@ -609,59 +745,71 @@ const Book_Add: React.FC = () => {
                       setTimeAvail(normalized);
                       setTimeAvailInput(normalized);
                     } else {
-                      setTimeAvailInput(timeAvail); // revert to last valid
+                      setTimeAvailInput(timeAvail);
                     }
                   }}
                 />
               </IonItem>
 
+              {/* ✅ Seats grouped: 1stF / TATAMI AREA / 2ndF */}
               <div className="form-item seat-wrap">
-                {allSeats.map((seat) => {
-                  const isOccupied = occupiedSeats.includes(seat);
-                  const isSelected = form.seat_number.includes(seat);
-                  if (isOccupied) return null;
+                {SEAT_GROUPS.map((group) => (
+                  <div key={group.title} style={{ width: "100%" }}>
+                    {/* Using existing styles; only adds a simple label */}
+                    <p className="summary-text" style={{ margin: "10px 0 6px", fontWeight: 700 }}>
+                      {group.title}
+                    </p>
 
-                  return (
-                    <IonButton
-                      key={seat}
-                      color={isSelected ? "success" : "medium"}
-                      size="small"
-                      onClick={() =>
-                        setForm((prev) => ({
-                          ...prev,
-                          seat_number: prev.seat_number.includes(seat)
-                            ? prev.seat_number.filter((s) => s !== seat)
-                            : [...prev.seat_number, seat],
-                        }))
-                      }
-                    >
-                      {seat}
-                    </IonButton>
-                  );
-                })}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {group.seats.map((seat) => {
+                        const isOccupied = occupiedSeats.includes(seat);
+                        const isSelected = form.seat_number.includes(seat);
+                        if (isOccupied) return null;
+
+                        return (
+                          <IonButton
+                            key={seat}
+                            color={isSelected ? "success" : "medium"}
+                            size="small"
+                            onClick={() =>
+                              setForm((prev) => ({
+                                ...prev,
+                                seat_number: prev.seat_number.includes(seat)
+                                  ? prev.seat_number.filter((s) => s !== seat)
+                                  : [...prev.seat_number, seat],
+                              }))
+                            }
+                          >
+                            {seat}
+                          </IonButton>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              {/* ✅ bottom summary: no Present Time */}
-             <div className="summary-section">
+              {/* summary (not realtime ticking) */}
+              <div className="summary-section">
                 <p className="summary-text">
-                    <strong>Time In:</strong> {timeInDisplay}
+                  <strong>Time Started:</strong> {timeInDisplay}
                 </p>
 
                 <p className="summary-text">
-                    <strong>Time Out:</strong> {timeOutDisplay}
+                  <strong>Time Out:</strong> {timeOutDisplay}
                 </p>
 
                 {!openTime && (
-                    <>
-                    <p className="summary-text">Total Hours: {totalHours}</p>
-                    <p className="summary-text">Time Amount: ₱{timeAmount.toFixed(2)}</p>
-                    </>
+                  <>
+                    <p className="summary-text">Total Hours: {totalHoursPreview}</p>
+                    <p className="summary-text">Time Amount: ₱{timeAmountPreview.toFixed(2)}</p>
+                  </>
                 )}
 
                 <p className="summary-text">
-                    <strong>Overall Total: ₱{totalAmount.toFixed(2)}</strong>
+                  <strong>Overall Total: ₱{totalAmountPreview.toFixed(2)}</strong>
                 </p>
-                </div>
+              </div>
 
               <IonButton expand="block" onClick={() => void handleSubmit()}>
                 Save Record
@@ -670,7 +818,7 @@ const Book_Add: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* ADD-ONS MODAL */}
+        {/* ADD-ONS MODAL (unchanged) */}
         <IonModal isOpen={isAddOnsOpen} onDidDismiss={() => setIsAddOnsOpen(false)}>
           <IonHeader>
             <IonToolbar>
