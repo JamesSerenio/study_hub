@@ -70,10 +70,7 @@ const Customer_Lists: React.FC = () => {
   };
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
-    // you store hour_avail = "OPEN" for open time
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
-
-    // fallback: if time_ended is far future (2999) treat as open
     const end = new Date(s.time_ended);
     return end.getFullYear() >= 2999;
   };
@@ -91,44 +88,51 @@ const Customer_Lists: React.FC = () => {
     return Number(diffHours.toFixed(2));
   };
 
+  // ✅ STOP OPEN TIME: set time_out now, compute totals, and make Stop button disappear
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
       setStoppingId(session.id);
 
       const nowIso = new Date().toISOString();
       const totalHours = computeHours(session.time_started, nowIso);
+
       const addOnsTotal = getAddOnsTotal(session);
       const timeAmount = totalHours * HOURLY_RATE;
       const totalAmount = Number((timeAmount + addOnsTotal).toFixed(2));
 
-      const { error } = await supabase
+      // IMPORTANT: hour_avail must NOT remain "OPEN" after stop
+      const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
           time_ended: nowIso,
           total_hours: totalHours,
           total_amount: totalAmount,
-          // Optional: if you want hour_avail to become the computed duration instead of "OPEN"
-          // hour_avail: `${Math.floor(totalHours)}:${Math.round((totalHours % 1) * 60)
-          //   .toString()
-          //   .padStart(2, "0")}`,
+          hour_avail: "CLOSED",
         })
-        .eq("id", session.id);
+        .eq("id", session.id)
+        .select(
+          `
+          *,
+          customer_session_add_ons(
+            add_ons(name),
+            quantity,
+            price,
+            total
+          )
+        `
+        )
+        .single();
 
-      if (error) {
-        alert(`Stop Time error: ${error.message}`);
+      if (error || !updated) {
+        alert(`Stop Time error: ${error?.message ?? "Unknown error"}`);
         return;
       }
 
-      // refresh list
-      await fetchCustomerSessions();
+      // ✅ Update table instantly (Time Out shows time + Stop button disappears)
+      setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
 
-      // refresh selectedSession if open
-      if (selectedSession?.id === session.id) {
-        const updated = sessions.find((s) => s.id === session.id);
-        // if not found in old state, just close and user can reopen
-        if (updated) setSelectedSession(updated);
-        else setSelectedSession(null);
-      }
+      // ✅ Update receipt instantly if open
+      setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
       console.error(e);
       alert("Stop Time failed.");
@@ -206,6 +210,7 @@ const Customer_Lists: React.FC = () => {
                   <td>{renderStatus(session)}</td>
 
                   <td style={{ display: "flex", gap: 8 }}>
+                    {/* ✅ Only show Stop Time if OPEN */}
                     {open && (
                       <button
                         className="receipt-btn"
@@ -231,7 +236,6 @@ const Customer_Lists: React.FC = () => {
       {selectedSession && (
         <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
           <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            {/* LOGO */}
             <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
 
             <h3 className="receipt-title">ME TYME LOUNGE</h3>
@@ -281,7 +285,7 @@ const Customer_Lists: React.FC = () => {
               <span>{selectedSession.total_hours}</span>
             </div>
 
-            {/* ✅ Stop button inside receipt when Open Time */}
+            {/* ✅ Stop button inside receipt only if OPEN */}
             {isOpenTimeSession(selectedSession) && (
               <div style={{ marginTop: 12 }}>
                 <button
