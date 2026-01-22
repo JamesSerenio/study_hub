@@ -2,6 +2,15 @@ import React, { useEffect, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
+const HOURLY_RATE = 20;
+
+interface CustomerSessionAddOn {
+  add_ons: { name: string };
+  quantity: number;
+  price: number;
+  total: number;
+}
+
 interface CustomerSession {
   id: string;
   date: string;
@@ -17,30 +26,27 @@ interface CustomerSession {
   total_amount: number;
   reservation: string;
   reservation_date: string | null;
-  seat_number: string;  // Added seat_number
-  customer_session_add_ons: {  // Changed from add_ons to customer_session_add_ons
-    add_ons: { name: string };
-    quantity: number;
-    price: number;
-    total: number;
-  }[];
+  seat_number: string;
+  customer_session_add_ons: CustomerSessionAddOn[];
 }
 
 const Customer_Lists: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedSession, setSelectedSession] =
-    useState<CustomerSession | null>(null);
+  const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchCustomerSessions();
+    void fetchCustomerSessions();
   }, []);
 
   const fetchCustomerSessions = async () => {
     setLoading(true);
+
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select(`
+      .select(
+        `
         *,
         customer_session_add_ons(
           add_ons(name),
@@ -48,7 +54,8 @@ const Customer_Lists: React.FC = () => {
           price,
           total
         )
-      `)
+      `
+      )
       .neq("reservation", "yes")
       .order("date", { ascending: false });
 
@@ -56,16 +63,92 @@ const Customer_Lists: React.FC = () => {
       console.error(error);
       alert("Error loading customer lists");
     } else {
-      setSessions(data || []);
+      setSessions((data as CustomerSession[]) || []);
     }
+
     setLoading(false);
+  };
+
+  const isOpenTimeSession = (s: CustomerSession): boolean => {
+    // you store hour_avail = "OPEN" for open time
+    if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
+
+    // fallback: if time_ended is far future (2999) treat as open
+    const end = new Date(s.time_ended);
+    return end.getFullYear() >= 2999;
+  };
+
+  const getAddOnsTotal = (s: CustomerSession): number => {
+    return (s.customer_session_add_ons || []).reduce((sum, a) => sum + (Number(a.total) || 0), 0);
+  };
+
+  const computeHours = (startIso: string, endIso: string): number => {
+    const start = new Date(startIso).getTime();
+    const end = new Date(endIso).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+
+    const diffHours = (end - start) / (1000 * 60 * 60);
+    return Number(diffHours.toFixed(2));
+  };
+
+  const stopOpenTime = async (session: CustomerSession): Promise<void> => {
+    try {
+      setStoppingId(session.id);
+
+      const nowIso = new Date().toISOString();
+      const totalHours = computeHours(session.time_started, nowIso);
+      const addOnsTotal = getAddOnsTotal(session);
+      const timeAmount = totalHours * HOURLY_RATE;
+      const totalAmount = Number((timeAmount + addOnsTotal).toFixed(2));
+
+      const { error } = await supabase
+        .from("customer_sessions")
+        .update({
+          time_ended: nowIso,
+          total_hours: totalHours,
+          total_amount: totalAmount,
+          // Optional: if you want hour_avail to become the computed duration instead of "OPEN"
+          // hour_avail: `${Math.floor(totalHours)}:${Math.round((totalHours % 1) * 60)
+          //   .toString()
+          //   .padStart(2, "0")}`,
+        })
+        .eq("id", session.id);
+
+      if (error) {
+        alert(`Stop Time error: ${error.message}`);
+        return;
+      }
+
+      // refresh list
+      await fetchCustomerSessions();
+
+      // refresh selectedSession if open
+      if (selectedSession?.id === session.id) {
+        const updated = sessions.find((s) => s.id === session.id);
+        // if not found in old state, just close and user can reopen
+        if (updated) setSelectedSession(updated);
+        else setSelectedSession(null);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Stop Time failed.");
+    } finally {
+      setStoppingId(null);
+    }
+  };
+
+  const renderTimeOut = (s: CustomerSession) => {
+    return isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleTimeString();
+  };
+
+  const renderStatus = (s: CustomerSession) => {
+    if (isOpenTimeSession(s)) return "Ongoing";
+    return new Date() > new Date(s.time_ended) ? "Finished" : "Ongoing";
   };
 
   return (
     <div className="customer-lists-container">
-      <h2 className="customer-lists-title">
-        Customer Lists - Non Reservation
-      </h2>
+      <h2 className="customer-lists-title">Customer Lists - Non Reservation</h2>
 
       {loading ? (
         <p>Loading...</p>
@@ -88,56 +171,66 @@ const Customer_Lists: React.FC = () => {
               <th>Total Amount</th>
               <th>Seat</th>
               <th>Add-Ons</th>
-              <th>Status</th>  {/* New column for status */}
+              <th>Status</th>
               <th>Action</th>
             </tr>
           </thead>
 
           <tbody>
-            {sessions.map((session) => (
-              <tr key={session.id}>
-                <td>{session.date}</td>
-                <td>{session.full_name}</td>
-                <td>{session.customer_type}</td>
-                <td>{session.customer_field}</td>
-                <td>{session.has_id ? "Yes" : "No"}</td>
-                <td>{session.id_number || "N/A"}</td>
-                <td>{session.hour_avail}</td>
-                <td>{new Date(session.time_started).toLocaleTimeString()}</td>
-                <td>{new Date(session.time_ended).toLocaleTimeString()}</td>
-                <td>{session.total_hours}</td>
-                <td>₱{session.total_amount.toFixed(2)}</td>
-                <td>{session.seat_number}</td>
-                <td>
-                  {session.customer_session_add_ons && session.customer_session_add_ons.length > 0
-                    ? session.customer_session_add_ons.map((addOn) => `${addOn.add_ons.name} x${addOn.quantity}`).join(', ')
-                    : 'None'}
-                </td>
-                <td>{new Date() > new Date(session.time_ended) ? "Finished" : "Ongoing"}</td>  {/* New status cell */}
-                <td>
-                  <button
-                    className="receipt-btn"
-                    onClick={() => setSelectedSession(session)}
-                  >
-                    View Receipt
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {sessions.map((session) => {
+              const open = isOpenTimeSession(session);
+
+              return (
+                <tr key={session.id}>
+                  <td>{session.date}</td>
+                  <td>{session.full_name}</td>
+                  <td>{session.customer_type}</td>
+                  <td>{session.customer_field}</td>
+                  <td>{session.has_id ? "Yes" : "No"}</td>
+                  <td>{session.id_number || "N/A"}</td>
+                  <td>{session.hour_avail}</td>
+                  <td>{new Date(session.time_started).toLocaleTimeString()}</td>
+                  <td>{renderTimeOut(session)}</td>
+                  <td>{session.total_hours}</td>
+                  <td>₱{Number(session.total_amount || 0).toFixed(2)}</td>
+                  <td>{session.seat_number}</td>
+
+                  <td>
+                    {session.customer_session_add_ons && session.customer_session_add_ons.length > 0
+                      ? session.customer_session_add_ons
+                          .map((addOn) => `${addOn.add_ons.name} x${addOn.quantity}`)
+                          .join(", ")
+                      : "None"}
+                  </td>
+
+                  <td>{renderStatus(session)}</td>
+
+                  <td style={{ display: "flex", gap: 8 }}>
+                    {open && (
+                      <button
+                        className="receipt-btn"
+                        disabled={stoppingId === session.id}
+                        onClick={() => void stopOpenTime(session)}
+                      >
+                        {stoppingId === session.id ? "Stopping..." : "Stop Time"}
+                      </button>
+                    )}
+
+                    <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
+                      View Receipt
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
 
       {/* RECEIPT MODAL */}
       {selectedSession && (
-        <div
-          className="receipt-overlay"
-          onClick={() => setSelectedSession(null)}
-        >
-          <div
-            className="receipt-container"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
+          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
             {/* LOGO */}
             <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
 
@@ -175,18 +268,12 @@ const Customer_Lists: React.FC = () => {
 
             <div className="receipt-row">
               <span>Time In</span>
-              <span>
-                {new Date(
-                  selectedSession.time_started
-                ).toLocaleTimeString()}
-              </span>
+              <span>{new Date(selectedSession.time_started).toLocaleTimeString()}</span>
             </div>
 
             <div className="receipt-row">
               <span>Time Out</span>
-              <span>
-                {new Date(selectedSession.time_ended).toLocaleTimeString()}
-              </span>
+              <span>{renderTimeOut(selectedSession)}</span>
             </div>
 
             <div className="receipt-row">
@@ -194,14 +281,30 @@ const Customer_Lists: React.FC = () => {
               <span>{selectedSession.total_hours}</span>
             </div>
 
+            {/* ✅ Stop button inside receipt when Open Time */}
+            {isOpenTimeSession(selectedSession) && (
+              <div style={{ marginTop: 12 }}>
+                <button
+                  className="receipt-btn"
+                  disabled={stoppingId === selectedSession.id}
+                  onClick={() => void stopOpenTime(selectedSession)}
+                  style={{ width: "100%" }}
+                >
+                  {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
+                </button>
+              </div>
+            )}
+
             {selectedSession.customer_session_add_ons && selectedSession.customer_session_add_ons.length > 0 && (
               <>
                 <hr />
                 <h4>Add-Ons</h4>
                 {selectedSession.customer_session_add_ons.map((addOn, index) => (
                   <div key={index} className="receipt-row">
-                    <span>{addOn.add_ons.name} x{addOn.quantity}</span>
-                    <span>₱{addOn.total.toFixed(2)}</span>
+                    <span>
+                      {addOn.add_ons.name} x{addOn.quantity}
+                    </span>
+                    <span>₱{Number(addOn.total || 0).toFixed(2)}</span>
                   </div>
                 ))}
               </>
@@ -211,7 +314,7 @@ const Customer_Lists: React.FC = () => {
 
             <div className="receipt-total">
               <span>TOTAL</span>
-              <span>₱{selectedSession.total_amount.toFixed(2)}</span>
+              <span>₱{Number(selectedSession.total_amount || 0).toFixed(2)}</span>
             </div>
 
             <p className="receipt-footer">
@@ -219,10 +322,7 @@ const Customer_Lists: React.FC = () => {
               <strong>Me Tyme Lounge</strong>
             </p>
 
-            <button
-              className="close-btn"
-              onClick={() => setSelectedSession(null)}
-            >
+            <button className="close-btn" onClick={() => setSelectedSession(null)}>
               Close
             </button>
           </div>

@@ -352,96 +352,6 @@ ion-item {
   margin: 0;  /* Remove original margin since we're using position */
 }
 
-/* =========================
-   Staff_Dashboard
-========================= */
-
-.topbar-title {
-  font-weight: 600;
-  font-size: 16px;
-}
-
-.topbar-title {
-  font-weight: 600;
-  font-size: 16px;
-}
-
-/* Global styles for Staff Dashboard */
-.staff-dashboard {
-  max-width: 500px; /* Reduced from 600px to 500px for a smaller form */
-  margin: 0 auto;
-  padding: 15px; /* Reduced padding from 20px to 15px */
-  font-family: 'Arial', sans-serif;
-  background-color: #f9f9f9;
-  border-radius: 10px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-}
-
-.form-title {
-  text-align: center;
-  color: #333;
-  margin-bottom: 15px; /* Reduced margin from 20px to 15px */
-  font-size: 22px; /* Slightly reduced font size from 24px to 22px */
-  font-weight: bold;
-}
-
-.form-container {
-  background-color: #fff;
-  padding: 15px; /* Reduced padding from 20px to 15px */
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.form-item {
-  margin-bottom: 12px; /* Reduced margin from 15px to 12px */
-  border: 1px solid #ddd;
-  border-radius: 5px;
-  padding: 8px; /* Reduced padding from 10px to 8px */
-  background-color: #fafafa;
-}
-
-.form-item ion-label {
-  font-weight: bold;
-  color: #555;
-  margin-bottom: 5px;
-  display: block;
-}
-
-.form-item ion-input,
-.form-item ion-select {
-  width: 100%;
-  border: none;
-  background: transparent;
-  font-size: 16px;
-}
-
-.summary-section {
-  margin-top: 15px; /* Reduced margin from 20px to 15px */
-  padding: 12px; /* Reduced padding from 15px to 12px */
-  background-color: #e8f4fd;
-  border-radius: 5px;
-  border: 1px solid #b3d9ff;
-}
-
-.summary-text {
-  margin: 5px 0;
-  font-size: 16px;
-  color: #333;
-  font-weight: 500;
-}
-
-.submit-button {
-  margin-top: 15px; /* Reduced margin from 20px to 15px */
-  background-color: #4CAF50;
-  color: white;
-  font-weight: bold;
-  border-radius: 5px;
-}
-
-.submit-button:hover {
-  background-color: #45a049;
-}
-
  /* customer-lists*/
 
 .customer-lists-container {
@@ -837,4 +747,118 @@ ion-item {
 
 .bookadd-content {
   scrollbar-width: none; /* Firefox */
+}
+
+.topbar-title {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.topbar-title {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+
+.form-title {
+  text-align: center;
+  color: #333;
+  margin-bottom: 15px; /* Reduced margin from 20px to 15px */
+  font-size: 22px; /* Slightly reduced font size from 24px to 22px */
+  font-weight: bold;
+}
+
+.form-container {
+  background-color: #fff;
+  padding: 15px; /* Reduced padding from 20px to 15px */
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.form-item {
+  margin-bottom: 12px; /* Reduced margin from 15px to 12px */
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  padding: 8px; /* Reduced padding from 10px to 8px */
+  background-color: #fafafa;
+}
+
+.form-item ion-label {
+  font-weight: bold;
+  color: #555;
+  margin-bottom: 5px;
+  display: block;
+}
+
+.form-item ion-input,
+.form-item ion-select {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+}
+
+.summary-section {
+  margin-top: 15px; /* Reduced margin from 20px to 15px */
+  padding: 12px; /* Reduced padding from 15px to 12px */
+  background-color: #e8f4fd;
+  border-radius: 5px;
+  border: 1px solid #b3d9ff;
+}
+
+.summary-text {
+  margin: 5px 0;
+  font-size: 16px;
+  color: #333;
+  font-weight: 500;
+}
+
+.submit-button {
+  margin-top: 15px; /* Reduced margin from 20px to 15px */
+  background-color: #4CAF50;
+  color: white;
+  font-weight: bold;
+  border-radius: 5px;
+}
+
+.submit-button:hover {
+  background-color: #45a049;
+}
+
+/* ===== Staff page content background (optional) ===== */
+/* ===== Staff page content background ===== */
+.staff-content {
+  --background: transparent;
+}
+
+/* Center wrapper */
+.staff-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+}
+
+/* Card container */
+.staff-card {
+  width: 100%;
+  max-width: 900px;
+  padding: 16px;
+  border-radius: 16px;
+}
+
+/* Image wrapper */
+.seat-image-wrap {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+/* ✅ IMAGE SIZE FIXED */
+.seat-image {
+  width: 100%;
+  max-width: 540px;   /* 🔥 sakto na */
+  height: auto;
+  border-radius: 14px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
 }
