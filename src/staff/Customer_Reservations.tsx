@@ -118,17 +118,33 @@ const Customer_Reservations: React.FC = () => {
     return start;
   };
 
-  // DISPLAY: OPEN => running minutes, CLOSED => saved total_time
+  // DISPLAY: OPEN => running minutes, CLOSED => saved total_time (minutes)
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
+    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
     return toNum(s.total_time);
   };
 
   // OPEN => live time-cost; CLOSED => saved total_amount
   const getLiveTotalCost = (s: CustomerSession): number => {
-    const endIso = new Date().toISOString();
+    const endIso = new Date(nowTick).toISOString();
     const timeCost = computeCostWithFreeMinutes(s.time_started, endIso);
     return Number(timeCost.toFixed(2));
+  };
+
+  // ✅ total cost (open uses live)
+  const getSessionTotalCost = (s: CustomerSession): number => {
+    return isOpenTimeSession(s) ? getLiveTotalCost(s) : toNum(s.total_amount);
+  };
+
+  // ✅ balance after downpayment (this is what you want as "Total Amount")
+  const getSessionBalance = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
+  };
+
+  const getSessionChange = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
   };
 
   // ✅ status uses reservation_date + time_started time
@@ -172,7 +188,7 @@ const Customer_Reservations: React.FC = () => {
         .update({
           time_ended: nowIso,
           total_time: totalMinutes, // minutes
-          total_amount: totalCost, // time only
+          total_amount: totalCost, // system cost
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
@@ -198,7 +214,7 @@ const Customer_Reservations: React.FC = () => {
     isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleString("en-PH");
 
   const getUsedMinutesForReceipt = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
+    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
     return diffMinutes(s.time_started, s.time_ended);
   };
 
@@ -258,7 +274,8 @@ const Customer_Reservations: React.FC = () => {
 
                   <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
 
-                  <td>₱{open ? getLiveTotalCost(session).toFixed(2) : toNum(session.total_amount).toFixed(2)}</td>
+                  {/* ✅ Total Amount = BALANCE (same as TOTAL BALANCE) */}
+                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
 
                   <td>{session.seat_number}</td>
                   <td>{getStatus(session)}</td>
@@ -353,12 +370,8 @@ const Customer_Reservations: React.FC = () => {
             <hr />
 
             {(() => {
-              const open = isOpenTimeSession(selectedSession);
-              const totalCost = open ? getLiveTotalCost(selectedSession) : toNum(selectedSession.total_amount);
-
-              const down = DOWN_PAYMENT;
-              const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
-              const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
+              const change = getSessionChange(selectedSession);
+              const balance = getSessionBalance(selectedSession);
 
               const isChange = change > 0;
               const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
@@ -366,14 +379,15 @@ const Customer_Reservations: React.FC = () => {
 
               return (
                 <>
+                  {/* ✅ Total Amount must match TOTAL BALANCE */}
                   <div className="receipt-row">
-                    <span>Total Cost</span>
-                    <span>₱{totalCost.toFixed(2)}</span>
+                    <span>Total Amount</span>
+                    <span>₱{balance.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Down Payment</span>
-                    <span>₱{down.toFixed(2)}</span>
+                    <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
                   {change > 0 && (
