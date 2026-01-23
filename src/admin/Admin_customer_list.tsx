@@ -19,10 +19,8 @@ interface CustomerSession {
   time_started: string;
   time_ended: string;
 
-  // ✅ store minutes in DB (recommended). If your DB still uses total_hours, keep it.
-  // We'll use total_time for display if present; fallback to total_hours.
+  // recommended: minutes stored in DB
   total_time?: number;
-
 
   total_amount: number;
   reservation: string;
@@ -38,7 +36,7 @@ const Admin_customer_list: React.FC = () => {
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // ✅ for auto refresh of OPEN time display
+  // auto refresh OPEN time display
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -90,16 +88,12 @@ const Admin_customer_list: React.FC = () => {
   };
 
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
-    // if open, show running minutes
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
 
-    // if DB has total_time (minutes) use it
+    // if DB has total_time (minutes)
     if (typeof s.total_time === "number") return Number(s.total_time || 0);
 
-    // fallback if old DB uses total_hours (hours) -> convert to minutes for display
-    if (typeof s.total_time === "number") return Math.round((Number(s.total_time || 0) || 0) * 60);
-
-    // final fallback
+    // fallback: compute from timestamps
     return diffMinutes(s.time_started, s.time_ended);
   };
 
@@ -113,6 +107,19 @@ const Admin_customer_list: React.FC = () => {
     return `${hrs} hr ${mins} min`;
   };
 
+  // ✅ total cost (OPEN uses live)
+  const getSessionTotalCost = (s: CustomerSession): number => {
+    if (isOpenTimeSession(s)) return computeCostWithFreeMinutes(s.time_started, new Date(nowTick).toISOString());
+    return Number(s.total_amount || 0);
+  };
+
+  // ✅ balance (this should match TOTAL BALANCE)
+  const getSessionBalance = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
+  };
+
+
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
       setStoppingId(session.id);
@@ -121,14 +128,12 @@ const Admin_customer_list: React.FC = () => {
       const totalMinutes = diffMinutes(session.time_started, nowIso);
       const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
-      // ✅ save minutes in total_time (recommended)
-      // if your table doesn't have total_time yet, add it or change this to total_hours.
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
           time_ended: nowIso,
-          total_time: totalMinutes,
-          total_amount: totalCost,
+          total_time: totalMinutes, // minutes
+          total_amount: totalCost,  // system cost
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
@@ -182,12 +187,13 @@ const Admin_customer_list: React.FC = () => {
     return new Date() > new Date(s.time_ended) ? "Finished" : "Ongoing";
   };
 
+  // ✅ payment summary where "Total Amount" = balance (same as TOTAL BALANCE)
   const getPaymentSummary = (s: CustomerSession) => {
-    const totalCost = Number(s.total_amount || 0);
+    const totalCost = getSessionTotalCost(s);
     const down = DOWN_PAYMENT;
 
-    const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
-    const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
+    const change = Number(Math.max(0, down - totalCost).toFixed(2));
+    const balance = Number(Math.max(0, totalCost - down).toFixed(2));
 
     return { totalCost, down, change, balance };
   };
@@ -238,10 +244,11 @@ const Admin_customer_list: React.FC = () => {
                   <td>{new Date(session.time_started).toLocaleTimeString("en-PH")}</td>
                   <td>{renderTimeOut(session)}</td>
 
-                  {/* ✅ auto convert mins->hours */}
                   <td>{formatMinutesToTime(totalMins)}</td>
 
-                  <td>₱{Number(session.total_amount || 0).toFixed(2)}</td>
+                  {/* ✅ Total Amount = BALANCE */}
+                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
+
                   <td>{session.seat_number}</td>
                   <td>{renderStatus(session)}</td>
 
@@ -328,8 +335,6 @@ const Admin_customer_list: React.FC = () => {
               <span>{formatMinutesToTime(getDisplayedTotalMinutes(selectedSession))}</span>
             </div>
 
-            {/* ✅ no "Free Minutes" on receipt */}
-
             {isOpenTimeSession(selectedSession) && (
               <div style={{ marginTop: 12 }}>
                 <button
@@ -346,16 +351,18 @@ const Admin_customer_list: React.FC = () => {
             <hr />
 
             {(() => {
-              const { totalCost, down, change, balance } = getPaymentSummary(selectedSession);
+              const { down, change, balance } = getPaymentSummary(selectedSession);
+
               const isChange = change > 0;
               const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
               const totalValue = isChange ? change : balance;
 
               return (
                 <>
+                  {/* ✅ Total Amount = BALANCE (matches TOTAL BALANCE) */}
                   <div className="receipt-row">
-                    <span>Total Cost</span>
-                    <span>₱{totalCost.toFixed(2)}</span>
+                    <span>Total Amount</span>
+                    <span>₱{balance.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
