@@ -963,49 +963,65 @@ ion-content,
   text-align: center;
 }
 
-/* =========================
-   BUTTON CARDS (2 columns)
-========================= */
+/* ================================
+   BOOK ADD ACTION BUTTONS
+================================ */
+
 .bookadd-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 16px !important;
+  align-items: stretch !important;
 }
 
-@media (max-width: 520px) {
-  .bookadd-actions {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* CARD */
+/* CARD STYLE */
 .bookadd-btn-card {
-  padding: 14px;
-  border-radius: 16px;
-
-  background: rgba(255, 255, 255, 0.16);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-
-  border: 1px solid rgba(0, 0, 0, 0.18);
-  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(10px);
+  height: 100% !important;
 }
 
-/* Label + desc */
+/* SAME BUTTON COLOR */
+.bookadd-btn-card ion-button {
+  --background: #43a047;
+  --background-hover: #388e3c;
+  --border-radius: 14px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+/* TEXT */
 .bookadd-btn-label {
-  display: block;
-  font-weight: 900;
-  font-size: 14px;
-  color: #45a049;
-  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 6px;
+  color: #1f1f1f;
 }
 
 .bookadd-btn-desc {
-  margin: 0 0 12px;
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.70);
-  line-height: 1.35;
+  font-size: 13px;
+  margin-bottom: 14px;
+  color: rgba(0, 0, 0, 0.7);
 }
+
+/* ================================
+   MOBILE VIEW (VERTICAL)
+================================ */
+
+@media (max-width: 768px) {
+  .bookadd-hero-card {
+    max-width: 520px !important;
+    width: calc(100% - 24px) !important;
+  }
+
+  .bookadd-actions {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 
 /* BUTTONS (same style for BOTH) */
 .bookadd-btn-booking ion-button,
@@ -1391,5 +1407,17 @@ ion-content,
   .adminpkg__optionRow {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+.bookadd-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 520px) {
+  .bookadd-actions {
+    grid-template-columns: 1fr;
   }
 }

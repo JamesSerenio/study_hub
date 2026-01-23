@@ -1,5 +1,5 @@
-// ✅ Fix: remove all "any" usage (especially in IonSelect onIonChange)
 // src/components/BookingModal.tsx
+// ✅ FREE 5 minutes applied in system pricing only (NOT shown in summary UI)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -23,6 +23,7 @@ import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
 const HOURLY_RATE = 20;
+const FREE_MINUTES = 5;
 
 type CustomerType = "reviewer" | "student" | "regular" | "";
 
@@ -51,12 +52,125 @@ type SeatGroup = { title: string; seats: string[] };
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void; // open thank-you modal in parent
+  onSaved: () => void;
   seatGroups: SeatGroup[];
 };
 
 const isCustomerType = (v: unknown): v is CustomerType =>
   v === "" || v === "reviewer" || v === "student" || v === "regular";
+
+const formatTime12 = (hour24: number, minute: number): string => {
+  const isPM = hour24 >= 12;
+  let h12 = hour24 % 12;
+  if (h12 === 0) h12 = 12;
+  const hh = h12.toString().padStart(2, "0");
+  const mm = minute.toString().padStart(2, "0");
+  return `${hh}:${mm} ${isPM ? "pm" : "am"}`;
+};
+
+const normalizeTimeShortcut = (raw: string): string | null => {
+  const v = raw.trim().toLowerCase().replace(/\s+/g, "");
+
+  let m = v.match(/^(\d{1,2})(am|pm)$/);
+  if (m) {
+    const h = parseInt(m[1], 10);
+    if (h < 1 || h > 12) return null;
+    return `${h.toString().padStart(2, "0")}:00 ${m[2]}`;
+  }
+
+  m = v.match(/^(\d{1,2}):(\d{2})(am|pm)$/);
+  if (m) {
+    const h = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (h < 1 || h > 12) return null;
+    if (mm < 0 || mm > 59) return null;
+    return `${h.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")} ${m[3]}`;
+  }
+
+  m = v.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) {
+    const h = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (h < 0 || h > 23) return null;
+    if (mm < 0 || mm > 59) return null;
+    return formatTime12(h, mm);
+  }
+
+  m = v.match(/^(\d{3,4})$/);
+  if (m) {
+    const s = m[1].padStart(4, "0");
+    const h = parseInt(s.slice(0, 2), 10);
+    const mm = parseInt(s.slice(2), 10);
+    if (h < 0 || h > 23) return null;
+    if (mm < 0 || mm > 59) return null;
+    return formatTime12(h, mm);
+  }
+
+  return null;
+};
+
+const parseTimeToISO = (timeInput: string, dateIsoOrDate: string): string | null => {
+  const match = timeInput.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if (!match) return null;
+
+  let hour = parseInt(match[1], 10);
+  const minute = parseInt(match[2], 10);
+  const period = match[3].toLowerCase();
+
+  if (hour < 1 || hour > 12) return null;
+  if (minute < 0 || minute > 59) return null;
+
+  if (period === "pm" && hour !== 12) hour += 12;
+  if (period === "am" && hour === 12) hour = 0;
+
+  const base = new Date(dateIsoOrDate);
+  if (!Number.isFinite(base.getTime())) return null;
+
+  base.setHours(hour, minute, 0, 0);
+  return base.toISOString();
+};
+
+// ✅ Time Avail: any hours + minutes
+const normalizeTimeAvail = (value: string): string | null => {
+  const raw = value.trim().toLowerCase().replace(/\s+/g, "");
+  if (!raw) return null;
+
+  // H+:MM
+  let m = raw.match(/^(\d{1,8}):(\d{1,2})$/);
+  if (m) {
+    const h = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (!Number.isFinite(h) || !Number.isFinite(mm)) return null;
+    if (h < 0) return null;
+    if (mm < 0 || mm > 59) return null;
+    if (h === 0 && mm === 0) return null;
+    return `${h.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
+  }
+
+  // digits only
+  m = raw.match(/^(\d{1,8})$/);
+  if (m) {
+    const digits = m[1];
+
+    // HHMM shortcut (3-4 digits) if MM<=59
+    if (digits.length === 3 || digits.length === 4) {
+      const s = digits.padStart(4, "0");
+      const hh = parseInt(s.slice(0, 2), 10);
+      const mm = parseInt(s.slice(2), 10);
+      if (mm <= 59) {
+        if (hh === 0 && mm === 0) return null;
+        return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
+      }
+    }
+
+    // hours only (ANY hours)
+    const h = parseInt(digits, 10);
+    if (!Number.isFinite(h) || h <= 0) return null;
+    return `${h.toString().padStart(2, "0")}:00`;
+  }
+
+  return null;
+};
 
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
@@ -73,119 +187,56 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
   const [openTime, setOpenTime] = useState(false);
+
   const [timeAvail, setTimeAvail] = useState("01:00");
   const [timeAvailInput, setTimeAvailInput] = useState("01:00");
+
   const [timeStartedInput, setTimeStartedInput] = useState("00:00 am");
   const [timeSnapshotIso, setTimeSnapshotIso] = useState(new Date().toISOString());
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const snap = new Date().toISOString();
-    setTimeSnapshotIso(snap);
-    setForm((p) => ({ ...p, time_started: snap }));
-    setTimeStartedInput("00:00 am");
-    void fetchOccupiedSeats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
-
-  const formatTime12 = (hour24: number, minute: number): string => {
-    const isPM = hour24 >= 12;
-    let h12 = hour24 % 12;
-    if (h12 === 0) h12 = 12;
-    const hh = h12.toString().padStart(2, "0");
-    const mm = minute.toString().padStart(2, "0");
-    return `${hh}:${mm} ${isPM ? "pm" : "am"}`;
+  const commitTimeAvail = (rawValue: string) => {
+    const normalized = normalizeTimeAvail(rawValue);
+    if (normalized) {
+      setTimeAvail(normalized);
+      setTimeAvailInput(normalized);
+    } else {
+      setTimeAvailInput(timeAvail);
+    }
   };
 
-  const normalizeTimeShortcut = (raw: string): string | null => {
-    const v = raw.trim().toLowerCase().replace(/\s+/g, "");
-
-    let m = v.match(/^(\d{1,2})(am|pm)$/);
-    if (m) {
-      const h = parseInt(m[1], 10);
-      if (h < 1 || h > 12) return null;
-      return `${h.toString().padStart(2, "0")}:00 ${m[2]}`;
-    }
-
-    m = v.match(/^(\d{1,2}):(\d{2})(am|pm)$/);
-    if (m) {
-      const h = parseInt(m[1], 10);
-      const mm = parseInt(m[2], 10);
-      if (h < 1 || h > 12) return null;
-      if (mm < 0 || mm > 59) return null;
-      return `${h.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")} ${m[3]}`;
-    }
-
-    m = v.match(/^(\d{1,2}):(\d{2})$/);
-    if (m) {
-      const h = parseInt(m[1], 10);
-      const mm = parseInt(m[2], 10);
-      if (h < 0 || h > 23) return null;
-      if (mm < 0 || mm > 59) return null;
-      return formatTime12(h, mm);
-    }
-
-    m = v.match(/^(\d{3,4})$/);
-    if (m) {
-      const s = m[1].padStart(4, "0");
-      const h = parseInt(s.slice(0, 2), 10);
-      const mm = parseInt(s.slice(2), 10);
-      if (h < 0 || h > 23) return null;
-      if (mm < 0 || mm > 59) return null;
-      return formatTime12(h, mm);
-    }
-
-    return null;
-  };
-
-  const parseTimeToISO = (timeInput: string, dateIsoOrDate: string): string | null => {
-    const match = timeInput.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
-    if (!match) return null;
-
-    let hour = parseInt(match[1], 10);
-    const minute = parseInt(match[2], 10);
-    const period = match[3].toLowerCase();
-
-    if (hour < 1 || hour > 12) return null;
-    if (minute < 0 || minute > 59) return null;
-
-    if (period === "pm" && hour !== 12) hour += 12;
-    if (period === "am" && hour === 12) hour = 0;
-
-    const base = new Date(dateIsoOrDate);
-    if (!Number.isFinite(base.getTime())) return null;
-
-    base.setHours(hour, minute, 0, 0);
-    return base.toISOString();
-  };
-
-  const normalizeTimeAvail = (value: string): string | null => {
-    const v = value.trim();
-    const match = v.match(/^(\d{1,3}):(\d{1,2})$/);
-    if (!match) return null;
-
-    const h = parseInt(match[1], 10);
-    const m = parseInt(match[2], 10);
-    if (h < 0 || h > 999) return null;
-    if (m < 0 || m > 59) return null;
-    if (h === 0 && m === 0) return null;
-
-    return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
-  };
-
-  const getTotalHours = (): number => {
-    const [h, m] = timeAvail.split(":").map(Number);
+  const getTotalMinutes = (): number => {
+    const [hRaw, mRaw] = timeAvail.split(":");
+    const h = Number(hRaw);
+    const m = Number(mRaw);
     if (Number.isNaN(h) || Number.isNaN(m) || h < 0 || m < 0 || m > 59) return 0;
-    return Number((h + m / 60).toFixed(2));
+    return h * 60 + m;
+  };
+
+  const getTotalHours = (): number => Number((getTotalMinutes() / 60).toFixed(2));
+
+  // ✅ pricing uses free minutes internally only
+  const getAmountPeso = (): number => {
+    const totalMin = getTotalMinutes();
+    const billableMin = Math.max(0, totalMin - FREE_MINUTES);
+    return (billableMin / 60) * HOURLY_RATE;
+  };
+
+  const addDuration = (startIso: string, durationHHMM: string): string => {
+    const start = new Date(startIso);
+    if (!Number.isFinite(start.getTime())) return startIso;
+
+    const [hRaw, mRaw] = durationHHMM.split(":");
+    const dh = Number(hRaw);
+    const dm = Number(mRaw);
+    if (Number.isNaN(dh) || Number.isNaN(dm)) return startIso;
+
+    const totalMinutes = dh * 60 + dm;
+    return new Date(start.getTime() + totalMinutes * 60_000).toISOString();
   };
 
   const getTimeEndedFrom = (startIso: string): string => {
     if (openTime) return startIso;
-    const start = new Date(startIso);
-    const [h, m] = timeAvail.split(":").map(Number);
-    start.setHours(start.getHours() + h);
-    start.setMinutes(start.getMinutes() + m);
-    return start.toISOString();
+    return addDuration(startIso, timeAvail);
   };
 
   const fetchOccupiedSeats = async (date?: string, start?: string, end?: string): Promise<void> => {
@@ -194,7 +245,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       .select("seat_number, time_ended, reservation, reservation_date, time_started");
 
     if (date && start && end) {
-      query = query.eq("reservation", "yes").eq("reservation_date", date).lt("time_started", end).gt("time_ended", start);
+      query = query
+        .eq("reservation", "yes")
+        .eq("reservation_date", date)
+        .lt("time_started", end)
+        .gt("time_ended", start);
     } else {
       const nowIso = new Date().toISOString();
       query = query.lte("time_started", nowIso).gt("time_ended", nowIso);
@@ -208,6 +263,19 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       setOccupiedSeats(seats);
     }
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const snap = new Date().toISOString();
+    setTimeSnapshotIso(snap);
+    setForm((p) => ({ ...p, time_started: snap }));
+    setTimeStartedInput("00:00 am");
+    setTimeAvail("01:00");
+    setTimeAvailInput("01:00");
+    setOpenTime(false);
+    void fetchOccupiedSeats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   useEffect(() => {
     if (form.reservation && form.reservation_date) {
@@ -233,8 +301,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     });
 
   const summaryStartIso = useMemo(() => {
+    if (!form.reservation) return timeSnapshotIso;
     if (form.reservation && form.reservation_date) {
-      const normalized = normalizeTimeShortcut(timeStartedInput) ?? "00:00 am";
+      const normalized = normalizeTimeShortcut(timeStartedInput) ?? "12:00 am";
       const parsed = parseTimeToISO(normalized, form.reservation_date);
       return parsed ?? timeSnapshotIso;
     }
@@ -247,7 +316,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   }, [openTime, summaryStartIso, timeAvail]);
 
   const totalHoursPreview = getTotalHours();
-  const timeAmountPreview = openTime ? 0 : totalHoursPreview * HOURLY_RATE;
+  const timeAmountPreview = openTime ? 0 : getAmountPeso();
+
   const timeInDisplay = formatPH(new Date(summaryStartIso));
   const timeOutDisplay = openTime ? "OPEN TIME" : formatPH(new Date(summaryEndIso));
 
@@ -257,17 +327,21 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     if (form.seat_number.length === 0) return alert("Please select at least one seat.");
     if (form.reservation && !form.reservation_date) return alert("Please select a reservation date.");
 
+    if (!openTime) commitTimeAvail(timeAvailInput);
+
     let startIsoToStore = new Date().toISOString();
     if (form.reservation) {
       const normalized = normalizeTimeShortcut(timeStartedInput);
-      if (!normalized) return alert('Please enter a valid Time Started (e.g., "2pm", "2:30pm", "14:00", "1400").');
+      if (!normalized) {
+        return alert('Please enter a valid Time Started (e.g., "2pm", "2:30pm", "14:00", "1400").');
+      }
       const parsed = parseTimeToISO(normalized, form.reservation_date as string);
       if (!parsed) return alert("Invalid Time Started.");
       startIsoToStore = parsed;
     }
 
-    if (!form.reservation && !openTime && getTotalHours() <= 0) {
-      return alert("Invalid time avail - Please enter a valid time (e.g., 01:00)");
+    if (!form.reservation && !openTime && getTotalMinutes() <= 0) {
+      return alert("Invalid Time Avail. Examples: 2 / 0:45 / 2:30 / 100:30 / 230");
     }
 
     const { data: auth } = await supabase.auth.getUser();
@@ -282,8 +356,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       ? new Date("2999-12-31T23:59:59.000Z").toISOString()
       : getTimeEndedFrom(startIsoToStore);
 
-    const totalHours = openTime ? 0 : getTotalHours();
-    const timeAmount = openTime ? 0 : totalHours * HOURLY_RATE;
+    const totalHours = openTime ? 0 : getTotalHours(); // raw duration (for records)
+    const timeAmount = openTime ? 0 : getAmountPeso(); // ✅ charged with free-minutes applied
 
     const { error } = await supabase.from("customer_sessions").insert({
       staff_id: auth.user.id,
@@ -316,6 +390,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       reservation_date: undefined,
       time_started: new Date().toISOString(),
     });
+
     setTimeAvail("01:00");
     setTimeAvailInput("01:00");
     setTimeStartedInput("00:00 am");
@@ -420,11 +495,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 <IonLabel position="stacked">Time Started (Reservation)</IonLabel>
                 <IonInput
                   value={timeStartedInput}
-                  placeholder='e.g., "2pm" / "2:30pm" / "14:00"'
+                  placeholder='e.g., "2pm" / "2:30pm" / "14:00" / "1400"'
                   onIonChange={(e) => setTimeStartedInput(e.detail.value ?? "")}
                   onIonBlur={() => {
                     const normalized = normalizeTimeShortcut(timeStartedInput);
-                    setTimeStartedInput(normalized ?? "00:00 am");
+                    setTimeStartedInput(normalized ?? "12:00 am");
                   }}
                 />
               </IonItem>
@@ -432,22 +507,17 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           )}
 
           <IonItem className="form-item">
-            <IonLabel position="stacked">Time Avail (HH:MM)</IonLabel>
+            <IonLabel position="stacked">Time Avail (HH:MM or hours)</IonLabel>
             <IonInput
               type="text"
-              inputMode="numeric"
-              placeholder="HH:MM"
+              inputMode="text"
+              placeholder='Examples: 2 / 0:45 / 2:30 / 100:30 / 230'
               value={timeAvailInput}
               disabled={openTime}
               onIonChange={(e) => setTimeAvailInput(e.detail.value ?? "")}
-              onIonBlur={() => {
-                const normalized = normalizeTimeAvail(timeAvailInput);
-                if (normalized) {
-                  setTimeAvail(normalized);
-                  setTimeAvailInput(normalized);
-                } else {
-                  setTimeAvailInput(timeAvail);
-                }
+              onIonBlur={() => commitTimeAvail(timeAvailInput)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitTimeAvail(timeAvailInput);
               }}
             />
           </IonItem>

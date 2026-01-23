@@ -17,6 +17,9 @@ import { useHistory } from "react-router-dom";
 import BookingModal from "../components/BookingModal";
 import AddOnsModal from "../components/AddOnsModal";
 
+// ✅ add this (create this modal component file later)
+import PromoModal from "../components/PromoModal";
+
 import leaves from "../assets/leave.png";
 import studyHubLogo from "../assets/study_hub.png";
 
@@ -40,10 +43,12 @@ const Book_Add: React.FC = () => {
   // MAIN MODALS
   const [isBookingOpen, setIsBookingOpen] = useState(false);
   const [isAddOnsOpen, setIsAddOnsOpen] = useState(false);
+  const [isPromoOpen, setIsPromoOpen] = useState(false); // ✅ NEW
 
   // THANK YOU MODALS
   const [bookingThanksOpen, setBookingThanksOpen] = useState(false);
   const [addOnsThanksOpen, setAddOnsThanksOpen] = useState(false);
+  const [promoThanksOpen, setPromoThanksOpen] = useState(false); // ✅ NEW
 
   return (
     <IonPage className="bookadd-page">
@@ -84,7 +89,7 @@ const Book_Add: React.FC = () => {
             {/* TOPBAR */}
             <div className="bookadd-topbar">
               <p className="bookadd-topbar-title">Choose Action</p>
-              <p className="bookadd-topbar-subtitle">Book your seat or order add-ons separately.</p>
+              <p className="bookadd-topbar-subtitle">Book your seat, choose promos, or order add-ons separately.</p>
             </div>
 
             {/* ACTION BUTTONS */}
@@ -94,6 +99,15 @@ const Book_Add: React.FC = () => {
                 <p className="bookadd-btn-desc">Choose your seat and booking time.</p>
                 <IonButton expand="block" onClick={() => setIsBookingOpen(true)}>
                   Booking
+                </IonButton>
+              </div>
+
+              {/* ✅ NEW PROMO CARD (same layout) */}
+              <div className="bookadd-btn-card bookadd-btn-promo">
+                <span className="bookadd-btn-label">Promo</span>
+                <p className="bookadd-btn-desc">Select package and schedule your start time.</p>
+                <IonButton expand="block" onClick={() => setIsPromoOpen(true)}>
+                  Promo
                 </IonButton>
               </div>
 
@@ -113,6 +127,14 @@ const Book_Add: React.FC = () => {
           isOpen={isBookingOpen}
           onClose={() => setIsBookingOpen(false)}
           onSaved={() => setBookingThanksOpen(true)}
+          seatGroups={SEAT_GROUPS}
+        />
+
+        {/* ✅ NEW PROMO MODAL */}
+        <PromoModal
+          isOpen={isPromoOpen}
+          onClose={() => setIsPromoOpen(false)}
+          onSaved={() => setPromoThanksOpen(true)}
           seatGroups={SEAT_GROUPS}
         />
 
@@ -148,6 +170,37 @@ const Book_Add: React.FC = () => {
                 Please wait a moment. Staff will review your booking details.
               </p>
               <IonButton expand="block" onClick={() => setBookingThanksOpen(false)}>
+                OK
+              </IonButton>
+            </div>
+          </IonContent>
+        </IonModal>
+
+        {/* ✅ THANK YOU MODAL: PROMO */}
+        <IonModal
+          isOpen={promoThanksOpen}
+          onDidDismiss={() => setPromoThanksOpen(false)}
+          className="bookadd-thanks-modal"
+        >
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>Thank you!</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setPromoThanksOpen(false)}>
+                  <IonIcon icon={closeOutline} />
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <div className="bookadd-card">
+              <p className="summary-text" style={{ fontWeight: 800, marginBottom: 8 }}>
+                Promo booked successfully.
+              </p>
+              <p className="summary-text" style={{ opacity: 0.85 }}>
+                Choose a promo package with discount for better savings.
+              </p>
+              <IonButton expand="block" onClick={() => setPromoThanksOpen(false)}>
                 OK
               </IonButton>
             </div>
