@@ -23,13 +23,15 @@ import Admin_Add_Ons from "./Admin_Add_Ons";
 import Admin_Item_Lists from "./Admin_Item_Lists";
 import Admin_customer_list from "./Admin_customer_list";
 import Admin_customer_reservation from "./Admin_customer_reservation";
+import Admin_Packages from "./Admin_Packages"; // ✅ ADD THIS
 
 /* Assets */
 import dashboardIcon from "../assets/graph.png";
 import addOnsIcon from "../assets/ons.png";
 import itemIcon from "../assets/item.png";
-import customerListIcon from "../assets/list.png";     
-import reservationIcon from "../assets/reserve.png";   
+import customerListIcon from "../assets/list.png";
+import reservationIcon from "../assets/reserve.png";
+import promotionIcon from "../assets/promotion.png"; // ✅ ADD THIS
 import studyHubLogo from "../assets/study_hub.png";
 
 const Admin_menu: React.FC = () => {
@@ -40,10 +42,11 @@ const Admin_menu: React.FC = () => {
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
     { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
     { name: "Item Lists", key: "item_lists", icon: itemIcon },
-
-    // ✅ added
     { name: "Customer List", key: "customer_list", icon: customerListIcon },
     { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
+
+    // ✅ NEW MENU ITEM
+    { name: "Promotions", key: "packages", icon: promotionIcon },
   ];
 
   const renderContent = () => {
@@ -58,6 +61,11 @@ const Admin_menu: React.FC = () => {
         return <Admin_customer_list />;
       case "customer_reservation":
         return <Admin_customer_reservation />;
+
+      // ✅ NEW PAGE
+      case "packages":
+        return <Admin_Packages />;
+
       default:
         return <h2>Welcome Admin</h2>;
     }

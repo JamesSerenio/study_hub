@@ -22,7 +22,7 @@ interface CustomerSession {
   // ✅ store minutes in DB (recommended). If your DB still uses total_hours, keep it.
   // We'll use total_time for display if present; fallback to total_hours.
   total_time?: number;
-  total_hours?: number;
+
 
   total_amount: number;
   reservation: string;
@@ -97,7 +97,7 @@ const Admin_customer_list: React.FC = () => {
     if (typeof s.total_time === "number") return Number(s.total_time || 0);
 
     // fallback if old DB uses total_hours (hours) -> convert to minutes for display
-    if (typeof s.total_hours === "number") return Math.round((Number(s.total_hours || 0) || 0) * 60);
+    if (typeof s.total_time === "number") return Math.round((Number(s.total_time || 0) || 0) * 60);
 
     // final fallback
     return diffMinutes(s.time_started, s.time_ended);

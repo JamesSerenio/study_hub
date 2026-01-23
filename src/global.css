@@ -1253,3 +1253,143 @@ ion-content,
     padding: 6px;
   }
 }
+
+/* global.css (ADD THIS SECTION) */
+/* =========================
+   ADMIN PACKAGES
+========================= */
+.adminpkg {
+  --adminpkg-radius: 16px;
+}
+
+.adminpkg__wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.adminpkg__loading {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.adminpkg__grid {
+  padding: 0;
+}
+
+.adminpkg__card {
+  border-radius: var(--adminpkg-radius);
+  overflow: hidden;
+}
+
+.adminpkg__cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.adminpkg__titleText {
+  flex: 1;
+  font-weight: 900;
+}
+
+.adminpkg__chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.adminpkg__desc {
+  margin-top: 0;
+  margin-bottom: 8px;
+  opacity: 0.9;
+}
+
+.adminpkg__amenities {
+  margin-top: 12px;
+}
+
+.adminpkg__amenityList {
+  margin-top: 10px;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+
+.adminpkg__options {
+  margin-top: 12px;
+}
+
+.adminpkg__optionGrid {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.adminpkg__optionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.adminpkg__optionLeft {
+  display: grid;
+}
+
+.adminpkg__optionRight {
+  font-weight: 900;
+}
+
+.adminpkg__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.adminpkg__modalActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.adminpkg__optionActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.adminpkg__list ion-item {
+  --border-radius: 14px;
+  margin-bottom: 10px;
+}
+
+.adminpkg__muted {
+  opacity: 0.75;
+}
+
+.adminpkg__price {
+  font-weight: 900;
+  margin-right: 10px;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .adminpkg__wrap {
+    max-width: 100%;
+  }
+
+  .adminpkg__modalActions {
+    flex-direction: column;
+  }
+
+  .adminpkg__optionRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

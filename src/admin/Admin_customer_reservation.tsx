@@ -84,25 +84,6 @@ const Admin_customer_reservation: React.FC = () => {
     return end.getFullYear() >= 2999;
   };
 
-  const getStatus = (session: CustomerSession): string => {
-    const now = new Date(nowTick);
-    const start = new Date(session.time_started);
-    const end = new Date(session.time_ended);
-
-    if (now < start) return "Upcoming";
-    if (now >= start && now <= end) return "Ongoing";
-    return "Finished";
-  };
-
-  const canShowStopButton = (session: CustomerSession): boolean => {
-    if (!isOpenTimeSession(session)) return false;
-
-    const start = new Date(session.time_started).getTime();
-    if (!Number.isFinite(start)) return false;
-
-    return nowTick >= start;
-  };
-
   const diffMinutes = (startIso: string, endIso: string): number => {
     const start = new Date(startIso).getTime();
     const end = new Date(endIso).getTime();
@@ -127,6 +108,38 @@ const Admin_customer_reservation: React.FC = () => {
     const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
     const perMinute = HOURLY_RATE / 60;
     return Number((chargeMinutes * perMinute).toFixed(2));
+  };
+
+  // ✅ scheduled start = reservation_date (date) + time_started (time)
+  const getScheduledStartDateTime = (s: CustomerSession): Date => {
+    const start = new Date(s.time_started);
+
+    if (s.reservation_date) {
+      const d = new Date(s.reservation_date);
+      start.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+
+    return start;
+  };
+
+  const getStatus = (session: CustomerSession): string => {
+    const now = new Date(nowTick);
+    const start = getScheduledStartDateTime(session);
+    const end = new Date(session.time_ended);
+
+    if (now < start) return "Upcoming";
+    if (now >= start && now <= end) return "Ongoing";
+    return "Finished";
+  };
+
+  // ✅ Stop Time only appears when NOW >= scheduled date+time
+  const canShowStopButton = (session: CustomerSession): boolean => {
+    if (!isOpenTimeSession(session)) return false;
+
+    const startMs = getScheduledStartDateTime(session).getTime();
+    if (!Number.isFinite(startMs)) return false;
+
+    return nowTick >= startMs;
   };
 
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
@@ -352,7 +365,7 @@ const Admin_customer_reservation: React.FC = () => {
               <span>{formatMinutesToTime(getDisplayedTotalMinutes(selectedSession))}</span>
             </div>
 
-            {canShowStopButton(selectedSession) && (
+            {isOpenTimeSession(selectedSession) && canShowStopButton(selectedSession) && (
               <div style={{ marginTop: 12 }}>
                 <button
                   className="receipt-btn"

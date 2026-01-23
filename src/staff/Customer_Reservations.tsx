@@ -106,6 +106,18 @@ const Customer_Reservations: React.FC = () => {
     return Number((chargeMinutes * perMinute).toFixed(2));
   };
 
+  // ✅ build the scheduled start datetime using reservation_date + time_started time
+  const getScheduledStartDateTime = (s: CustomerSession): Date => {
+    const start = new Date(s.time_started);
+
+    if (s.reservation_date) {
+      const d = new Date(s.reservation_date); // date-only in DB
+      start.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+
+    return start;
+  };
+
   // DISPLAY: OPEN => running minutes, CLOSED => saved total_time
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
@@ -119,9 +131,10 @@ const Customer_Reservations: React.FC = () => {
     return Number(timeCost.toFixed(2));
   };
 
+  // ✅ status uses reservation_date + time_started time
   const getStatus = (session: CustomerSession): string => {
     const now = new Date(nowTick);
-    const start = new Date(session.time_started);
+    const start = getScheduledStartDateTime(session);
     const end = new Date(session.time_ended);
 
     if (now < start) return "Upcoming";
@@ -129,10 +142,13 @@ const Customer_Reservations: React.FC = () => {
     return "Finished";
   };
 
+  // ✅ Stop Time only shows when NOW >= (reservation_date + time_started time)
   const canShowStopButton = (session: CustomerSession): boolean => {
     if (!isOpenTimeSession(session)) return false;
-    const start = new Date(session.time_started).getTime();
+
+    const start = getScheduledStartDateTime(session).getTime();
     if (!Number.isFinite(start)) return false;
+
     return nowTick >= start;
   };
 
@@ -226,7 +242,11 @@ const Customer_Reservations: React.FC = () => {
 
               return (
                 <tr key={session.id}>
-                  <td>{session.reservation_date ? new Date(session.reservation_date).toLocaleDateString("en-PH") : "N/A"}</td>
+                  <td>
+                    {session.reservation_date
+                      ? new Date(session.reservation_date).toLocaleDateString("en-PH")
+                      : "N/A"}
+                  </td>
                   <td>{session.full_name}</td>
                   <td>{session.customer_type}</td>
                   <td>{session.customer_field}</td>
@@ -238,15 +258,13 @@ const Customer_Reservations: React.FC = () => {
 
                   <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
 
-                  <td>
-                    ₱{open ? getLiveTotalCost(session).toFixed(2) : toNum(session.total_amount).toFixed(2)}
-                  </td>
+                  <td>₱{open ? getLiveTotalCost(session).toFixed(2) : toNum(session.total_amount).toFixed(2)}</td>
 
                   <td>{session.seat_number}</td>
                   <td>{getStatus(session)}</td>
 
                   <td style={{ display: "flex", gap: 8 }}>
-                    {open && (
+                    {open && canShowStopButton(session) && (
                       <button
                         className="receipt-btn"
                         disabled={stoppingId === session.id}
@@ -319,7 +337,7 @@ const Customer_Reservations: React.FC = () => {
               <span>{getChargeMinutesForReceipt(selectedSession)} min</span>
             </div>
 
-            {isOpenTimeSession(selectedSession) && (
+            {isOpenTimeSession(selectedSession) && canShowStopButton(selectedSession) && (
               <div style={{ marginTop: 12 }}>
                 <button
                   className="receipt-btn"
@@ -336,7 +354,6 @@ const Customer_Reservations: React.FC = () => {
 
             {(() => {
               const open = isOpenTimeSession(selectedSession);
-
               const totalCost = open ? getLiveTotalCost(selectedSession) : toNum(selectedSession.total_amount);
 
               const down = DOWN_PAYMENT;
