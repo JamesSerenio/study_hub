@@ -1,4 +1,6 @@
 // src/components/BookingModal.tsx
+// ✅ FIX: Time Avail + Total Hours display is now exact (HH:MM), not decimal
+// ✅ FIX: Time Started / Time Out display removes seconds
 // ✅ FREE 5 minutes applied in system pricing only (NOT shown in summary UI)
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -21,6 +23,8 @@ import {
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
+import type { IonInputCustomEvent, InputInputEventDetail, InputChangeEventDetail } from "@ionic/core";
+
 
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 5;
@@ -130,12 +134,25 @@ const parseTimeToISO = (timeInput: string, dateIsoOrDate: string): string | null
   return base.toISOString();
 };
 
-// ✅ Time Avail: any hours + minutes
+/**
+ * ✅ Time Avail parsing (hours + minutes)
+ * Accepts:
+ * - "2" => 02:00
+ * - "0:45" => 00:45
+ * - "2:30" => 02:30
+ * - "230" => 02:30 (HHMM shortcut when MM<=59)
+ * - "100:30" => 100:30 (any hours)
+ */
 const normalizeTimeAvail = (value: string): string | null => {
-  const raw = value.trim().toLowerCase().replace(/\s+/g, "");
+  const raw = value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[^0-9:]/g, ""); // keep only digits and :
+
   if (!raw) return null;
 
-  // H+:MM
+  // H+:MM (any hours)
   let m = raw.match(/^(\d{1,8}):(\d{1,2})$/);
   if (m) {
     const h = parseInt(m[1], 10);
@@ -172,6 +189,14 @@ const normalizeTimeAvail = (value: string): string | null => {
   return null;
 };
 
+// ✅ exact HH:MM display for total duration
+const toHHMM = (totalMinutes: number): string => {
+  const mins = Math.max(0, Math.floor(totalMinutes));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
+};
+
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
@@ -188,8 +213,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
   const [openTime, setOpenTime] = useState(false);
 
-  const [timeAvail, setTimeAvail] = useState("01:00");
-  const [timeAvailInput, setTimeAvailInput] = useState("01:00");
+  // ✅ default 00:00 (hours + minutes)
+  const [timeAvail, setTimeAvail] = useState("00:00");
+  const [timeAvailInput, setTimeAvailInput] = useState("00:00");
 
   const [timeStartedInput, setTimeStartedInput] = useState("00:00 am");
   const [timeSnapshotIso, setTimeSnapshotIso] = useState(new Date().toISOString());
@@ -200,7 +226,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       setTimeAvail(normalized);
       setTimeAvailInput(normalized);
     } else {
-      setTimeAvailInput(timeAvail);
+      setTimeAvailInput(rawValue);
     }
   };
 
@@ -211,8 +237,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     if (Number.isNaN(h) || Number.isNaN(m) || h < 0 || m < 0 || m > 59) return 0;
     return h * 60 + m;
   };
-
-  const getTotalHours = (): number => Number((getTotalMinutes() / 60).toFixed(2));
 
   // ✅ pricing uses free minutes internally only
   const getAmountPeso = (): number => {
@@ -270,9 +294,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setTimeSnapshotIso(snap);
     setForm((p) => ({ ...p, time_started: snap }));
     setTimeStartedInput("00:00 am");
-    setTimeAvail("01:00");
-    setTimeAvailInput("01:00");
+
+    setTimeAvail("00:00");
+    setTimeAvailInput("00:00");
     setOpenTime(false);
+
     void fetchOccupiedSeats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -290,6 +316,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.reservation, form.reservation_date, openTime, timeStartedInput, timeAvail]);
 
+  // ✅ remove seconds in display
   const formatPH = (d: Date) =>
     d.toLocaleString("en-PH", {
       year: "numeric",
@@ -297,7 +324,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-      second: "2-digit",
     });
 
   const summaryStartIso = useMemo(() => {
@@ -315,7 +341,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     return getTimeEndedFrom(summaryStartIso);
   }, [openTime, summaryStartIso, timeAvail]);
 
-  const totalHoursPreview = getTotalHours();
+  const totalMinutesPreview = getTotalMinutes();
+  const totalHHMMPreview = toHHMM(totalMinutesPreview);
   const timeAmountPreview = openTime ? 0 : getAmountPeso();
 
   const timeInDisplay = formatPH(new Date(summaryStartIso));
@@ -327,7 +354,14 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     if (form.seat_number.length === 0) return alert("Please select at least one seat.");
     if (form.reservation && !form.reservation_date) return alert("Please select a reservation date.");
 
-    if (!openTime) commitTimeAvail(timeAvailInput);
+    // ✅ capture and validate latest timeAvailInput
+    if (!openTime) {
+      const normalized = normalizeTimeAvail(timeAvailInput);
+      if (!normalized) return alert("Invalid Time Avail. Examples: 0:45 / 2 / 2:30 / 100:30 / 230");
+      if (normalized === "00:00") return alert("Time Avail must be greater than 00:00.");
+      setTimeAvail(normalized);
+      setTimeAvailInput(normalized);
+    }
 
     let startIsoToStore = new Date().toISOString();
     if (form.reservation) {
@@ -338,10 +372,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       const parsed = parseTimeToISO(normalized, form.reservation_date as string);
       if (!parsed) return alert("Invalid Time Started.");
       startIsoToStore = parsed;
-    }
-
-    if (!form.reservation && !openTime && getTotalMinutes() <= 0) {
-      return alert("Invalid Time Avail. Examples: 2 / 0:45 / 2:30 / 100:30 / 230");
     }
 
     const { data: auth } = await supabase.auth.getUser();
@@ -356,8 +386,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       ? new Date("2999-12-31T23:59:59.000Z").toISOString()
       : getTimeEndedFrom(startIsoToStore);
 
-    const totalHours = openTime ? 0 : getTotalHours(); // raw duration (for records)
-    const timeAmount = openTime ? 0 : getAmountPeso(); // ✅ charged with free-minutes applied
+    const totalMin = getTotalMinutes();
+    const totalHoursForDB = Number((totalMin / 60).toFixed(2)); // keep DB numeric compatible
+    const timeAmount = openTime ? 0 : getAmountPeso();
 
     const { error } = await supabase.from("customer_sessions").insert({
       staff_id: auth.user.id,
@@ -370,7 +401,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       hour_avail: openTime ? "OPEN" : timeAvail,
       time_started: startIsoToStore,
       time_ended: timeEndedToStore,
-      total_time: totalHours,
+      total_time: openTime ? 0 : totalHoursForDB,
       total_amount: timeAmount,
       seat_number: form.seat_number.join(", "),
       reservation: form.reservation ? "yes" : "no",
@@ -391,8 +422,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       time_started: new Date().toISOString(),
     });
 
-    setTimeAvail("01:00");
-    setTimeAvailInput("01:00");
+    setTimeAvail("00:00");
+    setTimeAvailInput("00:00");
     setTimeStartedInput("00:00 am");
     setOpenTime(false);
 
@@ -506,21 +537,34 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             </>
           )}
 
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Time Avail (HH:MM or hours)</IonLabel>
-            <IonInput
-              type="text"
-              inputMode="text"
-              placeholder='Examples: 2 / 0:45 / 2:30 / 100:30 / 230'
-              value={timeAvailInput}
-              disabled={openTime}
-              onIonChange={(e) => setTimeAvailInput(e.detail.value ?? "")}
-              onIonBlur={() => commitTimeAvail(timeAvailInput)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitTimeAvail(timeAvailInput);
-              }}
-            />
-          </IonItem>
+                <IonItem className="form-item">
+                <IonLabel position="stacked">Time Avail (HH:MM or hours)</IonLabel>
+                <IonInput
+                    type="text"
+                    inputMode="text"
+                    placeholder='Examples: 0:45 / 2 / 2:30 / 100:30 / 230'
+                    value={timeAvailInput}
+                    disabled={openTime}
+
+                    // ✅ FIX: correct Ionic event type
+                    onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => {
+                    setTimeAvailInput(e.detail.value ?? "");
+                    }}
+
+                    onIonBlur={() => commitTimeAvail(timeAvailInput)}
+
+                    // (optional) also commit here if your platform updates on change
+                    onIonChange={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
+                    const v = e.detail.value ?? "";
+                    setTimeAvailInput(v);
+                    commitTimeAvail(v);
+                    }}
+
+                    onKeyDown={(e) => {
+                    if (e.key === "Enter") commitTimeAvail(timeAvailInput);
+                    }}
+                />
+                </IonItem>
 
           <div className="form-item seat-wrap">
             {seatGroups.map((group) => (
@@ -568,7 +612,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
             {!openTime && (
               <>
-                <p className="summary-text">Total Hours: {totalHoursPreview}</p>
+                {/* ✅ show exact HH:MM instead of decimal */}
+                <p className="summary-text">Total Hours: {totalHHMMPreview}</p>
                 <p className="summary-text">Total Amount: ₱{timeAmountPreview.toFixed(2)}</p>
               </>
             )}

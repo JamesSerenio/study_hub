@@ -89,6 +89,22 @@ const Customer_Lists: React.FC = () => {
     return computeCostWithFreeMinutes(s.time_started, nowIso);
   };
 
+  // ✅ Total system cost (open uses live; closed uses saved)
+  const getSessionTotalCost = (s: CustomerSession): number => {
+    return isOpenTimeSession(s) ? getLiveTotalCost(s) : Number(s.total_amount || 0);
+  };
+
+  // ✅ Balance after downpayment (this is what you want as "Total Amount")
+  const getSessionBalance = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
+  };
+
+  const getSessionChange = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
+  };
+
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
       setStoppingId(session.id);
@@ -131,7 +147,6 @@ const Customer_Lists: React.FC = () => {
     if (isOpenTimeSession(s)) return "Ongoing";
     return new Date() > new Date(s.time_ended) ? "Finished" : "Ongoing";
   };
-
 
   // ✅ Minutes used on receipt (OPEN sessions show running minutes)
   const getUsedMinutesForReceipt = (s: CustomerSession): number => {
@@ -190,16 +205,11 @@ const Customer_Lists: React.FC = () => {
                   <td>{new Date(session.time_started).toLocaleTimeString()}</td>
                   <td>{renderTimeOut(session)}</td>
 
-                  {/* if OPEN, total_hours may be 0 in DB; keep showing DB value */}
+                  {/* keep showing DB value (open may still be 0) */}
                   <td>{session.total_time}</td>
 
-                  {/* ✅ if OPEN, show live cost (after free mins); else show saved */}
-                  <td>
-                    ₱
-                    {open
-                      ? getLiveTotalCost(session).toFixed(2)
-                      : Number(session.total_amount || 0).toFixed(2)}
-                  </td>
+                  {/* ✅ Total Amount = BALANCE (same as TOTAL BALANCE) */}
+                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
 
                   <td>{session.seat_number}</td>
                   <td>{renderStatus(session)}</td>
@@ -302,14 +312,11 @@ const Customer_Lists: React.FC = () => {
             <hr />
 
             {(() => {
-              // ✅ for OPEN session receipt, compute live cost; else use saved
-              const totalCost = isOpenTimeSession(selectedSession)
-                ? getLiveTotalCost(selectedSession)
-                : Number(selectedSession.total_amount || 0);
+              // ✅ system cost (for computing balance/change)
+              const totalCost = getSessionTotalCost(selectedSession);
 
-              const down = DOWN_PAYMENT;
-              const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
-              const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
+              const change = getSessionChange(selectedSession);
+              const balance = getSessionBalance(selectedSession);
 
               const isChange = change > 0;
               const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
@@ -317,14 +324,15 @@ const Customer_Lists: React.FC = () => {
 
               return (
                 <>
+                  {/* ✅ Total Amount must match TOTAL BALANCE */}
                   <div className="receipt-row">
-                    <span>Total Cost</span>
-                    <span>₱{totalCost.toFixed(2)}</span>
+                    <span>Total Amount</span>
+                    <span>₱{balance.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Down Payment</span>
-                    <span>₱{down.toFixed(2)}</span>
+                    <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
                   {change > 0 && (
@@ -340,6 +348,12 @@ const Customer_Lists: React.FC = () => {
                       <span>₱{balance.toFixed(2)}</span>
                     </div>
                   )}
+
+                  {/* optional: show system computed cost (remove if you want hidden) */}
+                  <div className="receipt-row">
+                    <span>System Cost</span>
+                    <span>₱{totalCost.toFixed(2)}</span>
+                  </div>
 
                   <div className="receipt-total">
                     <span>{totalLabel}</span>
