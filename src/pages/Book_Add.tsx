@@ -1,4 +1,3 @@
-// Book_Add.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
@@ -22,6 +21,8 @@ import {
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
+import { useHistory } from "react-router-dom";
+
 import leaves from "../assets/leave.png";
 import studyHubLogo from "../assets/study_hub.png";
 
@@ -92,8 +93,9 @@ const SEAT_GROUPS: SeatGroup[] = [
   },
 ];
 
-
 const Book_Add: React.FC = () => {
+  const history = useHistory();
+
   // MAIN MODALS
   const [isBookingOpen, setIsBookingOpen] = useState(false);
   const [isAddOnsOpen, setIsAddOnsOpen] = useState(false);
@@ -348,6 +350,26 @@ const Book_Add: React.FC = () => {
     [selectedAddOns]
   );
 
+  // ✅ SUMMARY MAP (keeps category visible even if user adds more blocks)
+  const selectedSummaryByCategory = useMemo(() => {
+    const map = new Map<string, SelectedAddOn[]>();
+    for (const item of selectedAddOns) {
+      const cat = item.category || "Uncategorized";
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(item);
+    }
+
+    return Array.from(map.entries()).map(([category, items]) => ({
+      category,
+      items: items.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+  }, [selectedAddOns]);
+
+  const selectedCategoryNames = useMemo(
+    () => selectedSummaryByCategory.map((x) => x.category),
+    [selectedSummaryByCategory]
+  );
+
   const handleAddOnQuantityChange = (id: string, quantity: number): void => {
     const q = Math.max(0, Math.floor(quantity));
     setSelectedAddOns((prev) => {
@@ -525,6 +547,7 @@ const Book_Add: React.FC = () => {
     const totalHours = openTime ? 0 : getTotalHours();
     const timeAmount = openTime ? 0 : totalHours * HOURLY_RATE;
 
+    // NOTE: make sure your DB columns match these names
     const { error: sessionError } = await supabase.from("customer_sessions").insert({
       staff_id: auth.user.id,
       date: dateToStore,
@@ -537,7 +560,7 @@ const Book_Add: React.FC = () => {
       time_started: startIsoToStore,
       time_ended: timeEndedToStore,
       total_time: totalHours,
-      total_amount: timeAmount, // booking is separate (no add-ons included)
+      total_amount: timeAmount,
       seat_number: form.seat_number.join(", "),
       reservation: form.reservation ? "yes" : "no",
       reservation_date: form.reservation_date,
@@ -618,7 +641,16 @@ const Book_Add: React.FC = () => {
             {/* HEADER */}
             <div className="bookadd-hero-header">
               <div className="bookadd-hero-brand">
-                <img src={studyHubLogo} className="bookadd-hero-logo" alt="Study Hub" />
+                {/* ✅ CLICK LOGO -> LOGIN */}
+                <img
+                  src={studyHubLogo}
+                  className="bookadd-hero-logo"
+                  alt="Study Hub"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => history.push("/login")}
+                  onKeyDown={(e) => e.key === "Enter" && history.push("/login")}
+                />
                 <div className="bookadd-hero-text">
                   <p className="bookadd-hero-title">Welcome to Me Tyme Lounge!</p>
                   <p className="bookadd-hero-subtitle">Rest, relax, and focus in a peaceful environment.</p>
@@ -868,11 +900,7 @@ const Book_Add: React.FC = () => {
             <IonToolbar>
               <IonTitle>Add-Ons</IonTitle>
               <IonButtons slot="end">
-                <IonButton
-                  onClick={() => {
-                    setIsAddOnsOpen(false);
-                  }}
-                >
+                <IonButton onClick={() => setIsAddOnsOpen(false)}>
                   <IonIcon icon={closeOutline} />
                 </IonButton>
               </IonButtons>
@@ -1026,6 +1054,40 @@ const Book_Add: React.FC = () => {
                   );
                 })}
 
+              {/* ✅ ORDER SUMMARY (ALWAYS VISIBLE) */}
+              {selectedAddOns.length > 0 && (
+                <div className="addon-summary">
+                  <p className="addon-summary-title">Order Summary</p>
+
+                  <IonList>
+                    {selectedSummaryByCategory.map(({ category, items }) => (
+                      <React.Fragment key={category}>
+                        <IonListHeader>
+                          <IonLabel>
+                            <strong>{category}</strong>
+                          </IonLabel>
+                        </IonListHeader>
+
+                        {items.map((it) => (
+                          <IonItem key={it.id}>
+                            <IonLabel>
+                              <div style={{ fontWeight: 700 }}>{it.name}</div>
+                              <div style={{ opacity: 0.85 }}>
+                                Qty: {it.quantity} × ₱{it.price} = <strong>₱{(it.quantity * it.price).toFixed(2)}</strong>
+                              </div>
+                            </IonLabel>
+                          </IonItem>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                  </IonList>
+
+                  <p className="addon-summary-cats">
+                    <strong>Categories:</strong> {selectedCategoryNames.join(", ")}
+                  </p>
+                </div>
+              )}
+
               {/* TOTAL + SUBMIT */}
               <div className="summary-section" style={{ marginTop: 12 }}>
                 <p className="summary-text">
@@ -1040,8 +1102,12 @@ const Book_Add: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* THANK YOU MODAL: BOOKING */}
-        <IonModal isOpen={bookingThanksOpen} onDidDismiss={() => setBookingThanksOpen(false)}>
+        {/* THANK YOU MODAL: BOOKING (✅ SMALL MODAL) */}
+        <IonModal
+          isOpen={bookingThanksOpen}
+          onDidDismiss={() => setBookingThanksOpen(false)}
+          className="bookadd-thanks-modal"
+        >
           <IonHeader>
             <IonToolbar>
               <IonTitle>Thank you!</IonTitle>
@@ -1067,8 +1133,12 @@ const Book_Add: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* THANK YOU MODAL: ADD-ONS */}
-        <IonModal isOpen={addOnsThanksOpen} onDidDismiss={() => setAddOnsThanksOpen(false)}>
+        {/* THANK YOU MODAL: ADD-ONS (✅ SMALL MODAL) */}
+        <IonModal
+          isOpen={addOnsThanksOpen}
+          onDidDismiss={() => setAddOnsThanksOpen(false)}
+          className="bookadd-thanks-modal"
+        >
           <IonHeader>
             <IonToolbar>
               <IonTitle>Thank you!</IonTitle>
