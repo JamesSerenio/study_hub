@@ -143,14 +143,30 @@ const Admin_customer_reservation: React.FC = () => {
   };
 
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
+    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
     return toNum(s.total_time);
   };
 
   const getLiveTotalCost = (s: CustomerSession): number => {
-    const endIso = new Date().toISOString();
+    const endIso = new Date(nowTick).toISOString();
     const timeCost = computeCostWithFreeMinutes(s.time_started, endIso);
     return Number(timeCost.toFixed(2));
+  };
+
+  // ✅ total cost (open uses live)
+  const getSessionTotalCost = (s: CustomerSession): number => {
+    return isOpenTimeSession(s) ? getLiveTotalCost(s) : toNum(s.total_amount);
+  };
+
+  // ✅ balance after downpayment (this is what "Total Amount" should show)
+  const getSessionBalance = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
+  };
+
+  const getSessionChange = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
   };
 
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
@@ -278,12 +294,8 @@ const Admin_customer_reservation: React.FC = () => {
 
                   <td>{formatMinutesToTime(mins)}</td>
 
-                  <td>
-                    ₱
-                    {isOpenTimeSession(session)
-                      ? getLiveTotalCost(session).toFixed(2)
-                      : toNum(session.total_amount).toFixed(2)}
-                  </td>
+                  {/* ✅ Total Amount = BALANCE (same as TOTAL BALANCE) */}
+                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
 
                   <td>{session.seat_number}</td>
                   <td>{getStatus(session)}</td>
@@ -381,12 +393,8 @@ const Admin_customer_reservation: React.FC = () => {
             <hr />
 
             {(() => {
-              const open = isOpenTimeSession(selectedSession);
-              const totalCost = open ? getLiveTotalCost(selectedSession) : toNum(selectedSession.total_amount);
-
-              const down = DOWN_PAYMENT;
-              const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
-              const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
+              const change = getSessionChange(selectedSession);
+              const balance = getSessionBalance(selectedSession);
 
               const isChange = change > 0;
               const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
@@ -394,14 +402,15 @@ const Admin_customer_reservation: React.FC = () => {
 
               return (
                 <>
+                  {/* ✅ Total Amount must match TOTAL BALANCE */}
                   <div className="receipt-row">
-                    <span>Total Cost</span>
-                    <span>₱{totalCost.toFixed(2)}</span>
+                    <span>Total Amount</span>
+                    <span>₱{balance.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Down Payment</span>
-                    <span>₱{down.toFixed(2)}</span>
+                    <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
                   {change > 0 && (

@@ -90,7 +90,6 @@ const parseAmenities = (text: string | null): string[] => {
     .filter(Boolean);
 };
 
-const formatArea = (a: PackageArea): string => (a === "common_area" ? "Common Area" : "Conference Room");
 
 const formatDuration = (v: number, u: DurationUnit): string => {
   const unit =
