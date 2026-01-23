@@ -17,7 +17,7 @@ interface CustomerSession {
   hour_avail: string;
   time_started: string;
   time_ended: string;
-  total_hours: number;
+  total_time: number;
   total_amount: number;
   reservation: string;
   reservation_date: string | null;
@@ -101,7 +101,7 @@ const Customer_Lists: React.FC = () => {
         .from("customer_sessions")
         .update({
           time_ended: nowIso,
-          total_hours: totalHours,
+          total_time: totalHours,
           total_amount: totalCost,
           hour_avail: "CLOSED",
         })
@@ -191,7 +191,7 @@ const Customer_Lists: React.FC = () => {
                   <td>{renderTimeOut(session)}</td>
 
                   {/* if OPEN, total_hours may be 0 in DB; keep showing DB value */}
-                  <td>{session.total_hours}</td>
+                  <td>{session.total_time}</td>
 
                   {/* ✅ if OPEN, show live cost (after free mins); else show saved */}
                   <td>

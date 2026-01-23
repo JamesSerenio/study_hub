@@ -47,35 +47,29 @@ type SeatGroup = { title: string; seats: string[] };
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void; // parent opens thank-you modal
+  onSaved: () => void;
   seatGroups: SeatGroup[];
 };
+
+const asString = (v: unknown): string => (typeof v === "string" ? v : "");
 
 export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
 
-  // Required fields for customer_session_add_ons
   const [addOnsFullName, setAddOnsFullName] = useState("");
   const [addOnsSeat, setAddOnsSeat] = useState("");
 
-  // category blocks
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [showAddOns, setShowAddOns] = useState(false);
+  // Each block just stores chosen category (duplicates allowed)
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
 
-  // selected items (across categories)
   const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
 
   useEffect(() => {
     if (!isOpen) return;
     void fetchAddOns();
-    // ensure at least 1 category block if user opens modal
-    if (!showAddOns) {
-      setShowAddOns(true);
-      setSelectedCategories([""]);
-    } else if (selectedCategories.length === 0) {
-      setSelectedCategories([""]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    // Ensure at least 1 block on open
+    setSelectedCategories((prev) => (prev.length === 0 ? [""] : prev));
   }, [isOpen]);
 
   const fetchAddOns = async (): Promise<void> => {
@@ -90,14 +84,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   const categories = useMemo(() => [...new Set(addOns.map((a) => a.category))], [addOns]);
 
-  const addOnsByCategory = (category: string) => selectedAddOns.filter((s) => s.category === category);
-
   const addOnsTotal = useMemo(
     () => selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0),
     [selectedAddOns]
   );
 
-  // ✅ visible summary even if user adds many blocks
   const selectedSummaryByCategory = useMemo(() => {
     const map = new Map<string, SelectedAddOn[]>();
     for (const item of selectedAddOns) {
@@ -111,11 +102,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     }));
   }, [selectedAddOns]);
 
-  const selectedCategoryNames = useMemo(
-    () => selectedSummaryByCategory.map((x) => x.category),
-    [selectedSummaryByCategory]
-  );
-
   const handleAddOnQuantityChange = (id: string, quantity: number): void => {
     const q = Math.max(0, Math.floor(quantity));
     setSelectedAddOns((prev) => {
@@ -127,45 +113,37 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         if (!addOn) return prev;
         return [...prev, { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity: q }];
       }
+
       return prev.filter((s) => s.id !== id);
     });
   };
 
+  // ✅ Do NOT delete selected items when switching category
   const handleCategoryChange = (index: number, category: string): void => {
     setSelectedCategories((prev) => {
       const next = [...prev];
-      const old = next[index];
       next[index] = category;
-
-      // remove selected add-ons under old category if category changed
-      if (old && old !== category) {
-        setSelectedAddOns((prevAdd) => prevAdd.filter((s) => s.category !== old));
-      }
       return next;
     });
   };
 
-  const removeCategory = (index: number): void => {
-    const cat = selectedCategories[index];
-    setSelectedCategories((prev) => prev.filter((_, i) => i !== index));
-    setSelectedAddOns((prev) => prev.filter((s) => s.category !== cat));
+  // ✅ Removing a block should NOT delete items (customer might still want them)
+  const removeCategoryBlock = (index: number): void => {
+    setSelectedCategories((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length === 0 ? [""] : next;
+    });
   };
 
   const addAnotherCategory = (): void => {
-    if (!showAddOns) {
-      setShowAddOns(true);
-      setSelectedCategories([""]);
-    } else {
-      setSelectedCategories((prev) => [...prev, ""]);
-    }
+    setSelectedCategories((prev) => [...prev, ""]);
   };
 
   const resetAddOnsForm = (): void => {
     setAddOnsFullName("");
     setAddOnsSeat("");
     setSelectedAddOns([]);
-    setSelectedCategories([]);
-    setShowAddOns(false);
+    setSelectedCategories([""]);
   };
 
   const handleSubmitAddOns = async (): Promise<void> => {
@@ -183,8 +161,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       }
     }
 
-    // insert per item based on your table:
-    // customer_session_add_ons(add_on_id, quantity, price, full_name, seat_number)
     for (const selected of selectedAddOns) {
       const { error } = await supabase.from("customer_session_add_ons").insert({
         add_on_id: selected.id,
@@ -223,12 +199,20 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         <div className="bookadd-card">
           <IonItem className="form-item">
             <IonLabel position="stacked">Full Name *</IonLabel>
-            <IonInput value={addOnsFullName} placeholder="Enter full name" onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")} />
+            <IonInput
+              value={addOnsFullName}
+              placeholder="Enter full name"
+              onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")}
+            />
           </IonItem>
 
           <IonItem className="form-item">
             <IonLabel position="stacked">Seat Number *</IonLabel>
-            <IonSelect value={addOnsSeat} placeholder="Choose seat" onIonChange={(e) => setAddOnsSeat(e.detail.value)}>
+            <IonSelect
+              value={addOnsSeat}
+              placeholder="Choose seat"
+              onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}
+            >
               {seatGroups.map((g) => (
                 <React.Fragment key={g.title}>
                   <IonSelectOption disabled value={`__${g.title}__`}>
@@ -245,142 +229,119 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
           </IonItem>
 
           <IonButton expand="block" onClick={addAnotherCategory}>
-            {showAddOns ? "Add More Add-Ons" : "Add-Ons"}
+            Add More Add-Ons
           </IonButton>
 
-          {showAddOns &&
-            selectedCategories.map((category, index) => {
-              const categoryItems = addOns.filter((a) => a.category === category);
+          {/* CATEGORY BLOCKS */}
+          {selectedCategories.map((category, index) => {
+            const categoryItems = addOns.filter((a) => a.category === category);
 
-              // prevent duplicate category in other blocks
-              const usedByOthers = new Set(selectedCategories.filter((_, i) => i !== index).filter(Boolean));
-              const availableCategories = categories.filter((c) => !usedByOthers.has(c));
+            return (
+              <div key={index} className="addon-block">
+                <div className="addon-row">
+                  <IonItem className="form-item addon-flex">
+                    <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                    <IonSelect
+                      value={category}
+                      placeholder="Choose a category"
+                      onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}
+                    >
+                      {categories.map((cat) => (
+                        <IonSelectOption key={`${cat}-${index}`} value={cat}>
+                          {cat}
+                        </IonSelectOption>
+                      ))}
+                    </IonSelect>
+                  </IonItem>
 
-              return (
-                <div key={index} className="addon-block">
-                  <div className="addon-row">
-                    <IonItem className="form-item addon-flex">
-                      <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
-                      <IonSelect value={category} placeholder="Choose a category" onIonChange={(e) => handleCategoryChange(index, (e.detail.value as string) ?? "")}>
-                        {availableCategories.map((cat) => (
-                          <IonSelectOption key={cat} value={cat}>
-                            {cat}
+                  <IonButton color="danger" onClick={() => removeCategoryBlock(index)}>
+                    x
+                  </IonButton>
+                </div>
+
+                {category && (
+                  <>
+                    <IonItem className="form-item">
+                      <IonLabel position="stacked">Select {category} Item</IonLabel>
+                      <IonSelect
+                        placeholder="Choose an item"
+                        onIonChange={(e) => {
+                          const selectedId = asString(e.detail.value);
+                          if (!selectedId) return;
+
+                          const addOn = addOns.find((a) => a.id === selectedId);
+                          if (!addOn) return;
+
+                          setSelectedAddOns((prev) => {
+                            const existing = prev.find((s) => s.id === selectedId);
+                            if (existing) return prev; // already selected
+                            return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
+                          });
+                        }}
+                      >
+                        {categoryItems.map((a) => (
+                          <IonSelectOption key={a.id} value={a.id}>
+                            {a.name} - ₱{a.price} (Stock: {a.stocks})
                           </IonSelectOption>
                         ))}
                       </IonSelect>
                     </IonItem>
+                  </>
+                )}
+              </div>
+            );
+          })}
 
-                    <IonButton color="danger" onClick={() => removeCategory(index)}>
-                      x
-                    </IonButton>
-                  </div>
-
-                  {category && (
-                    <>
-                      <IonItem className="form-item">
-                        <IonLabel position="stacked">Select {category} Item</IonLabel>
-                        <IonSelect
-                          placeholder="Choose an item"
-                          onIonChange={(e) => {
-                            const selectedId = e.detail.value as string | undefined;
-                            if (!selectedId) return;
-
-                            const addOn = addOns.find((a) => a.id === selectedId);
-                            if (!addOn) return;
-
-                            setSelectedAddOns((prev) => {
-                              const existing = prev.find((s) => s.id === selectedId);
-                              if (existing) return prev;
-                              return [
-                                ...prev,
-                                { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 },
-                              ];
-                            });
-                          }}
-                        >
-                          {categoryItems.map((a) => (
-                            <IonSelectOption key={a.id} value={a.id}>
-                              {a.name} - ₱{a.price} (Stock: {a.stocks})
-                            </IonSelectOption>
-                          ))}
-                        </IonSelect>
-                      </IonItem>
-
-                      {addOnsByCategory(category).length > 0 && (
-                        <IonList>
-                          <IonListHeader>
-                            <IonLabel>Selected {category} Items</IonLabel>
-                          </IonListHeader>
-
-                          {addOnsByCategory(category).map((selected) => (
-                            <IonItem key={selected.id} className="addon-item">
-                              <IonLabel>
-                                <div style={{ fontWeight: 700 }}>{selected.name}</div>
-                                <div style={{ opacity: 0.8 }}>₱{selected.price}</div>
-                                <div style={{ marginTop: 4, fontWeight: 700 }}>Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}</div>
-                              </IonLabel>
-
-                              <div className="addon-actions">
-                                <IonLabel className="qty-label">Qty:</IonLabel>
-                                <IonInput
-                                  type="number"
-                                  min={1}
-                                  value={selected.quantity}
-                                  className="qty-input"
-                                  onIonChange={(e) => {
-                                    const v = parseInt((e.detail.value ?? "0").toString(), 10);
-                                    handleAddOnQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
-                                  }}
-                                />
-                                <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
-                                  Remove
-                                </IonButton>
-                              </div>
-                            </IonItem>
-                          ))}
-                        </IonList>
-                      )}
-                    </>
-                  )}
-                </div>
-              );
-            })}
-
-          {/* ✅ ORDER SUMMARY */}
+          {/* SELECTED ITEMS LIST (always visible) */}
           {selectedAddOns.length > 0 && (
-            <div className="addon-summary">
-              <p className="addon-summary-title">Order Summary</p>
+            <IonList style={{ marginTop: 12 }}>
+              <IonListHeader>
+                <IonLabel>Selected Items</IonLabel>
+              </IonListHeader>
 
-              <IonList>
-                {selectedSummaryByCategory.map(({ category, items }) => (
-                  <React.Fragment key={category}>
-                    <IonListHeader>
+              {selectedSummaryByCategory.map(({ category, items }) => (
+                <React.Fragment key={category}>
+                  <IonListHeader>
+                    <IonLabel>
+                      <strong>{category}</strong>
+                    </IonLabel>
+                  </IonListHeader>
+
+                  {items.map((selected) => (
+                    <IonItem key={selected.id} className="addon-item">
                       <IonLabel>
-                        <strong>{category}</strong>
+                        <div style={{ fontWeight: 700 }}>{selected.name}</div>
+                        <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
+                        <div style={{ marginTop: 4, fontWeight: 700 }}>
+                          Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
+                        </div>
                       </IonLabel>
-                    </IonListHeader>
 
-                    {items.map((it) => (
-                      <IonItem key={it.id}>
-                        <IonLabel>
-                          <div style={{ fontWeight: 700 }}>{it.name}</div>
-                          <div style={{ opacity: 0.85 }}>
-                            Qty: {it.quantity} × ₱{it.price} = <strong>₱{(it.quantity * it.price).toFixed(2)}</strong>
-                          </div>
-                        </IonLabel>
-                      </IonItem>
-                    ))}
-                  </React.Fragment>
-                ))}
-              </IonList>
+                      <div className="addon-actions">
+                        <IonLabel className="qty-label">Qty:</IonLabel>
+                        <IonInput
+                          type="number"
+                          min={1}
+                          value={selected.quantity}
+                          className="qty-input"
+                          onIonChange={(e) => {
+                            const raw = (e.detail.value ?? "").toString();
+                            const v = parseInt(raw, 10);
+                            handleAddOnQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
+                          }}
+                        />
 
-              <p className="addon-summary-cats">
-                <strong>Categories:</strong> {selectedCategoryNames.join(", ")}
-              </p>
-            </div>
+                        <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
+                          Remove
+                        </IonButton>
+                      </div>
+                    </IonItem>
+                  ))}
+                </React.Fragment>
+              ))}
+            </IonList>
           )}
 
-          {/* TOTAL + SUBMIT */}
           <div className="summary-section" style={{ marginTop: 12 }}>
             <p className="summary-text">
               <strong>Add-Ons Total: ₱{addOnsTotal.toFixed(2)}</strong>

@@ -4,15 +4,8 @@ import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
 const HOURLY_RATE = 20;
-const FREE_MINUTES = 5; // system-only (not shown on receipt)
+const FREE_MINUTES = 5; // hidden
 const DOWN_PAYMENT = 50;
-
-interface CustomerSessionAddOn {
-  add_ons: { name: string };
-  quantity: number;
-  price: number;
-  total: number;
-}
 
 interface CustomerSession {
   id: string;
@@ -21,19 +14,19 @@ interface CustomerSession {
   customer_type: string;
   customer_field: string;
   has_id: boolean;
-  id_number: string;
+  id_number: string | null;
   hour_avail: string;
   time_started: string;
   time_ended: string;
 
-  // minutes stored in DB
-  total_time: number;
+  // minutes stored in DB (numeric may come as number|string)
+  total_time: number | string;
 
-  total_amount: number;
+  total_amount: number | string;
+
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
-  customer_session_add_ons: CustomerSessionAddOn[];
 }
 
 const Admin_customer_reservation: React.FC = () => {
@@ -55,32 +48,33 @@ const Admin_customer_reservation: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
 
-  const fetchReservations = async () => {
+  const toNum = (v: number | string | null | undefined): number => {
+    if (typeof v === "number") return v;
+    if (typeof v === "string") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  const fetchReservations = async (): Promise<void> => {
     setLoading(true);
 
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select(
-        `
-          *,
-          customer_session_add_ons(
-            add_ons(name),
-            quantity,
-            price,
-            total
-          )
-        `
-      )
+      .select(`*`)
       .eq("reservation", "yes")
       .order("reservation_date", { ascending: false });
 
     if (error) {
       console.error(error);
-      alert("Error loading reservations");
-    } else {
-      setSessions((data as CustomerSession[]) || []);
+      alert(`Error loading reservations: ${error.message}`);
+      setSessions([]);
+      setLoading(false);
+      return;
     }
 
+    setSessions((data as CustomerSession[]) || []);
     setLoading(false);
   };
 
@@ -90,7 +84,7 @@ const Admin_customer_reservation: React.FC = () => {
     return end.getFullYear() >= 2999;
   };
 
-  const getStatus = (session: CustomerSession) => {
+  const getStatus = (session: CustomerSession): string => {
     const now = new Date(nowTick);
     const start = new Date(session.time_started);
     const end = new Date(session.time_ended);
@@ -103,11 +97,10 @@ const Admin_customer_reservation: React.FC = () => {
   const canShowStopButton = (session: CustomerSession): boolean => {
     if (!isOpenTimeSession(session)) return false;
 
-    const now = nowTick;
     const start = new Date(session.time_started).getTime();
     if (!Number.isFinite(start)) return false;
 
-    return now >= start;
+    return nowTick >= start;
   };
 
   const diffMinutes = (startIso: string, endIso: string): number => {
@@ -136,30 +129,15 @@ const Admin_customer_reservation: React.FC = () => {
     return Number((chargeMinutes * perMinute).toFixed(2));
   };
 
-  const getAddOnsTotal = (s: CustomerSession): number => {
-    return (s.customer_session_add_ons || []).reduce((sum, a) => sum + (Number(a.total) || 0), 0);
-  };
-
-  const getPaymentSummary = (s: CustomerSession) => {
-    const totalCost = Number(s.total_amount || 0);
-    const down = DOWN_PAYMENT;
-
-    const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
-    const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
-
-    return { totalCost, down, change, balance };
-  };
-
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
-    return Number(s.total_time || 0);
+    return toNum(s.total_time);
   };
 
   const getLiveTotalCost = (s: CustomerSession): number => {
     const endIso = new Date().toISOString();
     const timeCost = computeCostWithFreeMinutes(s.time_started, endIso);
-    const addOnsTotal = getAddOnsTotal(s);
-    return Number((timeCost + addOnsTotal).toFixed(2));
+    return Number(timeCost.toFixed(2));
   };
 
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
@@ -174,9 +152,7 @@ const Admin_customer_reservation: React.FC = () => {
       const nowIso = new Date().toISOString();
       const totalMinutes = diffMinutes(session.time_started, nowIso);
 
-      const timeCost = computeCostWithFreeMinutes(session.time_started, nowIso);
-      const addOnsTotal = getAddOnsTotal(session);
-      const totalCost = Number((timeCost + addOnsTotal).toFixed(2));
+      const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
       const { data: updated, error } = await supabase
         .from("customer_sessions")
@@ -187,17 +163,7 @@ const Admin_customer_reservation: React.FC = () => {
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
-        .select(
-          `
-            *,
-            customer_session_add_ons(
-              add_ons(name),
-              quantity,
-              price,
-              total
-            )
-          `
-        )
+        .select(`*`)
         .single();
 
       if (error || !updated) {
@@ -215,6 +181,7 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
+  // ✅ Admin delete (requires RLS policy to allow admin role)
   const deleteSession = async (session: CustomerSession): Promise<void> => {
     const ok = window.confirm(
       `Delete this reservation record?\n\n${session.full_name}\nReservation Date: ${
@@ -243,7 +210,7 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  const renderTimeOut = (s: CustomerSession) =>
+  const renderTimeOut = (s: CustomerSession): string =>
     isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleString("en-PH");
 
   return (
@@ -270,7 +237,6 @@ const Admin_customer_reservation: React.FC = () => {
               <th>Total Time</th>
               <th>Total Amount</th>
               <th>Seat</th>
-              <th>Add-Ons</th>
               <th>Status</th>
               <th>Action</th>
             </tr>
@@ -303,19 +269,10 @@ const Admin_customer_reservation: React.FC = () => {
                     ₱
                     {isOpenTimeSession(session)
                       ? getLiveTotalCost(session).toFixed(2)
-                      : Number(session.total_amount || 0).toFixed(2)}
+                      : toNum(session.total_amount).toFixed(2)}
                   </td>
 
                   <td>{session.seat_number}</td>
-
-                  <td>
-                    {session.customer_session_add_ons?.length > 0
-                      ? session.customer_session_add_ons
-                          .map((a) => `${a.add_ons.name} x${a.quantity}`)
-                          .join(", ")
-                      : "None"}
-                  </td>
-
                   <td>{getStatus(session)}</td>
 
                   <td style={{ display: "flex", gap: 8 }}>
@@ -395,8 +352,6 @@ const Admin_customer_reservation: React.FC = () => {
               <span>{formatMinutesToTime(getDisplayedTotalMinutes(selectedSession))}</span>
             </div>
 
-            {/* no "Free Minutes" on receipt */}
-
             {canShowStopButton(selectedSession) && (
               <div style={{ marginTop: 12 }}>
                 <button
@@ -410,25 +365,16 @@ const Admin_customer_reservation: React.FC = () => {
               </div>
             )}
 
-            {selectedSession.customer_session_add_ons?.length > 0 && (
-              <>
-                <hr />
-                <h4>Add-Ons</h4>
-                {selectedSession.customer_session_add_ons.map((addOn, index) => (
-                  <div key={index} className="receipt-row">
-                    <span>
-                      {addOn.add_ons.name} x{addOn.quantity}
-                    </span>
-                    <span>₱{Number(addOn.total || 0).toFixed(2)}</span>
-                  </div>
-                ))}
-              </>
-            )}
-
             <hr />
 
             {(() => {
-              const { totalCost, down, change, balance } = getPaymentSummary(selectedSession);
+              const open = isOpenTimeSession(selectedSession);
+              const totalCost = open ? getLiveTotalCost(selectedSession) : toNum(selectedSession.total_amount);
+
+              const down = DOWN_PAYMENT;
+              const change = totalCost <= down ? Number((down - totalCost).toFixed(2)) : 0;
+              const balance = totalCost > down ? Number((totalCost - down).toFixed(2)) : 0;
+
               const isChange = change > 0;
               const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
               const totalValue = isChange ? change : balance;
