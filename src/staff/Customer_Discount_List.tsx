@@ -97,7 +97,7 @@ const Customer_Discount_List: React.FC = () => {
       return;
     }
 
-    setRows((data as PromoBookingRow[]) || []);
+    setRows((data as unknown as PromoBookingRow[]) || []);
     setLoading(false);
   };
 
