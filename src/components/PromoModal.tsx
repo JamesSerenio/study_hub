@@ -1,9 +1,3 @@
-// src/components/PromoModal.tsx
-// ✅ Writes to promo_bookings (NO staff_id)
-// ✅ NO reservation toggle
-// ✅ Blocks seat/time conflicts (common_area) and schedule conflicts (conference_room)
-// ✅ status is auto-computed by time: "upcoming" | "ongoing" | "finished"
-
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonModal,
@@ -57,6 +51,16 @@ interface PromoModalProps {
   onSaved: () => void;
   seatGroups: SeatGroup[];
 }
+
+type SeatBlockedRow = {
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: "promo" | "regular" | string;
+};
+
+const isPackageArea = (v: unknown): v is PackageArea =>
+  v === "common_area" || v === "conference_room";
 
 /* ================= HELPERS ================= */
 
@@ -146,11 +150,11 @@ const checkPromoAvailability = async (params: {
 }): Promise<{ ok: boolean; message?: string }> => {
   const { area, seatNumber, startIso, endIso } = params;
 
-  // 1) promo_bookings conflicts (any status that means "blocking")
+  // 1) promo_bookings conflicts (blocking statuses)
   let q1 = supabase
     .from("promo_bookings")
     .select("id", { count: "exact", head: true })
-    .in("status", ["upcoming", "ongoing"]) // blocking statuses
+    .in("status", ["upcoming", "ongoing"])
     .eq("area", area)
     .lt("start_at", endIso)
     .gt("end_at", startIso);
@@ -214,6 +218,10 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
   const [packages, setPackages] = useState<PackageRow[]>([]);
   const [options, setOptions] = useState<PackageOptionRow[]>([]);
 
+  // ✅ occupied seats for the selected time window (common area) + conference room flag
+  const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
+  const [conferenceBlocked, setConferenceBlocked] = useState<boolean>(false);
+
   const allSeats = useMemo<{ label: string; value: string }[]>(() => {
     const list: { label: string; value: string }[] = [];
     seatGroups.forEach((g) => {
@@ -221,6 +229,8 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     });
     return list;
   }, [seatGroups]);
+
+  const allSeatValues = useMemo<string[]>(() => allSeats.map((s) => s.value), [allSeats]);
 
   const activePackages = useMemo(() => packages.filter((p) => p.is_active), [packages]);
   const areaPackages = useMemo(() => activePackages.filter((p) => p.area === area), [activePackages, area]);
@@ -260,6 +270,40 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     return new Date(endIso).toLocaleString("en-PH");
   }, [endIso]);
 
+  // ✅ Available seats = remove occupied seats from list
+  const availableSeatOptions = useMemo(() => {
+    const blocked = new Set(occupiedSeats.map((x) => String(x).trim()).filter(Boolean));
+    return allSeats.filter((s) => !blocked.has(s.value));
+  }, [allSeats, occupiedSeats]);
+
+  // ✅ Fetch blocked seats for the current time window (via seat_blocked_times view)
+  const fetchBlocked = async (start: string, end: string): Promise<void> => {
+    // common area: check all seats; conference: check "CONFERENCE_ROOM"
+    const seatKeys = [...allSeatValues, "CONFERENCE_ROOM"];
+
+    const { data, error } = await supabase
+      .from("seat_blocked_times")
+      .select("seat_number, start_at, end_at, source")
+      .in("seat_number", seatKeys)
+      .lt("start_at", end)
+      .gt("end_at", start);
+
+    if (error) {
+      console.error(error);
+      setOccupiedSeats([]);
+      setConferenceBlocked(false);
+      return;
+    }
+
+    const rows = (data ?? []) as SeatBlockedRow[];
+    const blockedSeats = rows
+      .map((r) => String(r.seat_number).trim())
+      .filter(Boolean);
+
+    setOccupiedSeats(blockedSeats.filter((s) => s !== "CONFERENCE_ROOM"));
+    setConferenceBlocked(blockedSeats.includes("CONFERENCE_ROOM"));
+  };
+
   useEffect(() => {
     if (!isOpen) return;
 
@@ -273,6 +317,9 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setOptionId("");
       setSeatNumber("");
       setStartIso("");
+
+      setOccupiedSeats([]);
+      setConferenceBlocked(false);
 
       const pkRes = await supabase
         .from("packages")
@@ -301,8 +348,8 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         return;
       }
 
-      setPackages(((pkRes.data as PackageRow[]) ?? []) as PackageRow[]);
-      setOptions(((opRes.data as PackageOptionRow[]) ?? []) as PackageOptionRow[]);
+      setPackages((pkRes.data as PackageRow[]) ?? []);
+      setOptions((opRes.data as PackageOptionRow[]) ?? []);
       setLoading(false);
     };
 
@@ -320,6 +367,30 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     setSeatNumber("");
   }, [packageId]);
 
+  // ✅ Update blocked seats when schedule changes (start/end)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (!startIso || !endIso) {
+      setOccupiedSeats([]);
+      setConferenceBlocked(false);
+      return;
+    }
+
+    void fetchBlocked(startIso, endIso);
+
+    // if seat currently selected becomes occupied, remove it
+    // (prevents saving with a hidden/invalid seat)
+    // NOTE: only for common area
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, startIso, endIso, allSeatValues.join("|")]);
+
+  useEffect(() => {
+    if (area !== "common_area") return;
+    if (!seatNumber) return;
+    if (occupiedSeats.includes(seatNumber)) setSeatNumber("");
+  }, [area, seatNumber, occupiedSeats]);
+
   const submitPromo = async (): Promise<void> => {
     setErr("");
 
@@ -333,7 +404,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     const startMs = new Date(startIso).getTime();
     if (!Number.isFinite(startMs) || startMs < Date.now()) return setErr("Start time must be today or later.");
 
-    if (area === "common_area" && !seatNumber) return setErr("Seat number is required for Common Area.");
+    if (area === "conference_room" && conferenceBlocked) {
+      return setErr("Conference room is not available for the selected schedule.");
+    }
+
+    if (area === "common_area") {
+      if (!seatNumber) return setErr("Seat number is required for Common Area.");
+      if (occupiedSeats.includes(seatNumber)) return setErr("Selected seat is already occupied for that schedule.");
+    }
 
     setLoading(true);
 
@@ -349,11 +427,9 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       return setErr(availability.message ?? "Not available.");
     }
 
-    // optional: if logged in, store user_id; otherwise null
     const userRes = await supabase.auth.getUser();
     const userId = userRes.data.user?.id ?? null;
 
-    // ✅ match your promo_bookings columns (NO staff_id)
     const payload = {
       user_id: userId,
       full_name: name,
@@ -364,7 +440,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       start_at: startIso,
       end_at: endIso,
       price: toNum(selectedOption.price),
-      status: computeStatus(startIso, endIso), // "upcoming" | "ongoing" | "finished"
+      status: computeStatus(startIso, endIso),
     };
 
     const ins = await supabase.from("promo_bookings").insert(payload);
@@ -406,6 +482,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           </IonText>
         )}
 
+        {area === "conference_room" && startIso && endIso && conferenceBlocked && (
+          <IonText color="danger">
+            <p style={{ marginTop: 0 }}>Conference room is occupied for the selected schedule.</p>
+          </IonText>
+        )}
+
         <IonItem>
           <IonLabel position="stacked">Full Name</IonLabel>
           <IonInput value={fullName} onIonInput={(e) => setFullName(String(e.detail.value ?? ""))} />
@@ -413,7 +495,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
         <IonItem>
           <IonLabel position="stacked">Area</IonLabel>
-          <IonSelect value={area} onIonChange={(e) => setArea(e.detail.value as PackageArea)}>
+          <IonSelect
+            value={area}
+            onIonChange={(e) => {
+              const v: unknown = e.detail.value;
+              setArea(isPackageArea(v) ? v : "common_area");
+            }}
+          >
             <IonSelectOption value="common_area">Common Area</IonSelectOption>
             <IonSelectOption value="conference_room">Conference Room</IonSelectOption>
           </IonSelect>
@@ -464,7 +552,8 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           >
             {packageOptions.map((o) => (
               <IonSelectOption key={o.id} value={o.id}>
-                {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
+                {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱
+                {toNum(o.price).toFixed(2)}
               </IonSelectOption>
             ))}
           </IonSelect>
@@ -486,8 +575,19 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         {area === "common_area" ? (
           <IonItem>
             <IonLabel position="stacked">Seat Number</IonLabel>
-            <IonSelect value={seatNumber} placeholder="Select seat" onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}>
-              {allSeats.map((s) => (
+            <IonSelect
+              value={seatNumber}
+              placeholder={
+                startIso && endIso
+                  ? availableSeatOptions.length
+                    ? "Select seat"
+                    : "No available seats"
+                  : "Select date & time first"
+              }
+              disabled={!startIso || !endIso || availableSeatOptions.length === 0}
+              onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}
+            >
+              {availableSeatOptions.map((s) => (
                 <IonSelectOption key={s.value} value={s.value}>
                   {s.label}
                 </IonSelectOption>
