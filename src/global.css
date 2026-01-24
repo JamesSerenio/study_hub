@@ -1117,18 +1117,128 @@ ion-content,
   opacity: 0.9;
 }
 
-/* ---------- SEATS ---------- */
-.seat-wrap {
+.seatmap-wrap {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
+  justify-content: center;
+  padding: 12px;
 }
 
-/* Seat section title (1stF / etc.) */
-.seat-wrap .summary-text {
-  color: #45a049;
+.seatmap-card {
+  width: 100%;
+  max-width: 540px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  padding: 14px;
 }
+
+.seatmap-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.seatmap-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+  opacity: 0.9;
+}
+
+.seatmap-date {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.75;
+}
+
+.seatmap-stage {
+  position: relative;
+  width: 100%;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.seatmap-img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Pins */
+.seat-pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 0;
+
+  width: 20px;
+  height: 20px;
+  padding: 0;
+
+  border-radius: 999px;
+  font-weight: 900;
+  font-size: 9px;
+  line-height: 20px;
+  text-align: center;
+
+  color: #141414;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
+  outline: 2px solid rgba(255, 255, 255, 0.95);
+}
+
+.seat-pin.room {
+  width: 128px;
+  height: 24px;
+  line-height: 24px;
+  font-size: 10px;
+  padding: 0 10px;
+}
+
+/* Selected pin (calibrate mode) */
+.seat-pin.selected {
+  outline: 2px solid rgba(0, 0, 0, 0.65);
+}
+
+/* colors */
+.seat-blue { background: #2aa8ff; }
+.seat-yellow { background: #f4c542; }
+.seat-orange { background: #d88a2a; }
+.seat-purple { background: #b55cff; }
+
+/* legend */
+.seatmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 12px;
+  padding: 8px 6px 2px;
+  opacity: 0.9;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+  outline: 2px solid rgba(0, 0, 0, 0.06);
+}
+
+/* calibrate hint */
+.seatmap-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
 
 /* ---------- SUMMARY ---------- */
 .summary-section {
@@ -1210,22 +1320,7 @@ ion-content,
   border-radius: 16px;
 }
 
-/* Image wrapper */
-.seat-image-wrap {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  margin-top: 10px;
-}
 
-/* ✅ IMAGE SIZE FIXED */
-.seat-image {
-  width: 100%;
-  max-width: 540px;   /* 🔥 sakto na */
-  height: auto;
-  border-radius: 14px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
-}
 
 /* =========================
    CUSTOMER ADD-ONS (RESPONSIVE)

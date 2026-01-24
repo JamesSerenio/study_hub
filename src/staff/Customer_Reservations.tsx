@@ -11,7 +11,7 @@ interface CustomerSession {
   id: string;
   date: string;
   full_name: string;
-  customer_type: string;
+  customer_type: string; // promo type exists in DB, but we will FILTER it out here
   customer_field: string;
   has_id: boolean;
   id_number: string | null;
@@ -19,9 +19,7 @@ interface CustomerSession {
   time_started: string;
   time_ended: string;
 
-  // DB column is numeric (minutes). Supabase can return number or string.
   total_time: number | string;
-
   total_amount: number | string;
 
   reservation: string;
@@ -55,6 +53,12 @@ const Customer_Reservations: React.FC = () => {
     return 0;
   };
 
+  // ✅ treat "promo" as a special type we DON'T want to record/show in reservations
+  const isPromoType = (t: string | null | undefined): boolean => {
+    const v = (t ?? "").trim().toLowerCase();
+    return v === "promo";
+  };
+
   const fetchReservations = async (): Promise<void> => {
     setLoading(true);
 
@@ -62,6 +66,9 @@ const Customer_Reservations: React.FC = () => {
       .from("customer_sessions")
       .select(`*`)
       .eq("reservation", "yes")
+      // ✅ do NOT include promo records in this page
+      // this excludes exact "promo" (case-insensitive handled in JS filter too)
+      .neq("customer_type", "promo")
       .order("reservation_date", { ascending: false });
 
     if (error) {
@@ -72,7 +79,10 @@ const Customer_Reservations: React.FC = () => {
       return;
     }
 
-    setSessions((data as CustomerSession[]) || []);
+    // ✅ extra safety: filter promo in frontend too (handles "Promo", "PROMO", " promo ")
+    const cleaned = ((data as CustomerSession[]) || []).filter((s) => !isPromoType(s.customer_type));
+
+    setSessions(cleaned);
     setLoading(false);
   };
 
@@ -106,37 +116,32 @@ const Customer_Reservations: React.FC = () => {
     return Number((chargeMinutes * perMinute).toFixed(2));
   };
 
-  // ✅ build the scheduled start datetime using reservation_date + time_started time
   const getScheduledStartDateTime = (s: CustomerSession): Date => {
     const start = new Date(s.time_started);
 
     if (s.reservation_date) {
-      const d = new Date(s.reservation_date); // date-only in DB
+      const d = new Date(s.reservation_date);
       start.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
     }
 
     return start;
   };
 
-  // DISPLAY: OPEN => running minutes, CLOSED => saved total_time (minutes)
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
     return toNum(s.total_time);
   };
 
-  // OPEN => live time-cost; CLOSED => saved total_amount
   const getLiveTotalCost = (s: CustomerSession): number => {
     const endIso = new Date(nowTick).toISOString();
     const timeCost = computeCostWithFreeMinutes(s.time_started, endIso);
     return Number(timeCost.toFixed(2));
   };
 
-  // ✅ total cost (open uses live)
   const getSessionTotalCost = (s: CustomerSession): number => {
     return isOpenTimeSession(s) ? getLiveTotalCost(s) : toNum(s.total_amount);
   };
 
-  // ✅ balance after downpayment (this is what you want as "Total Amount")
   const getSessionBalance = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
     return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
@@ -147,7 +152,6 @@ const Customer_Reservations: React.FC = () => {
     return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
   };
 
-  // ✅ status uses reservation_date + time_started time
   const getStatus = (session: CustomerSession): string => {
     const now = new Date(nowTick);
     const start = getScheduledStartDateTime(session);
@@ -158,7 +162,6 @@ const Customer_Reservations: React.FC = () => {
     return "Finished";
   };
 
-  // ✅ Stop Time only shows when NOW >= (reservation_date + time_started time)
   const canShowStopButton = (session: CustomerSession): boolean => {
     if (!isOpenTimeSession(session)) return false;
 
@@ -187,8 +190,8 @@ const Customer_Reservations: React.FC = () => {
         .from("customer_sessions")
         .update({
           time_ended: nowIso,
-          total_time: totalMinutes, // minutes
-          total_amount: totalCost, // system cost
+          total_time: totalMinutes,
+          total_amount: totalCost,
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
@@ -200,8 +203,15 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
+      // if updated row became promo somehow, remove it from the list
+      setSessions((prev) => {
+        const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
+        return next.filter((s) => !isPromoType(s.customer_type));
+      });
+
+      setSelectedSession((prev) =>
+        prev?.id === session.id ? (updated as CustomerSession) : prev
+      );
     } catch (e) {
       console.error(e);
       alert("Stop Time failed.");
@@ -237,7 +247,6 @@ const Customer_Reservations: React.FC = () => {
             <tr>
               <th>Reservation Date</th>
               <th>Full Name</th>
-              <th>Type</th>
               <th>Field</th>
               <th>Has ID</th>
               <th>Specific ID</th>
@@ -264,7 +273,6 @@ const Customer_Reservations: React.FC = () => {
                       : "N/A"}
                   </td>
                   <td>{session.full_name}</td>
-                  <td>{session.customer_type}</td>
                   <td>{session.customer_field}</td>
                   <td>{session.has_id ? "Yes" : "No"}</td>
                   <td>{session.id_number || "N/A"}</td>
@@ -274,7 +282,6 @@ const Customer_Reservations: React.FC = () => {
 
                   <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
 
-                  {/* ✅ Total Amount = BALANCE (same as TOTAL BALANCE) */}
                   <td>₱{getSessionBalance(session).toFixed(2)}</td>
 
                   <td>{session.seat_number}</td>
@@ -379,7 +386,6 @@ const Customer_Reservations: React.FC = () => {
 
               return (
                 <>
-                  {/* ✅ Total Amount must match TOTAL BALANCE */}
                   <div className="receipt-row">
                     <span>Total Amount</span>
                     <span>₱{balance.toFixed(2)}</span>
