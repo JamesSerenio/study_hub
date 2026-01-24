@@ -91,37 +91,37 @@ const Staff_Dashboard: React.FC = () => {
       { id: "2", label: "2", x: 75.3, y: 30.5, kind: "seat" },
       { id: "1", label: "1", x: 82,y: 30.5, kind: "seat" },
 
-      { id: "11", label: "11", x: 33.0, y: 41.2, kind: "seat" },
-      { id: "10", label: "10", x: 41.2, y: 44.0, kind: "seat" },
-      { id: "9", label: "9", x: 46.0, y: 40.8, kind: "seat" },
+      { id: "11", label: "11", x: 14.5, y: 42.1, kind: "seat" },
+      { id: "10", label: "10", x: 26, y: 44.0, kind: "seat" },
+      { id: "9", label: "9", x: 29.4, y: 40.8, kind: "seat" },
 
-      { id: "8A", label: "8A", x: 54.4, y: 42.7, kind: "seat" },
-      { id: "8B", label: "8B", x: 54.4, y: 46.4, kind: "seat" },
+      { id: "8A", label: "8A", x: 43.5, y: 41, kind: "seat" },
+      { id: "8B", label: "8B", x: 43.5, y: 44.6, kind: "seat" },
 
-      { id: "7A", label: "7A", x: 62.4, y: 42.7, kind: "seat" },
-      { id: "7B", label: "7B", x: 62.4, y: 46.4, kind: "seat" },
+      { id: "7A", label: "7A", x: 59.6, y: 40.7, kind: "seat" },
+      { id: "7B", label: "7B", x: 59.6, y: 44.4, kind: "seat" },
 
-      { id: "13", label: "13", x: 46.5, y: 63.6, kind: "seat" },
+      { id: "13", label: "13", x: 42.5, y: 62.2, kind: "seat" },
 
-      { id: "14", label: "14", x: 56.0, y: 57.8, kind: "seat" },
-      { id: "15", label: "15", x: 59.2, y: 57.8, kind: "seat" },
-      { id: "16", label: "16", x: 62.4, y: 57.8, kind: "seat" },
-      { id: "17", label: "17", x: 65.6, y: 57.8, kind: "seat" },
+      { id: "14", label: "14", x: 49.5, y: 53.6, kind: "seat" },
+      { id: "15", label: "15", x: 56, y: 53.6, kind: "seat" },
+      { id: "16", label: "16", x: 62.5, y: 53.6, kind: "seat" },
+      { id: "17", label: "17", x: 69.1, y: 53.6, kind: "seat" },
 
-      { id: "25", label: "25", x: 58.8, y: 66.3, kind: "seat" },
+      { id: "25", label: "25", x: 57.1, y: 62.1, kind: "seat" },
 
-      { id: "18", label: "18", x: 56.0, y: 73.6, kind: "seat" },
-      { id: "19", label: "19", x: 59.2, y: 73.6, kind: "seat" },
-      { id: "20", label: "20", x: 62.4, y: 73.6, kind: "seat" },
+      { id: "18", label: "18", x: 49.5, y: 70.8, kind: "seat" },
+      { id: "19", label: "19", x: 58.4, y: 70.8, kind: "seat" },
+      { id: "20", label: "20", x: 67.6, y: 70.8, kind: "seat" },
 
-      { id: "24", label: "24", x: 73.2, y: 60.4, kind: "seat" },
-      { id: "23", label: "23", x: 76.6, y: 65.0, kind: "seat" },
-      { id: "22", label: "22", x: 72.8, y: 69.2, kind: "seat" },
-      { id: "21", label: "21", x: 79.4, y: 71.0, kind: "seat" },
+      { id: "24", label: "24", x: 77.5, y: 58, kind: "seat" },
+      { id: "23", label: "23", x: 83.4, y: 60.7, kind: "seat" },
+      { id: "22", label: "22", x: 75.8, y: 66.3, kind: "seat" },
+      { id: "21", label: "21", x: 83, y: 70, kind: "seat" },
 
-      { id: "12A", label: "12A", x: 35.0, y: 75.0, kind: "seat" },
-      { id: "12B", label: "12B", x: 39.4, y: 75.0, kind: "seat" },
-      { id: "12C", label: "12C", x: 43.8, y: 75.0, kind: "seat" },
+      { id: "12A", label: "12A", x: 10.7, y: 68.1, kind: "seat" },
+      { id: "12B", label: "12B", x: 17.8, y: 69.6, kind: "seat" },
+      { id: "12C", label: "12C", x: 25.7, y: 69.6, kind: "seat" },
     ],
     []
   );
@@ -240,7 +240,7 @@ const Staff_Dashboard: React.FC = () => {
     setPinPositionFromClick(e.clientX, e.clientY);
   };
 
-  const clearSaved = (): void => {
+  const clearSaved = (): void => { 
     if (!calibrate) return;
     localStorage.removeItem(STORAGE_KEY);
     setStored({});
