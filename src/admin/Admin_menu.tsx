@@ -17,26 +17,28 @@ import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 
-/* Pages */
+/* ================= PAGES ================= */
 import Admin_Dashboard from "./Admin_Dashboard";
 import Admin_Add_Ons from "./Admin_Add_Ons";
 import Admin_Item_Lists from "./Admin_Item_Lists";
 import Admin_customer_list from "./Admin_customer_list";
 import Admin_customer_reservation from "./Admin_customer_reservation";
-import Admin_Packages from "./Admin_Packages"; // ✅ ADD THIS
+import Admin_Packages from "./Admin_Packages";
+import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List"; // ✅ ADD
 
-/* Assets */
+/* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
 import addOnsIcon from "../assets/ons.png";
 import itemIcon from "../assets/item.png";
 import customerListIcon from "../assets/list.png";
 import reservationIcon from "../assets/reserve.png";
-import promotionIcon from "../assets/promotion.png"; // ✅ ADD THIS
+import promotionIcon from "../assets/promotion.png";
+import discountIcon from "../assets/discount.png"; // ✅ ADD
 import studyHubLogo from "../assets/study_hub.png";
 
 const Admin_menu: React.FC = () => {
   const history = useHistory();
-  const [activePage, setActivePage] = useState("dashboard");
+  const [activePage, setActivePage] = useState<string>("dashboard");
 
   const menuItems = [
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
@@ -45,26 +47,39 @@ const Admin_menu: React.FC = () => {
     { name: "Customer List", key: "customer_list", icon: customerListIcon },
     { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
 
-    // ✅ NEW MENU ITEM
+    // ✅ PROMOS
     { name: "Promotions", key: "packages", icon: promotionIcon },
+
+    // ✅ DISCOUNT RECORDS
+    {
+      name: "Discount Records",
+      key: "discount_records",
+      icon: discountIcon,
+    },
   ];
 
   const renderContent = () => {
     switch (activePage) {
       case "dashboard":
         return <Admin_Dashboard />;
+
       case "add_ons":
         return <Admin_Add_Ons />;
+
       case "item_lists":
         return <Admin_Item_Lists />;
+
       case "customer_list":
         return <Admin_customer_list />;
+
       case "customer_reservation":
         return <Admin_customer_reservation />;
 
-      // ✅ NEW PAGE
       case "packages":
         return <Admin_Packages />;
+
+      case "discount_records":
+        return <Admin_Customer_Discount_List />;
 
       default:
         return <h2>Welcome Admin</h2>;
@@ -86,22 +101,34 @@ const Admin_menu: React.FC = () => {
             <IonToolbar>
               <div className="menu-brand">
                 <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
-                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+                <span className="menu-title-text figma-title">
+                  Me Tyme Lounge
+                </span>
               </div>
             </IonToolbar>
           </IonHeader>
 
           <IonContent>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4 }}
+            >
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
                   <IonItem
                     button
                     lines="none"
-                    className={`menu-item ${activePage === item.key ? "active" : ""}`}
+                    className={`menu-item ${
+                      activePage === item.key ? "active" : ""
+                    }`}
                     onClick={() => setActivePage(item.key)}
                   >
-                    <img src={item.icon} alt={item.name} className="menu-icon" />
+                    <img
+                      src={item.icon}
+                      alt={item.name}
+                      className="menu-icon"
+                    />
                     <span className="menu-text">{item.name}</span>
                   </IonItem>
                 </IonMenuToggle>
