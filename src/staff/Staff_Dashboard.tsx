@@ -2,11 +2,13 @@
 // ✅ Normal mode: view-only
 // ✅ Calibrate mode: add ?calibrate=1 (click pin, then click image to place)
 // ✅ Saved in localStorage so di nawawala kahit lumipat ng menu
+// ✅ Connected to DB: uses seat_blocked_times view to color seats
 // ✅ Strict TypeScript (no "any")
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonPage, IonContent } from "@ionic/react";
 import seatsImage from "../assets/seats.png";
+import { supabase } from "../utils/supabaseClient";
 
 type SeatStatus = "temp_available" | "occupied_temp" | "occupied" | "reserved";
 type PinKind = "seat" | "room";
@@ -67,18 +69,27 @@ const saveStored = (m: StoredMap): void => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(m));
 };
 
+type SeatBlockedRow = {
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: "promo" | "regular" | string;
+};
+
+const normalizeSeatId = (v: string): string => String(v).trim();
+
 const Staff_Dashboard: React.FC = () => {
   // ✅ default pins (baseline)
   const defaultPins: SeatPin[] = useMemo(
     () => [
-      { id: "CONFERENCE_ROOM", label: "CONFERENCE ROOM", x: 27.0, y: 22.8, kind: "room" },
+      { id: "CONFERENCE_ROOM", label: "CONFERENCE ROOM", x: 26.0, y: 23.8, kind: "room" },
 
-      { id: "6", label: "6", x: 51.2, y: 30.8, kind: "seat" },
-      { id: "5", label: "5", x: 54.8, y: 30.8, kind: "seat" },
-      { id: "4", label: "4", x: 58.4, y: 30.8, kind: "seat" },
-      { id: "3", label: "3", x: 62.0, y: 30.8, kind: "seat" },
-      { id: "2", label: "2", x: 72.8, y: 30.8, kind: "seat" },
-      { id: "1", label: "1", x: 76.4, y: 30.8, kind: "seat" },
+      { id: "6", label: "6", x: 40.8, y: 30.5, kind: "seat" },
+      { id: "5", label: "5", x: 47.5, y: 30.5, kind: "seat" },
+      { id: "4", label: "4", x: 54, y: 30.5, kind: "seat" },
+      { id: "3", label: "3", x: 60.3, y: 30.5, kind: "seat" },
+      { id: "2", label: "2", x: 75.3, y: 30.5, kind: "seat" },
+      { id: "1", label: "1", x: 82,y: 30.5, kind: "seat" },
 
       { id: "11", label: "11", x: 33.0, y: 41.2, kind: "seat" },
       { id: "10", label: "10", x: 41.2, y: 44.0, kind: "seat" },
@@ -126,16 +137,8 @@ const Staff_Dashboard: React.FC = () => {
     });
   }, [defaultPins, stored]);
 
-  // demo statuses (replace later with DB)
-  const [statusBySeat] = useState<Record<string, SeatStatus>>({
-    "1": "temp_available",
-    "2": "occupied_temp",
-    "3": "occupied",
-    "4": "temp_available",
-    "5": "reserved",
-    "6": "temp_available",
-    CONFERENCE_ROOM: "reserved",
-  });
+  // ✅ DB-driven statuses (seat_blocked_times)
+  const [statusBySeat, setStatusBySeat] = useState<Record<string, SeatStatus>>({});
 
   // current date
   const [now, setNow] = useState<Date>(new Date());
@@ -159,6 +162,58 @@ const Staff_Dashboard: React.FC = () => {
 
   const stageRef = useRef<HTMLDivElement | null>(null);
 
+  const allSeatIds = useMemo<string[]>(() => pins.map((p) => p.id), [pins]);
+
+  // ✅ load seat statuses from DB (every 15s + on open)
+  const loadSeatStatuses = async (): Promise<void> => {
+    const startIso = new Date().toISOString();
+    const endIso = new Date("2999-12-31T23:59:59.000Z").toISOString();
+
+    // seat_blocked_times already merges promo + regular (as you used in BookingModal)
+    const { data, error } = await supabase
+      .from("seat_blocked_times")
+      .select("seat_number, start_at, end_at, source")
+      .in("seat_number", allSeatIds)
+      .lt("start_at", endIso)
+      .gt("end_at", startIso);
+
+    if (error) {
+      console.error("Seat status error:", error.message);
+      // fallback: mark all as available
+      const fallback: Record<string, SeatStatus> = {};
+      allSeatIds.forEach((id) => (fallback[id] = "temp_available"));
+      setStatusBySeat(fallback);
+      return;
+    }
+
+    const rows = (data ?? []) as SeatBlockedRow[];
+    const blocked = new Set(rows.map((r) => normalizeSeatId(r.seat_number)));
+
+    const next: Record<string, SeatStatus> = {};
+    for (const id of allSeatIds) {
+      if (blocked.has(id)) {
+        // map to your legend colors
+        next[id] = "occupied";
+      } else {
+        next[id] = "temp_available";
+      }
+    }
+    setStatusBySeat(next);
+  };
+
+  useEffect(() => {
+    void loadSeatStatuses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allSeatIds.join("|")]);
+
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      void loadSeatStatuses();
+    }, 15000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allSeatIds.join("|")]);
+
   const setPinPositionFromClick = (clientX: number, clientY: number): void => {
     if (!calibrate) return;
     if (!selectedPinId) return;
@@ -172,7 +227,6 @@ const Staff_Dashboard: React.FC = () => {
     const xPct = (xPx / rect.width) * 100;
     const yPct = (yPx / rect.height) * 100;
 
-    // clamp
     const x = Math.max(0, Math.min(100, Number(xPct.toFixed(2))));
     const y = Math.max(0, Math.min(100, Number(yPct.toFixed(2))));
 
@@ -183,7 +237,6 @@ const Staff_Dashboard: React.FC = () => {
 
   const onStageClick = (e: React.MouseEvent<HTMLDivElement>): void => {
     if (!calibrate) return;
-    // click on stage to place selected pin
     setPinPositionFromClick(e.clientX, e.clientY);
   };
 
@@ -221,7 +274,6 @@ const Staff_Dashboard: React.FC = () => {
                     style={{ left: `${p.x}%`, top: `${p.y}%` }}
                     title={calibrate ? `Click to select: ${p.label}` : `${p.label} • ${st}`}
                     onClick={(ev) => {
-                      // stop stage click so di ma-move agad
                       ev.stopPropagation();
                       if (calibrate) setSelectedPinId(p.id);
                     }}
