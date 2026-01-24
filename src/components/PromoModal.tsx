@@ -1,4 +1,8 @@
 // src/components/PromoModal.tsx
+// ✅ Writes to promo_bookings (NO staff_id)
+// ✅ Adds Reservation toggle (pending vs approved)
+// ✅ Blocks seat/time conflicts (common_area) and schedule conflicts (conference_room)
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonModal,
@@ -18,6 +22,7 @@ import {
   IonText,
   IonCard,
   IonCardContent,
+  IonToggle,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -25,7 +30,6 @@ import { supabase } from "../utils/supabaseClient";
 /* ================= TYPES ================= */
 
 type SeatGroup = { title: string; seats: string[] };
-
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
 
@@ -65,10 +69,10 @@ const toNum = (v: number | string | null | undefined): number => {
   return 0;
 };
 
-// "YYYY-MM-DDTHH:mm" (local) -> ISO (UTC)
+// "YYYY-MM-DDTHH:mm" local -> ISO
 const localToIso = (v: string): string => new Date(v).toISOString();
 
-// ISO -> "YYYY-MM-DDTHH:mm" (local)
+// ISO -> "YYYY-MM-DDTHH:mm" local
 const isoToLocal = (iso: string): string => {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -89,7 +93,6 @@ const parseAmenities = (text: string | null): string[] => {
     .map((x) => x.trim())
     .filter(Boolean);
 };
-
 
 const formatDuration = (v: number, u: DurationUnit): string => {
   const unit =
@@ -123,6 +126,70 @@ const computeEndIso = (startIso: string, opt: PackageOptionRow): string => {
   return d.toISOString();
 };
 
+/**
+ * ✅ Overlap rule:
+ * existing.start < new.end AND existing.end > new.start
+ */
+const checkPromoAvailability = async (params: {
+  area: PackageArea;
+  seatNumber: string;
+  startIso: string;
+  endIso: string;
+}): Promise<{ ok: boolean; message?: string }> => {
+  const { area, seatNumber, startIso, endIso } = params;
+
+  // 1) promo_bookings conflicts (pending/approved blocks availability)
+  let q1 = supabase
+    .from("promo_bookings")
+    .select("id", { count: "exact", head: true })
+    .in("status", ["pending", "approved"])
+    .eq("area", area)
+    .lt("start_at", endIso)
+    .gt("end_at", startIso);
+
+  if (area === "common_area") {
+    q1 = q1.eq("seat_number", seatNumber);
+  } else {
+    // conference room promos usually store seat_number as null
+    q1 = q1.is("seat_number", null);
+  }
+
+  const r1 = await q1;
+  if (r1.error) return { ok: false, message: r1.error.message };
+  if ((r1.count ?? 0) > 0) {
+    return {
+      ok: false,
+      message:
+        area === "common_area"
+          ? "Seat is not available for the selected schedule."
+          : "Conference room is not available for the selected schedule.",
+    };
+  }
+
+  // 2) customer_sessions conflicts (blocks promo vs normal booking too)
+  const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
+
+  const r2 = await supabase
+    .from("customer_sessions")
+    .select("id", { count: "exact", head: true })
+    .lt("time_started", endIso)
+    .gt("time_ended", startIso)
+    .eq("seat_number", seatKey);
+
+  if (r2.error) return { ok: false, message: r2.error.message };
+  if ((r2.count ?? 0) > 0) {
+    return {
+      ok: false,
+      message:
+        area === "common_area"
+          ? "Seat is already occupied in customer sessions for that schedule."
+          : "Conference room is already occupied in customer sessions for that schedule.",
+    };
+  }
+
+  return { ok: true };
+};
+
 /* ================= COMPONENT ================= */
 
 const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatGroups }) => {
@@ -131,6 +198,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
   // customer inputs
   const [fullName, setFullName] = useState<string>("");
+  const [isReservation, setIsReservation] = useState<boolean>(true); // ✅ added
   const [area, setArea] = useState<PackageArea>("common_area");
   const [packageId, setPackageId] = useState<string>("");
   const [optionId, setOptionId] = useState<string>("");
@@ -149,11 +217,8 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     return list;
   }, [seatGroups]);
 
-  // only active packages
-  const activePackages = useMemo<PackageRow[]>(() => packages.filter((p) => p.is_active), [packages]);
-
-  // packages filtered by chosen area
-  const areaPackages = useMemo<PackageRow[]>(() => activePackages.filter((p) => p.area === area), [activePackages, area]);
+  const activePackages = useMemo(() => packages.filter((p) => p.is_active), [packages]);
+  const areaPackages = useMemo(() => activePackages.filter((p) => p.area === area), [activePackages, area]);
 
   const selectedPackage = useMemo<PackageRow | null>(() => {
     return areaPackages.find((p) => p.id === packageId) ?? null;
@@ -168,18 +233,22 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     return packageOptions.find((o) => o.id === optionId) ?? null;
   }, [packageOptions, optionId]);
 
-  const amenitiesList = useMemo<string[]>(() => parseAmenities(selectedPackage?.amenities ?? null), [selectedPackage]);
+  const amenitiesList = useMemo(() => parseAmenities(selectedPackage?.amenities ?? null), [selectedPackage]);
 
   const totalAmount = useMemo<number>(() => {
     if (!selectedOption) return 0;
     return Number(toNum(selectedOption.price).toFixed(2));
   }, [selectedOption]);
 
-  const endTimeLabel = useMemo<string>(() => {
+  const endIso = useMemo<string>(() => {
     if (!selectedOption || !startIso) return "";
-    const endIso = computeEndIso(startIso, selectedOption);
-    return new Date(endIso).toLocaleString("en-PH");
+    return computeEndIso(startIso, selectedOption);
   }, [selectedOption, startIso]);
+
+  const endTimeLabel = useMemo<string>(() => {
+    if (!endIso) return "";
+    return new Date(endIso).toLocaleString("en-PH");
+  }, [endIso]);
 
   /* ================= LOAD ================= */
 
@@ -190,8 +259,9 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setLoading(true);
       setErr("");
 
-      // reset customer form
+      // reset form
       setFullName("");
+      setIsReservation(true);
       setArea("common_area");
       setPackageId("");
       setOptionId("");
@@ -233,14 +303,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     void load();
   }, [isOpen]);
 
-  // if area changes: reset package/option/seat
   useEffect(() => {
     setPackageId("");
     setOptionId("");
     setSeatNumber("");
   }, [area]);
 
-  // if package changes: reset option/seat
   useEffect(() => {
     setOptionId("");
     setSeatNumber("");
@@ -252,70 +320,54 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     setErr("");
 
     const name = fullName.trim();
-    if (!name) {
-      setErr("Full name is required.");
-      return;
-    }
-    if (!area) {
-      setErr("Select area.");
-      return;
-    }
-    if (!selectedPackage) {
-      setErr("Select promo package.");
-      return;
-    }
-    if (!selectedOption) {
-      setErr("Select duration/price option.");
-      return;
-    }
-    if (!startIso) {
-      setErr("Select start date & time.");
-      return;
-    }
+    if (!name) return setErr("Full name is required.");
+    if (!selectedPackage) return setErr("Select promo package.");
+    if (!selectedOption) return setErr("Select duration/price option.");
+    if (!startIso) return setErr("Select start date & time.");
+    if (!endIso) return setErr("Invalid end time.");
 
     const startMs = new Date(startIso).getTime();
-    if (!Number.isFinite(startMs) || startMs < Date.now()) {
-      setErr("Start time must be today or later.");
-      return;
-    }
+    if (!Number.isFinite(startMs) || startMs < Date.now()) return setErr("Start time must be today or later.");
 
-    if (area === "common_area" && !seatNumber) {
-      setErr("Seat number is required for Common Area.");
-      return;
-    }
+    if (area === "common_area" && !seatNumber) return setErr("Seat number is required for Common Area.");
 
     setLoading(true);
 
+    // optional: attach user_id if logged in, else null
     const userRes = await supabase.auth.getUser();
-    const uid = userRes.data.user?.id ?? null;
+    const userId = userRes.data.user?.id ?? null;
 
-    if (userRes.error) {
+    const availability = await checkPromoAvailability({
+      area,
+      seatNumber,
+      startIso,
+      endIso,
+    });
+
+    if (!availability.ok) {
       setLoading(false);
-      setErr(userRes.error.message);
-      return;
+      return setErr(availability.message ?? "Not available.");
     }
 
-    // NOTE: requires promo_bookings table
+    // ✅ EXACT columns from your promo_bookings table
     const payload = {
-      user_id: uid,
+      user_id: userId,
       full_name: name,
-      area: area,
+      area,
       package_id: selectedPackage.id,
       package_option_id: selectedOption.id,
       seat_number: area === "common_area" ? seatNumber : null,
       start_at: startIso,
-      end_at: computeEndIso(startIso, selectedOption),
+      end_at: endIso,
       price: toNum(selectedOption.price),
-      status: "pending",
-      created_at: new Date().toISOString(),
+      status: isReservation ? "pending" : "approved",
     };
 
     const ins = await supabase.from("promo_bookings").insert(payload);
 
     if (ins.error) {
       setLoading(false);
-      setErr(ins.error.message);
-      return;
+      return setErr(ins.error.message);
     }
 
     setLoading(false);
@@ -357,7 +409,17 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           <IonInput value={fullName} onIonInput={(e) => setFullName(String(e.detail.value ?? ""))} />
         </IonItem>
 
-        {/* ✅ choose area first */}
+        {/* ✅ Reservation toggle */}
+        <IonItem lines="none">
+          <IonLabel>Reservation</IonLabel>
+          <IonToggle checked={isReservation} onIonChange={(e) => setIsReservation(Boolean(e.detail.checked))} />
+        </IonItem>
+        <IonText>
+          <p style={{ marginTop: 6, opacity: 0.8, fontSize: 13 }}>
+            {isReservation ? "Status will be PENDING (reserved)." : "Status will be APPROVED (confirmed)."}
+          </p>
+        </IonText>
+
         <IonItem>
           <IonLabel position="stacked">Area</IonLabel>
           <IonSelect value={area} onIonChange={(e) => setArea(e.detail.value as PackageArea)}>
@@ -366,7 +428,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           </IonSelect>
         </IonItem>
 
-        {/* ✅ packages from admin, filtered by area */}
         <IonItem>
           <IonLabel position="stacked">Promo Package</IonLabel>
           <IonSelect
@@ -402,7 +463,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           </IonCard>
         ) : null}
 
-        {/* ✅ options are admin-defined (duration + price) */}
         <IonItem>
           <IonLabel position="stacked">Duration / Price</IonLabel>
           <IonSelect
@@ -419,7 +479,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           </IonSelect>
         </IonItem>
 
-        {/* ✅ calendar/time started */}
         <IonItem>
           <IonLabel position="stacked">Start Date & Time</IonLabel>
           <IonInput
@@ -428,20 +487,19 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             value={startIso ? isoToLocal(startIso) : ""}
             onIonInput={(e) => {
               const v = String(e.detail.value ?? "");
-              if (!v) {
-                setStartIso("");
-                return;
-              }
-              setStartIso(localToIso(v));
+              setStartIso(v ? localToIso(v) : "");
             }}
           />
         </IonItem>
 
-        {/* ✅ seat number only for common_area */}
         {area === "common_area" ? (
           <IonItem>
             <IonLabel position="stacked">Seat Number</IonLabel>
-            <IonSelect value={seatNumber} placeholder="Select seat" onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}>
+            <IonSelect
+              value={seatNumber}
+              placeholder="Select seat"
+              onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}
+            >
               {allSeats.map((s) => (
                 <IonSelectOption key={s.value} value={s.value}>
                   {s.label}
@@ -451,7 +509,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           </IonItem>
         ) : null}
 
-        {/* ✅ total amount */}
         <IonCard style={{ marginTop: 12 }}>
           <IonCardContent>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
@@ -467,15 +524,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
             {endTimeLabel ? (
               <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
-                Valid until: <strong>{endTimeLabel}</strong>
+                Time End: <strong>{endTimeLabel}</strong>
               </div>
             ) : null}
           </IonCardContent>
         </IonCard>
 
-        {/* ✅ apply/submit */}
         <IonButton expand="block" style={{ marginTop: 12 }} disabled={loading} onClick={() => void submitPromo()}>
-          Apply / Submit
+          Save Promo Booking
         </IonButton>
       </IonContent>
     </IonModal>
