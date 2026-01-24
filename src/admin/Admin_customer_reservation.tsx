@@ -57,6 +57,12 @@ const Admin_customer_reservation: React.FC = () => {
     return 0;
   };
 
+  // ✅ promo detector (case/space insensitive)
+  const isPromoType = (t: string | null | undefined): boolean => {
+    const v = (t ?? "").trim().toLowerCase();
+    return v === "promo";
+  };
+
   const fetchReservations = async (): Promise<void> => {
     setLoading(true);
 
@@ -64,6 +70,8 @@ const Admin_customer_reservation: React.FC = () => {
       .from("customer_sessions")
       .select(`*`)
       .eq("reservation", "yes")
+      // ✅ do NOT record/show promo reservations here
+      .neq("customer_type", "promo")
       .order("reservation_date", { ascending: false });
 
     if (error) {
@@ -74,7 +82,10 @@ const Admin_customer_reservation: React.FC = () => {
       return;
     }
 
-    setSessions((data as CustomerSession[]) || []);
+    // ✅ extra safety in frontend for "Promo", " PROMO ", etc.
+    const cleaned = ((data as CustomerSession[]) || []).filter((s) => !isPromoType(s.customer_type));
+
+    setSessions(cleaned);
     setLoading(false);
   };
 
@@ -200,7 +211,12 @@ const Admin_customer_reservation: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
+      // ✅ if it becomes promo, remove from list
+      setSessions((prev) => {
+        const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
+        return next.filter((s) => !isPromoType(s.customer_type));
+      });
+
       setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
       console.error(e);
@@ -256,7 +272,10 @@ const Admin_customer_reservation: React.FC = () => {
             <tr>
               <th>Reservation Date</th>
               <th>Full Name</th>
-              <th>Type</th>
+
+              {/* ❌ removed promo/type display */}
+              {/* <th>Type</th> */}
+
               <th>Field</th>
               <th>Has ID</th>
               <th>Specific ID</th>
@@ -284,7 +303,10 @@ const Admin_customer_reservation: React.FC = () => {
                       : "N/A"}
                   </td>
                   <td>{session.full_name}</td>
-                  <td>{session.customer_type}</td>
+
+                  {/* ❌ removed promo/type display */}
+                  {/* <td>{session.customer_type}</td> */}
+
                   <td>{session.customer_field}</td>
                   <td>{session.has_id ? "Yes" : "No"}</td>
                   <td>{session.id_number || "N/A"}</td>
@@ -294,7 +316,6 @@ const Admin_customer_reservation: React.FC = () => {
 
                   <td>{formatMinutesToTime(mins)}</td>
 
-                  {/* ✅ Total Amount = BALANCE (same as TOTAL BALANCE) */}
                   <td>₱{getSessionBalance(session).toFixed(2)}</td>
 
                   <td>{session.seat_number}</td>
@@ -396,13 +417,11 @@ const Admin_customer_reservation: React.FC = () => {
               const change = getSessionChange(selectedSession);
               const balance = getSessionBalance(selectedSession);
 
-              const isChange = change > 0;
-              const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
-              const totalValue = isChange ? change : balance;
+              const totalLabel = change > 0 ? "TOTAL CHANGE" : "TOTAL BALANCE";
+              const totalValue = change > 0 ? change : balance;
 
               return (
                 <>
-                  {/* ✅ Total Amount must match TOTAL BALANCE */}
                   <div className="receipt-row">
                     <span>Total Amount</span>
                     <span>₱{balance.toFixed(2)}</span>

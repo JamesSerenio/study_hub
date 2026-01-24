@@ -102,7 +102,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const [selected, setSelected] = useState<PromoBookingRow | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // optional: auto refresh status/time every 10s
+  // auto refresh status/time every 10s
   const [tick, setTick] = useState<number>(Date.now());
   useEffect(() => {
     const t = window.setInterval(() => setTick(Date.now()), 10000);
@@ -134,14 +134,15 @@ const Admin_Customer_Discount_List: React.FC = () => {
       )
       .order("created_at", { ascending: false });
 
-    if (error || !data) {
+    if (error) {
       console.error(error);
+      alert(`Load error: ${error.message}`);
       setRows([]);
       setLoading(false);
       return;
     }
 
-    const dbRows: PromoBookingDBRow[] = data as unknown as PromoBookingDBRow[];
+    const dbRows: PromoBookingDBRow[] = (data ?? []) as unknown as PromoBookingDBRow[];
 
     const normalized: PromoBookingRow[] = dbRows.map((row) => ({
       id: row.id,
@@ -164,20 +165,74 @@ const Admin_Customer_Discount_List: React.FC = () => {
     void fetchPromoBookings();
   }, []);
 
+  /**
+   * ✅ IMPORTANT:
+   * If you added customer_sessions.promo_booking_id with ON DELETE CASCADE,
+   * deleting promo_bookings will also delete customer_sessions automatically.
+   *
+   * If you DID NOT add that column yet, this code will also manually delete
+   * matching customer_sessions rows by promo_booking_id (if exists),
+   * and falls back to matching by name+times+seat if promo_booking_id does not exist.
+   */
   const deletePromoBooking = async (row: PromoBookingRow): Promise<void> => {
     const ok = window.confirm(
-      `Delete this promo record?\n\n${row.full_name}\n${prettyArea(row.area)} - ${seatLabel(row)}\nStart: ${new Date(
-        row.start_at
-      ).toLocaleString("en-PH")}`
+      `Delete this promo record?\n\n${row.full_name}\n${prettyArea(row.area)} - ${seatLabel(
+        row
+      )}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
     );
     if (!ok) return;
 
     try {
       setDeletingId(row.id);
 
-      const { error } = await supabase.from("promo_bookings").delete().eq("id", row.id);
+      // 1) Try delete from customer_sessions first (safe), then promo_bookings.
+      // If you already have ON DELETE CASCADE, this delete is optional but harmless (it will delete 0 rows).
+      // A) If you added promo_booking_id column in customer_sessions:
+      const { error: csErr1 } = await supabase
+        .from("customer_sessions")
+        .delete()
+        .eq("promo_booking_id", row.id);
+
+      // If promo_booking_id doesn't exist in DB, csErr1 will have a message like "column does not exist"
+      // In that case, fallback to a best-effort matching delete:
+      if (csErr1 && /promo_booking_id/i.test(csErr1.message)) {
+        const seat = row.area === "conference_room" ? "CONFERENCE ROOM" : row.seat_number ?? "";
+
+        // Best-effort fallback (not perfect, but works if you store same values)
+        const { error: csErr2 } = await supabase
+          .from("customer_sessions")
+          .delete()
+          .eq("customer_type", "promo")
+          .eq("full_name", row.full_name)
+          .eq("seat_number", seat)
+          .eq("time_started", row.start_at)
+          .eq("time_ended", row.end_at);
+
+        if (csErr2) {
+          alert(`Delete customer session error: ${csErr2.message}`);
+          return;
+        }
+      } else if (csErr1) {
+        // other delete error
+        alert(`Delete customer session error: ${csErr1.message}`);
+        return;
+      }
+
+      // 2) Delete promo_bookings
+      const { data, error } = await supabase
+        .from("promo_bookings")
+        .delete()
+        .eq("id", row.id)
+        .select("id")
+        .maybeSingle();
+
       if (error) {
-        alert(`Delete error: ${error.message}`);
+        alert(`Delete promo error: ${error.message}`);
+        return;
+      }
+
+      if (!data?.id) {
+        alert("Delete failed: not permitted by RLS or record not found.");
         return;
       }
 

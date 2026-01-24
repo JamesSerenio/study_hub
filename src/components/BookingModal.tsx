@@ -1,7 +1,8 @@
 // src/components/BookingModal.tsx
-// ✅ FIX: Time Avail + Total Hours display is now exact (HH:MM), not decimal
-// ✅ FIX: Time Started / Time Out display removes seconds
-// ✅ FREE 5 minutes applied in system pricing only (NOT shown in summary UI)
+// ✅ FIX: Seat availability now checks BOTH promo_bookings and customer_sessions via seat_blocked_times view
+// ✅ FIX: multi-seat "1, 13" handled by the view (one seat per row)
+// ✅ FIX: reservation overlap uses correct condition: start < end AND end > start
+// ✅ NO "any" usage (typed rows + typed events)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -23,8 +24,11 @@ import {
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
-import type { IonInputCustomEvent, InputInputEventDetail, InputChangeEventDetail } from "@ionic/core";
-
+import type {
+  IonInputCustomEvent,
+  InputInputEventDetail,
+  InputChangeEventDetail,
+} from "@ionic/core";
 
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 5;
@@ -43,14 +47,6 @@ interface CustomerForm {
   time_started: string;
 }
 
-interface CustomerSessionRow {
-  seat_number: string;
-  time_ended: string;
-  reservation: string;
-  reservation_date?: string | null;
-  time_started: string;
-}
-
 type SeatGroup = { title: string; seats: string[] };
 
 type Props = {
@@ -62,6 +58,15 @@ type Props = {
 
 const isCustomerType = (v: unknown): v is CustomerType =>
   v === "" || v === "reviewer" || v === "student" || v === "regular";
+
+type SeatBlockedRow = {
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: "promo" | "regular" | string;
+};
+
+type SeatConflictRow = { seat_number: string };
 
 const formatTime12 = (hour24: number, minute: number): string => {
   const isPM = hour24 >= 12;
@@ -134,25 +139,15 @@ const parseTimeToISO = (timeInput: string, dateIsoOrDate: string): string | null
   return base.toISOString();
 };
 
-/**
- * ✅ Time Avail parsing (hours + minutes)
- * Accepts:
- * - "2" => 02:00
- * - "0:45" => 00:45
- * - "2:30" => 02:30
- * - "230" => 02:30 (HHMM shortcut when MM<=59)
- * - "100:30" => 100:30 (any hours)
- */
 const normalizeTimeAvail = (value: string): string | null => {
   const raw = value
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "")
-    .replace(/[^0-9:]/g, ""); // keep only digits and :
+    .replace(/[^0-9:]/g, "");
 
   if (!raw) return null;
 
-  // H+:MM (any hours)
   let m = raw.match(/^(\d{1,8}):(\d{1,2})$/);
   if (m) {
     const h = parseInt(m[1], 10);
@@ -164,12 +159,10 @@ const normalizeTimeAvail = (value: string): string | null => {
     return `${h.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}`;
   }
 
-  // digits only
   m = raw.match(/^(\d{1,8})$/);
   if (m) {
     const digits = m[1];
 
-    // HHMM shortcut (3-4 digits) if MM<=59
     if (digits.length === 3 || digits.length === 4) {
       const s = digits.padStart(4, "0");
       const hh = parseInt(s.slice(0, 2), 10);
@@ -180,7 +173,6 @@ const normalizeTimeAvail = (value: string): string | null => {
       }
     }
 
-    // hours only (ANY hours)
     const h = parseInt(digits, 10);
     if (!Number.isFinite(h) || h <= 0) return null;
     return `${h.toString().padStart(2, "0")}:00`;
@@ -189,7 +181,6 @@ const normalizeTimeAvail = (value: string): string | null => {
   return null;
 };
 
-// ✅ exact HH:MM display for total duration
 const toHHMM = (totalMinutes: number): string => {
   const mins = Math.max(0, Math.floor(totalMinutes));
   const h = Math.floor(mins / 60);
@@ -213,7 +204,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
   const [openTime, setOpenTime] = useState(false);
 
-  // ✅ default 00:00 (hours + minutes)
   const [timeAvail, setTimeAvail] = useState("00:00");
   const [timeAvailInput, setTimeAvailInput] = useState("00:00");
 
@@ -238,7 +228,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     return h * 60 + m;
   };
 
-  // ✅ pricing uses free minutes internally only
   const getAmountPeso = (): number => {
     const totalMin = getTotalMinutes();
     const billableMin = Math.max(0, totalMin - FREE_MINUTES);
@@ -263,33 +252,28 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     return addDuration(startIso, timeAvail);
   };
 
-  const fetchOccupiedSeats = async (date?: string, start?: string, end?: string): Promise<void> => {
-    let query = supabase
-      .from("customer_sessions")
-      .select("seat_number, time_ended, reservation, reservation_date, time_started");
+  // ✅ Unified seat blocking (promo + regular)
+  const fetchOccupiedSeats = async (startIso: string, endIso: string): Promise<void> => {
+    const { data, error } = await supabase
+      .from("seat_blocked_times")
+      .select("seat_number, start_at, end_at, source")
+      .lt("start_at", endIso)
+      .gt("end_at", startIso);
 
-    if (date && start && end) {
-      query = query
-        .eq("reservation", "yes")
-        .eq("reservation_date", date)
-        .lt("time_started", end)
-        .gt("time_ended", start);
-    } else {
-      const nowIso = new Date().toISOString();
-      query = query.lte("time_started", nowIso).gt("time_ended", nowIso);
+    if (error) {
+      console.error(error);
+      setOccupiedSeats([]);
+      return;
     }
 
-    const { data } = await query;
-    if (data) {
-      const seats = (data as CustomerSessionRow[]).flatMap((s) =>
-        s.seat_number.split(",").map((seat) => seat.trim())
-      );
-      setOccupiedSeats(seats);
-    }
+    const rows = (data ?? []) as SeatBlockedRow[];
+    const seats = rows.map((r) => String(r.seat_number).trim()).filter(Boolean);
+    setOccupiedSeats(seats);
   };
 
   useEffect(() => {
     if (!isOpen) return;
+
     const snap = new Date().toISOString();
     setTimeSnapshotIso(snap);
     setForm((p) => ({ ...p, time_started: snap }));
@@ -299,24 +283,37 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setTimeAvailInput("00:00");
     setOpenTime(false);
 
-    void fetchOccupiedSeats();
+    const startIso = snap;
+    const endIso = new Date(new Date(snap).getTime() + 60_000).toISOString(); // 1 minute window
+    void fetchOccupiedSeats(startIso, endIso);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen) return;
+
+    let startIso = new Date().toISOString();
     if (form.reservation && form.reservation_date) {
       const normalized = normalizeTimeShortcut(timeStartedInput) ?? timeStartedInput;
       const parsed = parseTimeToISO(normalized, form.reservation_date);
-      const startIso = parsed ?? form.time_started;
-      const endIso = openTime ? startIso : getTimeEndedFrom(startIso);
-      void fetchOccupiedSeats(form.reservation_date, startIso, endIso);
-    } else {
-      void fetchOccupiedSeats();
+      startIso = parsed ?? form.time_started;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.reservation, form.reservation_date, openTime, timeStartedInput, timeAvail]);
 
-  // ✅ remove seconds in display
+    let endIso: string;
+    if (openTime) {
+      endIso = new Date("2999-12-31T23:59:59.000Z").toISOString();
+    } else {
+      const computedEnd = getTimeEndedFrom(startIso);
+      endIso =
+        computedEnd === startIso
+          ? new Date(new Date(startIso).getTime() + 60_000).toISOString()
+          : computedEnd;
+    }
+
+    void fetchOccupiedSeats(startIso, endIso);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, form.reservation, form.reservation_date, openTime, timeStartedInput, timeAvail]);
+
   const formatPH = (d: Date) =>
     d.toLocaleString("en-PH", {
       year: "numeric",
@@ -354,7 +351,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     if (form.seat_number.length === 0) return alert("Please select at least one seat.");
     if (form.reservation && !form.reservation_date) return alert("Please select a reservation date.");
 
-    // ✅ capture and validate latest timeAvailInput
     if (!openTime) {
       const normalized = normalizeTimeAvail(timeAvailInput);
       if (!normalized) return alert("Invalid Time Avail. Examples: 0:45 / 2 / 2:30 / 100:30 / 230");
@@ -386,8 +382,26 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       ? new Date("2999-12-31T23:59:59.000Z").toISOString()
       : getTimeEndedFrom(startIsoToStore);
 
+    // ✅ Final safety check (prevents double booking at save time)
+    const { data: conflicts, error: conflictErr } = await supabase
+      .from("seat_blocked_times")
+      .select("seat_number")
+      .in("seat_number", form.seat_number)
+      .lt("start_at", timeEndedToStore)
+      .gt("end_at", startIsoToStore);
+
+    if (conflictErr) return alert(`Seat check error: ${conflictErr.message}`);
+
+    const conflictSeats = (conflicts ?? [])
+      .map((r: SeatConflictRow) => String(r.seat_number).trim())
+      .filter(Boolean);
+
+    if (conflictSeats.length > 0) {
+      return alert(`Seat already taken: ${conflictSeats.join(", ")}`);
+    }
+
     const totalMin = getTotalMinutes();
-    const totalHoursForDB = Number((totalMin / 60).toFixed(2)); // keep DB numeric compatible
+    const totalHoursForDB = Number((totalMin / 60).toFixed(2));
     const timeAmount = openTime ? 0 : getAmountPeso();
 
     const { error } = await supabase.from("customer_sessions").insert({
@@ -486,7 +500,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           <IonItem className="form-item">
             <IonLabel>ID</IonLabel>
-            <IonToggle checked={form.has_id} onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })} />
+            <IonToggle
+              checked={form.has_id}
+              onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })}
+            />
             <IonLabel slot="end">{form.has_id ? "With" : "Without"}</IonLabel>
           </IonItem>
 
@@ -503,7 +520,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           <IonItem className="form-item">
             <IonLabel>Reservation</IonLabel>
-            <IonToggle checked={form.reservation} onIonChange={(e) => setForm({ ...form, reservation: e.detail.checked })} />
+            <IonToggle
+              checked={form.reservation}
+              onIonChange={(e) => setForm({ ...form, reservation: e.detail.checked })}
+            />
             <IonLabel slot="end">{form.reservation ? "Yes" : "No"}</IonLabel>
           </IonItem>
 
@@ -537,34 +557,28 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             </>
           )}
 
-                <IonItem className="form-item">
-                <IonLabel position="stacked">Time Avail (HH:MM or hours)</IonLabel>
-                <IonInput
-                    type="text"
-                    inputMode="text"
-                    placeholder='Examples: 0:45 / 2 / 2:30 / 100:30 / 230'
-                    value={timeAvailInput}
-                    disabled={openTime}
-
-                    // ✅ FIX: correct Ionic event type
-                    onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => {
-                    setTimeAvailInput(e.detail.value ?? "");
-                    }}
-
-                    onIonBlur={() => commitTimeAvail(timeAvailInput)}
-
-                    // (optional) also commit here if your platform updates on change
-                    onIonChange={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
-                    const v = e.detail.value ?? "";
-                    setTimeAvailInput(v);
-                    commitTimeAvail(v);
-                    }}
-
-                    onKeyDown={(e) => {
-                    if (e.key === "Enter") commitTimeAvail(timeAvailInput);
-                    }}
-                />
-                </IonItem>
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Time Avail (HH:MM or hours)</IonLabel>
+            <IonInput
+              type="text"
+              inputMode="text"
+              placeholder='Examples: 0:45 / 2 / 2:30 / 100:30 / 230'
+              value={timeAvailInput}
+              disabled={openTime}
+              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => {
+                setTimeAvailInput(e.detail.value ?? "");
+              }}
+              onIonBlur={() => commitTimeAvail(timeAvailInput)}
+              onIonChange={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
+                const v = e.detail.value ?? "";
+                setTimeAvailInput(v);
+                commitTimeAvail(v);
+              }}
+              onKeyDown={(e: React.KeyboardEvent<HTMLIonInputElement>) => {
+                if (e.key === "Enter") commitTimeAvail(timeAvailInput);
+              }}
+            />
+          </IonItem>
 
           <div className="form-item seat-wrap">
             {seatGroups.map((group) => (
@@ -574,7 +588,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 </p>
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {group.seats.map((seat) => {
+                  {group.seats.map((seat: string) => {
                     const isOccupied = occupiedSeats.includes(seat);
                     const isSelected = form.seat_number.includes(seat);
                     if (isOccupied) return null;
@@ -612,7 +626,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
             {!openTime && (
               <>
-                {/* ✅ show exact HH:MM instead of decimal */}
                 <p className="summary-text">Total Hours: {totalHHMMPreview}</p>
                 <p className="summary-text">Total Amount: ₱{timeAmountPreview.toFixed(2)}</p>
               </>
