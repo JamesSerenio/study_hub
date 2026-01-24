@@ -1,7 +1,8 @@
 // src/components/PromoModal.tsx
 // ✅ Writes to promo_bookings (NO staff_id)
-// ✅ Adds Reservation toggle (pending vs approved)
+// ✅ NO reservation toggle
 // ✅ Blocks seat/time conflicts (common_area) and schedule conflicts (conference_room)
+// ✅ status is auto-computed by time: "upcoming" | "ongoing" | "finished"
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -22,7 +23,6 @@ import {
   IonText,
   IonCard,
   IonCardContent,
-  IonToggle,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -126,10 +126,18 @@ const computeEndIso = (startIso: string, opt: PackageOptionRow): string => {
   return d.toISOString();
 };
 
-/**
- * ✅ Overlap rule:
- * existing.start < new.end AND existing.end > new.start
- */
+/** status based on now vs start/end */
+const computeStatus = (startIso: string, endIso: string): "upcoming" | "ongoing" | "finished" => {
+  const now = Date.now();
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "upcoming";
+  if (now < start) return "upcoming";
+  if (now >= start && now <= end) return "ongoing";
+  return "finished";
+};
+
+/** Overlap rule: existing.start < new.end AND existing.end > new.start */
 const checkPromoAvailability = async (params: {
   area: PackageArea;
   seatNumber: string;
@@ -138,11 +146,11 @@ const checkPromoAvailability = async (params: {
 }): Promise<{ ok: boolean; message?: string }> => {
   const { area, seatNumber, startIso, endIso } = params;
 
-  // 1) promo_bookings conflicts (pending/approved blocks availability)
+  // 1) promo_bookings conflicts (any status that means "blocking")
   let q1 = supabase
     .from("promo_bookings")
     .select("id", { count: "exact", head: true })
-    .in("status", ["pending", "approved"])
+    .in("status", ["upcoming", "ongoing"]) // blocking statuses
     .eq("area", area)
     .lt("start_at", endIso)
     .gt("end_at", startIso);
@@ -150,7 +158,6 @@ const checkPromoAvailability = async (params: {
   if (area === "common_area") {
     q1 = q1.eq("seat_number", seatNumber);
   } else {
-    // conference room promos usually store seat_number as null
     q1 = q1.is("seat_number", null);
   }
 
@@ -167,6 +174,7 @@ const checkPromoAvailability = async (params: {
   }
 
   // 2) customer_sessions conflicts (blocks promo vs normal booking too)
+  // NOTE: store conference room sessions as seat_number = 'CONFERENCE_ROOM'
   const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
 
   const r2 = await supabase
@@ -196,16 +204,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
   const [loading, setLoading] = useState<boolean>(false);
   const [err, setErr] = useState<string>("");
 
-  // customer inputs
   const [fullName, setFullName] = useState<string>("");
-  const [isReservation, setIsReservation] = useState<boolean>(true); // ✅ added
   const [area, setArea] = useState<PackageArea>("common_area");
   const [packageId, setPackageId] = useState<string>("");
   const [optionId, setOptionId] = useState<string>("");
   const [seatNumber, setSeatNumber] = useState<string>("");
   const [startIso, setStartIso] = useState<string>("");
 
-  // data from admin (packages/options)
   const [packages, setPackages] = useState<PackageRow[]>([]);
   const [options, setOptions] = useState<PackageOptionRow[]>([]);
 
@@ -245,12 +250,15 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     return computeEndIso(startIso, selectedOption);
   }, [selectedOption, startIso]);
 
+  const statusPreview = useMemo(() => {
+    if (!startIso || !endIso) return "";
+    return computeStatus(startIso, endIso).toUpperCase();
+  }, [startIso, endIso]);
+
   const endTimeLabel = useMemo<string>(() => {
     if (!endIso) return "";
     return new Date(endIso).toLocaleString("en-PH");
   }, [endIso]);
-
-  /* ================= LOAD ================= */
 
   useEffect(() => {
     if (!isOpen) return;
@@ -259,9 +267,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setLoading(true);
       setErr("");
 
-      // reset form
       setFullName("");
-      setIsReservation(true);
       setArea("common_area");
       setPackageId("");
       setOptionId("");
@@ -314,8 +320,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     setSeatNumber("");
   }, [packageId]);
 
-  /* ================= SUBMIT ================= */
-
   const submitPromo = async (): Promise<void> => {
     setErr("");
 
@@ -333,10 +337,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     setLoading(true);
 
-    // optional: attach user_id if logged in, else null
-    const userRes = await supabase.auth.getUser();
-    const userId = userRes.data.user?.id ?? null;
-
     const availability = await checkPromoAvailability({
       area,
       seatNumber,
@@ -349,7 +349,11 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       return setErr(availability.message ?? "Not available.");
     }
 
-    // ✅ EXACT columns from your promo_bookings table
+    // optional: if logged in, store user_id; otherwise null
+    const userRes = await supabase.auth.getUser();
+    const userId = userRes.data.user?.id ?? null;
+
+    // ✅ match your promo_bookings columns (NO staff_id)
     const payload = {
       user_id: userId,
       full_name: name,
@@ -360,7 +364,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       start_at: startIso,
       end_at: endIso,
       price: toNum(selectedOption.price),
-      status: isReservation ? "pending" : "approved",
+      status: computeStatus(startIso, endIso), // "upcoming" | "ongoing" | "finished"
     };
 
     const ins = await supabase.from("promo_bookings").insert(payload);
@@ -374,8 +378,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     onSaved();
     onClose();
   };
-
-  /* ================= UI ================= */
 
   return (
     <IonModal isOpen={isOpen} onDidDismiss={onClose}>
@@ -408,17 +410,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           <IonLabel position="stacked">Full Name</IonLabel>
           <IonInput value={fullName} onIonInput={(e) => setFullName(String(e.detail.value ?? ""))} />
         </IonItem>
-
-        {/* ✅ Reservation toggle */}
-        <IonItem lines="none">
-          <IonLabel>Reservation</IonLabel>
-          <IonToggle checked={isReservation} onIonChange={(e) => setIsReservation(Boolean(e.detail.checked))} />
-        </IonItem>
-        <IonText>
-          <p style={{ marginTop: 6, opacity: 0.8, fontSize: 13 }}>
-            {isReservation ? "Status will be PENDING (reserved)." : "Status will be APPROVED (confirmed)."}
-          </p>
-        </IonText>
 
         <IonItem>
           <IonLabel position="stacked">Area</IonLabel>
@@ -495,11 +486,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         {area === "common_area" ? (
           <IonItem>
             <IonLabel position="stacked">Seat Number</IonLabel>
-            <IonSelect
-              value={seatNumber}
-              placeholder="Select seat"
-              onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}
-            >
+            <IonSelect value={seatNumber} placeholder="Select seat" onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}>
               {allSeats.map((s) => (
                 <IonSelectOption key={s.value} value={s.value}>
                   {s.label}
@@ -525,6 +512,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             {endTimeLabel ? (
               <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
                 Time End: <strong>{endTimeLabel}</strong>
+              </div>
+            ) : null}
+
+            {statusPreview ? (
+              <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
+                Status: <strong>{statusPreview}</strong>
               </div>
             ) : null}
           </IonCardContent>

@@ -1,13 +1,13 @@
 // src/pages/Customer_Discount_List.tsx
-// ✅ STAFF VIEW ONLY (NO EDIT / NO DELETE)
-// ✅ View promo/discount records from promo_bookings + receipt modal only
+// ✅ VIEW ONLY (NO EDIT / NO DELETE)
+// ✅ STATUS = UPCOMING | ONGOING | FINISHED (auto by time)
+// ✅ Works with Ionic React + strict TypeScript (NO "any")
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
 type PackageArea = "common_area" | "conference_room";
-type PromoStatus = "pending" | "approved" | "cancelled" | string;
 type DurationUnit = "hour" | "day" | "month" | "year";
 
 interface PromoBookingRow {
@@ -18,21 +18,43 @@ interface PromoBookingRow {
   seat_number: string | null;
   start_at: string;
   end_at: string;
-  price: number | string;
-  status: PromoStatus;
+  price: number;
 
-  // joins
-  packages?: { title: string | null } | null;
-  package_options?: {
+  packages: { title: string | null } | null;
+  package_options: {
     option_name: string | null;
     duration_value: number | null;
     duration_unit: DurationUnit | null;
-    price: number | string | null;
   } | null;
 }
 
-const toNum = (v: number | string | null | undefined): number => {
-  if (typeof v === "number") return v;
+/**
+ * ✅ The exact DB shape returned by Supabase select (with joins/aliases).
+ * This is REQUIRED to avoid TS errors in strict mode.
+ */
+interface PromoBookingDBRow {
+  id: string;
+  created_at: string;
+  full_name: string;
+  area: PackageArea;
+  seat_number: string | null;
+  start_at: string;
+  end_at: string;
+  price: number | string | null;
+
+  packages: { title: string | null } | null;
+
+  package_options: {
+    option_name: string | null;
+    duration_value: number | null;
+    duration_unit: DurationUnit | null;
+  } | null;
+}
+
+/* ================= HELPERS ================= */
+
+const toNumber = (v: number | string | null | undefined): number => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "string") {
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
@@ -40,14 +62,22 @@ const toNum = (v: number | string | null | undefined): number => {
   return 0;
 };
 
-const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
+const prettyArea = (a: PackageArea): string =>
+  a === "conference_room" ? "Conference Room" : "Common Area";
 
-const statusLabel = (s: PromoStatus): string => {
-  const x = String(s).toLowerCase();
-  if (x === "pending") return "Reserved";
-  if (x === "approved") return "Approved";
-  if (x === "cancelled") return "Cancelled";
-  return String(s);
+const seatLabel = (r: PromoBookingRow): string =>
+  r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
+
+/** ✅ AUTO STATUS */
+const getStatus = (startIso: string, endIso: string): "UPCOMING" | "ONGOING" | "FINISHED" => {
+  const now = Date.now();
+  const s = new Date(startIso).getTime();
+  const e = new Date(endIso).getTime();
+
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return "FINISHED";
+  if (now < s) return "UPCOMING";
+  if (now >= s && now <= e) return "ONGOING";
+  return "FINISHED";
 };
 
 const formatDuration = (v: number, u: DurationUnit): string => {
@@ -70,10 +100,19 @@ const formatDuration = (v: number, u: DurationUnit): string => {
   return `${v} ${unit}`;
 };
 
+/* ================= COMPONENT ================= */
+
 const Customer_Discount_List: React.FC = () => {
   const [rows, setRows] = useState<PromoBookingRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [selected, setSelected] = useState<PromoBookingRow | null>(null);
+
+  // optional: auto refresh status/time every 10s
+  const [tick, setTick] = useState<number>(Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setTick(Date.now()), 10000);
+    return () => window.clearInterval(t);
+  }, []);
 
   const fetchPromoBookings = async (): Promise<void> => {
     setLoading(true);
@@ -82,22 +121,48 @@ const Customer_Discount_List: React.FC = () => {
       .from("promo_bookings")
       .select(
         `
-        id, created_at, full_name, area, seat_number, start_at, end_at, price, status,
+        id,
+        created_at,
+        full_name,
+        area,
+        seat_number,
+        start_at,
+        end_at,
+        price,
         packages:package_id ( title ),
-        package_options:package_option_id ( option_name, duration_value, duration_unit, price )
+        package_options:package_option_id (
+          option_name,
+          duration_value,
+          duration_unit
+        )
       `
       )
       .order("created_at", { ascending: false });
 
-    if (error) {
+    if (error || !data) {
       console.error(error);
-      alert(`Error loading discount list: ${error.message}`);
       setRows([]);
       setLoading(false);
       return;
     }
 
-    setRows((data as unknown as PromoBookingRow[]) || []);
+    // ✅ Normalize WITHOUT "any"
+    const dbRows: PromoBookingDBRow[] = data as unknown as PromoBookingDBRow[];
+
+    const normalized: PromoBookingRow[] = dbRows.map((row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      full_name: row.full_name,
+      area: row.area,
+      seat_number: row.seat_number,
+      start_at: row.start_at,
+      end_at: row.end_at,
+      price: toNumber(row.price),
+      packages: row.packages ?? null,
+      package_options: row.package_options ?? null,
+    }));
+
+    setRows(normalized);
     setLoading(false);
   };
 
@@ -106,16 +171,16 @@ const Customer_Discount_List: React.FC = () => {
   }, []);
 
   const totals = useMemo(() => {
-    const total = rows.reduce((sum, r) => sum + toNum(r.price), 0);
-    const reserved = rows.filter((r) => String(r.status).toLowerCase() === "pending").length;
-    const approved = rows.filter((r) => String(r.status).toLowerCase() === "approved").length;
-    return { total, reserved, approved };
-  }, [rows]);
+    // tick dependency makes status counts update live
+    void tick;
 
-  const seatLabel = (r: PromoBookingRow): string => {
-    if (r.area === "conference_room") return "CONFERENCE ROOM";
-    return r.seat_number || "N/A";
-  };
+    const total = rows.reduce((sum, r) => sum + toNumber(r.price), 0);
+    const upcoming = rows.filter((r) => getStatus(r.start_at, r.end_at) === "UPCOMING").length;
+    const ongoing = rows.filter((r) => getStatus(r.start_at, r.end_at) === "ONGOING").length;
+    const finished = rows.filter((r) => getStatus(r.start_at, r.end_at) === "FINISHED").length;
+
+    return { total, upcoming, ongoing, finished };
+  }, [rows, tick]);
 
   return (
     <div className="customer-lists-container">
@@ -123,13 +188,16 @@ const Customer_Discount_List: React.FC = () => {
 
       <div style={{ marginBottom: 10, opacity: 0.85 }}>
         <span style={{ marginRight: 14 }}>
-          Reserved: <strong>{totals.reserved}</strong>
+          Upcoming: <strong>{totals.upcoming}</strong>
         </span>
         <span style={{ marginRight: 14 }}>
-          Approved: <strong>{totals.approved}</strong>
+          Ongoing: <strong>{totals.ongoing}</strong>
+        </span>
+        <span style={{ marginRight: 14 }}>
+          Finished: <strong>{totals.finished}</strong>
         </span>
         <span>
-          Total Promo Sales: <strong>₱{totals.total.toFixed(2)}</strong>
+          Total Sales: <strong>₱{totals.total.toFixed(2)}</strong>
         </span>
       </div>
 
@@ -141,8 +209,8 @@ const Customer_Discount_List: React.FC = () => {
         <table className="customer-table">
           <thead>
             <tr>
-              <th>Created</th>
-              <th>Full Name</th>
+              <th>Date</th>
+              <th>Customer</th>
               <th>Area</th>
               <th>Seat</th>
               <th>Package</th>
@@ -158,9 +226,13 @@ const Customer_Discount_List: React.FC = () => {
           <tbody>
             {rows.map((r) => {
               const opt = r.package_options;
-              const optText =
+
+              const optionText =
                 opt?.option_name && opt?.duration_value && opt?.duration_unit
-                  ? `${opt.option_name} • ${formatDuration(Number(opt.duration_value), opt.duration_unit)}`
+                  ? `${opt.option_name} • ${formatDuration(
+                      Number(opt.duration_value),
+                      opt.duration_unit
+                    )}`
                   : opt?.option_name || "—";
 
               return (
@@ -170,11 +242,13 @@ const Customer_Discount_List: React.FC = () => {
                   <td>{prettyArea(r.area)}</td>
                   <td>{seatLabel(r)}</td>
                   <td>{r.packages?.title || "—"}</td>
-                  <td>{optText}</td>
+                  <td>{optionText}</td>
                   <td>{new Date(r.start_at).toLocaleString("en-PH")}</td>
                   <td>{new Date(r.end_at).toLocaleString("en-PH")}</td>
-                  <td>₱{toNum(r.price).toFixed(2)}</td>
-                  <td>{statusLabel(r.status)}</td>
+                  <td>₱{toNumber(r.price).toFixed(2)}</td>
+                  <td>
+                    <strong>{getStatus(r.start_at, r.end_at)}</strong>
+                  </td>
                   <td>
                     <button className="receipt-btn" onClick={() => setSelected(r)}>
                       View Receipt
@@ -187,20 +261,20 @@ const Customer_Discount_List: React.FC = () => {
         </table>
       )}
 
-      {/* RECEIPT MODAL (VIEW ONLY) */}
+      {/* ================= RECEIPT (VIEW ONLY) ================= */}
       {selected && (
         <div className="receipt-overlay" onClick={() => setSelected(null)}>
           <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+            <img src={logo} className="receipt-logo" alt="logo" />
 
             <h3 className="receipt-title">ME TYME LOUNGE</h3>
-            <p className="receipt-subtitle">PROMO / DISCOUNT RECEIPT</p>
+            <p className="receipt-subtitle">PROMO RECEIPT</p>
 
             <hr />
 
             <div className="receipt-row">
               <span>Status</span>
-              <span>{statusLabel(selected.status)}</span>
+              <span>{getStatus(selected.start_at, selected.end_at)}</span>
             </div>
 
             <div className="receipt-row">
@@ -256,13 +330,8 @@ const Customer_Discount_List: React.FC = () => {
 
             <div className="receipt-total">
               <span>TOTAL</span>
-              <span>₱{toNum(selected.price).toFixed(2)}</span>
+              <span>₱{toNumber(selected.price).toFixed(2)}</span>
             </div>
-
-            <p className="receipt-footer">
-              Thank you for choosing <br />
-              <strong>Me Tyme Lounge</strong>
-            </p>
 
             <button className="close-btn" onClick={() => setSelected(null)}>
               Close
