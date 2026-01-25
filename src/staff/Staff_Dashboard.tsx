@@ -1,10 +1,3 @@
-// src/pages/Staff_Dashboard.tsx
-// ✅ Normal mode: view-only
-// ✅ Calibrate mode: add ?calibrate=1 (click pin, then click image to place)
-// ✅ Saved in localStorage so di nawawala kahit lumipat ng menu
-// ✅ Connected to DB: uses seat_blocked_times view to color seats
-// ✅ Strict TypeScript (no "any")
-
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonPage, IonContent } from "@ionic/react";
 import seatsImage from "../assets/seats.png";
@@ -44,7 +37,12 @@ const formatPHDate = (d: Date): string =>
 const isStoredPos = (v: unknown): v is StoredPos => {
   if (typeof v !== "object" || v === null) return false;
   const obj = v as Record<string, unknown>;
-  return typeof obj.x === "number" && Number.isFinite(obj.x) && typeof obj.y === "number" && Number.isFinite(obj.y);
+  return (
+    typeof obj.x === "number" &&
+    Number.isFinite(obj.x) &&
+    typeof obj.y === "number" &&
+    Number.isFinite(obj.y)
+  );
 };
 
 const loadStored = (): StoredMap => {
@@ -76,20 +74,29 @@ type SeatBlockedRow = {
   source: "promo" | "regular" | string;
 };
 
+type PromoConferenceRow = {
+  id: string;
+  start_at: string;
+  end_at: string;
+  status: string;
+  area: string;
+};
+
 const normalizeSeatId = (v: string): string => String(v).trim();
 
+const CONFERENCE_ID = "CONFERENCE_ROOM";
+
 const Staff_Dashboard: React.FC = () => {
-  // ✅ default pins (baseline)
   const defaultPins: SeatPin[] = useMemo(
     () => [
-      { id: "CONFERENCE_ROOM", label: "CONFERENCE ROOM", x: 26.0, y: 23.8, kind: "room" },
+      { id: CONFERENCE_ID, label: "CONFERENCE ROOM", x: 26.0, y: 23.8, kind: "room" },
 
       { id: "6", label: "6", x: 40.8, y: 30.5, kind: "seat" },
       { id: "5", label: "5", x: 47.5, y: 30.5, kind: "seat" },
       { id: "4", label: "4", x: 54, y: 30.5, kind: "seat" },
       { id: "3", label: "3", x: 60.3, y: 30.5, kind: "seat" },
       { id: "2", label: "2", x: 75.3, y: 30.5, kind: "seat" },
-      { id: "1", label: "1", x: 82,y: 30.5, kind: "seat" },
+      { id: "1", label: "1", x: 82, y: 30.5, kind: "seat" },
 
       { id: "11", label: "11", x: 14.5, y: 42.1, kind: "seat" },
       { id: "10", label: "10", x: 26, y: 44.0, kind: "seat" },
@@ -126,7 +133,6 @@ const Staff_Dashboard: React.FC = () => {
     []
   );
 
-  // ✅ apply saved coords (localStorage) to pins
   const [stored, setStored] = useState<StoredMap>(() => loadStored());
 
   const pins: SeatPin[] = useMemo(() => {
@@ -137,17 +143,14 @@ const Staff_Dashboard: React.FC = () => {
     });
   }, [defaultPins, stored]);
 
-  // ✅ DB-driven statuses (seat_blocked_times)
   const [statusBySeat, setStatusBySeat] = useState<Record<string, SeatStatus>>({});
 
-  // current date
   const [now, setNow] = useState<Date>(new Date());
   useEffect(() => {
     const t = window.setInterval(() => setNow(new Date()), 60000);
     return () => window.clearInterval(t);
   }, []);
 
-  // calibrate mode flag
   const calibrate = useMemo(() => {
     try {
       const url = new URL(window.location.href);
@@ -157,62 +160,82 @@ const Staff_Dashboard: React.FC = () => {
     }
   }, []);
 
-  // selected pin in calibrate mode
   const [selectedPinId, setSelectedPinId] = useState<string>("");
-
   const stageRef = useRef<HTMLDivElement | null>(null);
 
-  const allSeatIds = useMemo<string[]>(() => pins.map((p) => p.id), [pins]);
+  // ✅ seats only (exclude room)
+  const seatIdsOnly = useMemo<string[]>(
+    () => pins.filter((p) => p.kind === "seat").map((p) => p.id),
+    [pins]
+  );
 
-  // ✅ load seat statuses from DB (every 15s + on open)
   const loadSeatStatuses = async (): Promise<void> => {
     const startIso = new Date().toISOString();
     const endIso = new Date("2999-12-31T23:59:59.000Z").toISOString();
 
-    // seat_blocked_times already merges promo + regular (as you used in BookingModal)
-    const { data, error } = await supabase
+    // 1) Seats via seat_blocked_times
+    const seatsReq = supabase
       .from("seat_blocked_times")
       .select("seat_number, start_at, end_at, source")
-      .in("seat_number", allSeatIds)
+      .in("seat_number", seatIdsOnly)
       .lt("start_at", endIso)
       .gt("end_at", startIso);
 
-    if (error) {
-      console.error("Seat status error:", error.message);
-      // fallback: mark all as available
-      const fallback: Record<string, SeatStatus> = {};
-      allSeatIds.forEach((id) => (fallback[id] = "temp_available"));
-      setStatusBySeat(fallback);
-      return;
-    }
+    // 2) Conference room via promo_bookings (because seat_number is NULL for conference_room)
+    const confReq = supabase
+      .from("promo_bookings")
+      .select("id, start_at, end_at, status, area")
+      .eq("area", "conference_room")
+      .lt("start_at", endIso)
+      .gt("end_at", startIso);
 
-    const rows = (data ?? []) as SeatBlockedRow[];
-    const blocked = new Set(rows.map((r) => normalizeSeatId(r.seat_number)));
+    const [{ data: seatData, error: seatErr }, { data: confData, error: confErr }] = await Promise.all([
+      seatsReq,
+      confReq,
+    ]);
 
     const next: Record<string, SeatStatus> = {};
-    for (const id of allSeatIds) {
-      if (blocked.has(id)) {
-        // map to your legend colors
-        next[id] = "occupied";
-      } else {
-        next[id] = "temp_available";
+
+    // default everything to available
+    for (const p of pins) next[p.id] = "temp_available";
+
+    // seat statuses
+    if (seatErr) {
+      console.error("Seat status error:", seatErr.message);
+    } else {
+      const rows = (seatData ?? []) as SeatBlockedRow[];
+      const blocked = new Set(rows.map((r) => normalizeSeatId(r.seat_number)));
+      for (const id of seatIdsOnly) {
+        if (blocked.has(id)) next[id] = "occupied"; // orange
       }
     }
+
+    // conference status
+    if (confErr) {
+      console.error("Conference status error:", confErr.message);
+    } else {
+      const rows = (confData ?? []) as PromoConferenceRow[];
+
+      // If ANY active booking overlaps now -> mark as occupied (orange)
+      // (You can change this to reserved/purple based on status if you want)
+      if (rows.length > 0) {
+        next[CONFERENCE_ID] = "occupied";
+      }
+    }
+
     setStatusBySeat(next);
   };
 
   useEffect(() => {
     void loadSeatStatuses();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSeatIds.join("|")]);
+  }, [seatIdsOnly.join("|"), pins.length]);
 
   useEffect(() => {
-    const t = window.setInterval(() => {
-      void loadSeatStatuses();
-    }, 15000);
+    const t = window.setInterval(() => void loadSeatStatuses(), 15000);
     return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSeatIds.join("|")]);
+  }, [seatIdsOnly.join("|"), pins.length]);
 
   const setPinPositionFromClick = (clientX: number, clientY: number): void => {
     if (!calibrate) return;
@@ -240,7 +263,7 @@ const Staff_Dashboard: React.FC = () => {
     setPinPositionFromClick(e.clientX, e.clientY);
   };
 
-  const clearSaved = (): void => { 
+  const clearSaved = (): void => {
     if (!calibrate) return;
     localStorage.removeItem(STORAGE_KEY);
     setStored({});

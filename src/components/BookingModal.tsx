@@ -2,9 +2,12 @@
 // ✅ FIX: Seat availability now checks BOTH promo_bookings and customer_sessions via seat_blocked_times view
 // ✅ FIX: multi-seat "1, 13" handled by the view (one seat per row)
 // ✅ FIX: reservation overlap uses correct condition: start < end AND end > start
-// ✅ NO "any" usage (typed rows + typed events)
+// ✅ FIX: Reservation date/time parsing uses LOCAL date parts (no timezone shift) so summary matches input
+// ✅ FIX: Reservation ON -> Time Started defaults to 00:00 am, keeps am/pm suffix, and NEVER reverts when editing other fields
+// ✅ FIX: Reservation time commits on Enter / blur (so summary + seat checks update immediately)
+// ✅ NO "any" usage
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   IonModal,
   IonHeader,
@@ -43,7 +46,7 @@ interface CustomerForm {
   id_number: string;
   seat_number: string[];
   reservation: boolean;
-  reservation_date?: string;
+  reservation_date?: string; // ALWAYS "YYYY-MM-DD"
   time_started: string;
 }
 
@@ -68,75 +71,11 @@ type SeatBlockedRow = {
 
 type SeatConflictRow = { seat_number: string };
 
-const formatTime12 = (hour24: number, minute: number): string => {
-  const isPM = hour24 >= 12;
-  let h12 = hour24 % 12;
-  if (h12 === 0) h12 = 12;
-  const hh = h12.toString().padStart(2, "0");
-  const mm = minute.toString().padStart(2, "0");
-  return `${hh}:${mm} ${isPM ? "pm" : "am"}`;
-};
-
-const normalizeTimeShortcut = (raw: string): string | null => {
-  const v = raw.trim().toLowerCase().replace(/\s+/g, "");
-
-  let m = v.match(/^(\d{1,2})(am|pm)$/);
-  if (m) {
-    const h = parseInt(m[1], 10);
-    if (h < 1 || h > 12) return null;
-    return `${h.toString().padStart(2, "0")}:00 ${m[2]}`;
-  }
-
-  m = v.match(/^(\d{1,2}):(\d{2})(am|pm)$/);
-  if (m) {
-    const h = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (h < 1 || h > 12) return null;
-    if (mm < 0 || mm > 59) return null;
-    return `${h.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")} ${m[3]}`;
-  }
-
-  m = v.match(/^(\d{1,2}):(\d{2})$/);
-  if (m) {
-    const h = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (h < 0 || h > 23) return null;
-    if (mm < 0 || mm > 59) return null;
-    return formatTime12(h, mm);
-  }
-
-  m = v.match(/^(\d{3,4})$/);
-  if (m) {
-    const s = m[1].padStart(4, "0");
-    const h = parseInt(s.slice(0, 2), 10);
-    const mm = parseInt(s.slice(2), 10);
-    if (h < 0 || h > 23) return null;
-    if (mm < 0 || mm > 59) return null;
-    return formatTime12(h, mm);
-  }
-
-  return null;
-};
-
-const parseTimeToISO = (timeInput: string, dateIsoOrDate: string): string | null => {
-  const match = timeInput.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
-  if (!match) return null;
-
-  let hour = parseInt(match[1], 10);
-  const minute = parseInt(match[2], 10);
-  const period = match[3].toLowerCase();
-
-  if (hour < 1 || hour > 12) return null;
-  if (minute < 0 || minute > 59) return null;
-
-  if (period === "pm" && hour !== 12) hour += 12;
-  if (period === "am" && hour === 12) hour = 0;
-
-  const base = new Date(dateIsoOrDate);
-  if (!Number.isFinite(base.getTime())) return null;
-
-  base.setHours(hour, minute, 0, 0);
-  return base.toISOString();
+// ✅ IonDatetime(date) may return ISO "2026-01-25T00:00:00.000Z"
+// Convert ALWAYS to "YYYY-MM-DD"
+const toYYYYMMDD = (v: string): string | null => {
+  const m = v.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
 };
 
 const normalizeTimeAvail = (value: string): string | null => {
@@ -188,6 +127,101 @@ const toHHMM = (totalMinutes: number): string => {
   return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
 };
 
+// ✅ Reservation time accepts: 2pm, 2:30pm, 14:00, 1400, 00:00
+// Returns canonical "HH:MM am/pm" (00..12) with am/pm suffix
+const normalizeReservationTime = (raw: string): string | null => {
+  const v = raw.trim().toLowerCase().replace(/\s+/g, "");
+  if (!v) return null;
+
+  const pad2 = (n: number) => n.toString().padStart(2, "0");
+
+  // convert 24h -> "HH:MM am/pm" but keep "00" for midnight (user requested)
+  const to12 = (h24: number, m: number): string => {
+    const isPM = h24 >= 12;
+    let h12 = h24 % 12;
+    if (h24 === 0) h12 = 0; // midnight -> 00
+    const hh = pad2(h12);
+    const mm = pad2(m);
+    return `${hh}:${mm} ${isPM ? "pm" : "am"}`;
+  };
+
+  // 2pm / 12am (allow 00..12)
+  let m = v.match(/^(\d{1,2})(am|pm)$/);
+  if (m) {
+    let h = parseInt(m[1], 10);
+    const ap = m[2];
+    if (h < 0 || h > 12) return null;
+    if (ap === "pm" && h !== 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+    return to12(h, 0);
+  }
+
+  // 2:30pm
+  m = v.match(/^(\d{1,2}):(\d{2})(am|pm)$/);
+  if (m) {
+    let h = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    const ap = m[3];
+    if (h < 0 || h > 12) return null;
+    if (mm < 0 || mm > 59) return null;
+    if (ap === "pm" && h !== 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+    return to12(h, mm);
+  }
+
+  // 14:00 / 00:00
+  m = v.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) {
+    const h24 = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (h24 < 0 || h24 > 23) return null;
+    if (mm < 0 || mm > 59) return null;
+    return to12(h24, mm);
+  }
+
+  // 1400 / 0000
+  m = v.match(/^(\d{3,4})$/);
+  if (m) {
+    const s = m[1].padStart(4, "0");
+    const h24 = parseInt(s.slice(0, 2), 10);
+    const mm = parseInt(s.slice(2), 10);
+    if (h24 < 0 || h24 > 23) return null;
+    if (mm < 0 || mm > 59) return null;
+    return to12(h24, mm);
+  }
+
+  return null;
+};
+
+// ✅ Build ISO using LOCAL date parts to avoid timezone day-shift
+// Input MUST be "HH:MM am/pm"
+const parseReservationToISO = (time12: string, yyyyMmDd: string): string | null => {
+  const tm = time12.trim().toLowerCase().match(/^(\d{2}):(\d{2})\s*(am|pm)$/);
+  const dm = yyyyMmDd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!tm || !dm) return null;
+
+  let hour = parseInt(tm[1], 10); // 00..12
+  const minute = parseInt(tm[2], 10);
+  const ap = tm[3];
+
+  if (hour < 0 || hour > 12) return null;
+  if (minute < 0 || minute > 59) return null;
+
+  // to 24h
+  if (ap === "pm" && hour !== 12) hour += 12;
+  if (ap === "am" && hour === 12) hour = 0;
+  // if "00:xx am" => hour already 0
+
+  const y = parseInt(dm[1], 10);
+  const mo = parseInt(dm[2], 10) - 1;
+  const d = parseInt(dm[3], 10);
+
+  const local = new Date(y, mo, d, hour, minute, 0, 0);
+  if (!Number.isFinite(local.getTime())) return null;
+
+  return local.toISOString();
+};
+
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
@@ -207,8 +241,20 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const [timeAvail, setTimeAvail] = useState("00:00");
   const [timeAvailInput, setTimeAvailInput] = useState("00:00");
 
-  const [timeStartedInput, setTimeStartedInput] = useState("00:00 am");
+  // ✅ keep TWO states so it never "reverts" while typing
+  const [timeStartedInput, setTimeStartedInput] = useState("00:00 am"); // editable
+  const [timeStartedNormalized, setTimeStartedNormalized] = useState("00:00 am"); // stable committed
+  const timeStartedRef = useRef<string>("00:00 am");
+
   const [timeSnapshotIso, setTimeSnapshotIso] = useState(new Date().toISOString());
+
+  const commitReservationTime = (raw: string) => {
+    const normalized = normalizeReservationTime(raw);
+    const finalVal = normalized ?? "00:00 am";
+    setTimeStartedInput(finalVal);
+    setTimeStartedNormalized(finalVal);
+    timeStartedRef.current = finalVal;
+  };
 
   const commitTimeAvail = (rawValue: string) => {
     const normalized = normalizeTimeAvail(rawValue);
@@ -252,7 +298,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     return addDuration(startIso, timeAvail);
   };
 
-  // ✅ Unified seat blocking (promo + regular)
   const fetchOccupiedSeats = async (startIso: string, endIso: string): Promise<void> => {
     const { data, error } = await supabase
       .from("seat_blocked_times")
@@ -277,14 +322,19 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const snap = new Date().toISOString();
     setTimeSnapshotIso(snap);
     setForm((p) => ({ ...p, time_started: snap }));
-    setTimeStartedInput("00:00 am");
 
+    // reset
     setTimeAvail("00:00");
     setTimeAvailInput("00:00");
     setOpenTime(false);
 
+    // reset reservation time (both states + ref)
+    setTimeStartedInput("00:00 am");
+    setTimeStartedNormalized("00:00 am");
+    timeStartedRef.current = "00:00 am";
+
     const startIso = snap;
-    const endIso = new Date(new Date(snap).getTime() + 60_000).toISOString(); // 1 minute window
+    const endIso = new Date(new Date(snap).getTime() + 60_000).toISOString();
     void fetchOccupiedSeats(startIso, endIso);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -293,9 +343,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     if (!isOpen) return;
 
     let startIso = new Date().toISOString();
+
     if (form.reservation && form.reservation_date) {
-      const normalized = normalizeTimeShortcut(timeStartedInput) ?? timeStartedInput;
-      const parsed = parseTimeToISO(normalized, form.reservation_date);
+      const parsed = parseReservationToISO(timeStartedNormalized, form.reservation_date);
       startIso = parsed ?? form.time_started;
     }
 
@@ -312,7 +362,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     void fetchOccupiedSeats(startIso, endIso);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, form.reservation, form.reservation_date, openTime, timeStartedInput, timeAvail]);
+  }, [isOpen, form.reservation, form.reservation_date, openTime, timeStartedNormalized, timeAvail]);
 
   const formatPH = (d: Date) =>
     d.toLocaleString("en-PH", {
@@ -325,13 +375,14 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const summaryStartIso = useMemo(() => {
     if (!form.reservation) return timeSnapshotIso;
+
     if (form.reservation && form.reservation_date) {
-      const normalized = normalizeTimeShortcut(timeStartedInput) ?? "12:00 am";
-      const parsed = parseTimeToISO(normalized, form.reservation_date);
+      const parsed = parseReservationToISO(timeStartedNormalized, form.reservation_date);
       return parsed ?? timeSnapshotIso;
     }
+
     return timeSnapshotIso;
-  }, [form.reservation, form.reservation_date, timeStartedInput, timeSnapshotIso]);
+  }, [form.reservation, form.reservation_date, timeStartedNormalized, timeSnapshotIso]);
 
   const summaryEndIso = useMemo(() => {
     if (openTime) return summaryStartIso;
@@ -349,23 +400,30 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const trimmedName = form.full_name.trim();
     if (!trimmedName) return alert("Full Name is required.");
     if (form.seat_number.length === 0) return alert("Please select at least one seat.");
-    if (form.reservation && !form.reservation_date) return alert("Please select a reservation date.");
+    if (form.reservation && !form.reservation_date)
+      return alert("Please select a reservation date.");
 
     if (!openTime) {
       const normalized = normalizeTimeAvail(timeAvailInput);
-      if (!normalized) return alert("Invalid Time Avail. Examples: 0:45 / 2 / 2:30 / 100:30 / 230");
+      if (!normalized)
+        return alert("Invalid Time Avail. Examples: 0:45 / 2 / 2:30 / 100:30 / 230");
       if (normalized === "00:00") return alert("Time Avail must be greater than 00:00.");
       setTimeAvail(normalized);
       setTimeAvailInput(normalized);
     }
 
     let startIsoToStore = new Date().toISOString();
+
     if (form.reservation) {
-      const normalized = normalizeTimeShortcut(timeStartedInput);
-      if (!normalized) {
-        return alert('Please enter a valid Time Started (e.g., "2pm", "2:30pm", "14:00", "1400").');
-      }
-      const parsed = parseTimeToISO(normalized, form.reservation_date as string);
+      if (!form.reservation_date) return alert("Please select a reservation date.");
+
+      // ✅ ensure we commit latest typed value before saving
+      commitReservationTime(timeStartedRef.current);
+
+      const parsed = parseReservationToISO(
+        normalizeReservationTime(timeStartedRef.current) ?? "00:00 am",
+        form.reservation_date
+      );
       if (!parsed) return alert("Invalid Time Started.");
       startIsoToStore = parsed;
     }
@@ -375,14 +433,13 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     const dateToStore =
       form.reservation && form.reservation_date
-        ? form.reservation_date.split("T")[0]
+        ? form.reservation_date
         : new Date().toISOString().split("T")[0];
 
     const timeEndedToStore = openTime
       ? new Date("2999-12-31T23:59:59.000Z").toISOString()
       : getTimeEndedFrom(startIsoToStore);
 
-    // ✅ Final safety check (prevents double booking at save time)
     const { data: conflicts, error: conflictErr } = await supabase
       .from("seat_blocked_times")
       .select("seat_number")
@@ -419,7 +476,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       total_amount: timeAmount,
       seat_number: form.seat_number.join(", "),
       reservation: form.reservation ? "yes" : "no",
-      reservation_date: form.reservation_date,
+      reservation_date: form.reservation_date ?? null,
     });
 
     if (error) return alert(`Error saving session: ${error.message}`);
@@ -438,8 +495,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     setTimeAvail("00:00");
     setTimeAvailInput("00:00");
-    setTimeStartedInput("00:00 am");
     setOpenTime(false);
+
+    setTimeStartedInput("00:00 am");
+    setTimeStartedNormalized("00:00 am");
+    timeStartedRef.current = "00:00 am";
 
     onClose();
     onSaved();
@@ -522,7 +582,14 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             <IonLabel>Reservation</IonLabel>
             <IonToggle
               checked={form.reservation}
-              onIonChange={(e) => setForm({ ...form, reservation: e.detail.checked })}
+              onIonChange={(e) => {
+                const checked = e.detail.checked;
+                setForm((p) => ({ ...p, reservation: checked }));
+
+                if (checked) {
+                  commitReservationTime(timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am");
+                }
+              }}
             />
             <IonLabel slot="end">{form.reservation ? "Yes" : "No"}</IonLabel>
           </IonItem>
@@ -537,7 +604,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                   value={form.reservation_date}
                   onIonChange={(e) => {
                     const v = e.detail.value;
-                    if (typeof v === "string") setForm({ ...form, reservation_date: v });
+                    if (typeof v === "string") {
+                      const d = toYYYYMMDD(v);
+                      setForm((p) => ({ ...p, reservation_date: d ?? undefined }));
+                    }
                   }}
                 />
               </IonItem>
@@ -546,12 +616,16 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 <IonLabel position="stacked">Time Started (Reservation)</IonLabel>
                 <IonInput
                   value={timeStartedInput}
-                  placeholder='e.g., "2pm" / "2:30pm" / "14:00" / "1400"'
-                  onIonChange={(e) => setTimeStartedInput(e.detail.value ?? "")}
-                  onIonBlur={() => {
-                    const normalized = normalizeTimeShortcut(timeStartedInput);
-                    setTimeStartedInput(normalized ?? "12:00 am");
+                  placeholder='e.g., "2pm" / "2:30pm" / "14:00" / "1400" / "00:00"'
+                  onIonChange={(e) => {
+                    const v = e.detail.value ?? "";
+                    setTimeStartedInput(v);
+                    timeStartedRef.current = v; // ✅ keep latest typed
                   }}
+                  onKeyDown={(e: React.KeyboardEvent<HTMLIonInputElement>) => {
+                    if (e.key === "Enter") commitReservationTime(timeStartedRef.current);
+                  }}
+                  onIonBlur={() => commitReservationTime(timeStartedRef.current)}
                 />
               </IonItem>
             </>
@@ -565,9 +639,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               placeholder='Examples: 0:45 / 2 / 2:30 / 100:30 / 230'
               value={timeAvailInput}
               disabled={openTime}
-              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => {
-                setTimeAvailInput(e.detail.value ?? "");
-              }}
+              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
+                setTimeAvailInput(e.detail.value ?? "")
+              }
               onIonBlur={() => commitTimeAvail(timeAvailInput)}
               onIonChange={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
                 const v = e.detail.value ?? "";
@@ -618,8 +692,12 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           <div className="summary-section">
             <p className="summary-text">
-              <strong>Time Started:</strong> {timeInDisplay}
+              <strong>Time Started:</strong>{" "}
+              {form.reservation && form.reservation_date
+                ? `${form.reservation_date} ${timeStartedNormalized}`
+                : timeInDisplay}
             </p>
+
             <p className="summary-text">
               <strong>Time Out:</strong> {timeOutDisplay}
             </p>
