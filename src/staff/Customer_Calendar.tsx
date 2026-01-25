@@ -1,80 +1,182 @@
-import React, { useEffect, useState } from 'react';
-import Calendar from 'react-calendar';
-import 'react-calendar/dist/Calendar.css';
-import { supabase } from '../utils/supabaseClient';
-import customerIcon from '../assets/customer.png';
-import customerReservationIcon from '../assets/customer_reservation.png';
+// src/pages/Customer_Calendar.tsx
+// ✅ STRICT TYPESCRIPT
+// ✅ NO any
+// ✅ Shows counts (numbers) on icons
+// ✅ Reservation = TOP-LEFT (with count)
+// ✅ Walk-in     = BOTTOM-RIGHT (with count)
+// ✅ Removes blue tap highlight (keeps yellow current date)
+// ✅ customer_sessions + promo_bookings logic
 
-interface CustomerSession {
+import React, { useEffect, useState } from "react";
+import Calendar from "react-calendar";
+import "react-calendar/dist/Calendar.css";
+import { supabase } from "../utils/supabaseClient";
+
+// swapped icons
+import walkInIcon from "../assets/customer_reservation.png";
+import reservationIcon from "../assets/customer.png";
+
+type Area = "common_area" | "conference_room" | string;
+
+interface CustomerSessionRow {
   date: string;
   reservation: string;
   reservation_date: string | null;
 }
 
+interface PromoBookingRow {
+  start_at: string;
+  area: Area;
+  status: string;
+}
+
+type Counts = {
+  walkIn: number;
+  reservation: number;
+};
+
+type CountMap = Record<string, Counts>;
+
+const yyyyMmDdLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const startOfDayLocal = (d: Date): Date =>
+  new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+
+const endOfDayLocal = (d: Date): Date =>
+  new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+const ensure = (m: CountMap, date: string): Counts => {
+  if (!m[date]) m[date] = { walkIn: 0, reservation: 0 };
+  return m[date];
+};
+
+const addCount = (m: CountMap, date: string, key: keyof Counts): void => {
+  ensure(m, date)[key] += 1;
+};
+
 const Customer_Calendar: React.FC = () => {
-  const [counts, setCounts] = useState<{ [date: string]: { nonRes: number; res: number } }>({});
+  const [counts, setCounts] = useState<CountMap>({});
 
   useEffect(() => {
-    fetchSessions();
+    void loadCalendar();
   }, []);
 
-  const fetchSessions = async () => {
-    const { data, error } = await supabase
-      .from('customer_sessions')
-      .select('date, reservation, reservation_date');
+  const loadCalendar = async (): Promise<void> => {
+    const sessionsReq = supabase
+      .from("customer_sessions")
+      .select("date, reservation, reservation_date");
 
-    if (error) {
-      console.error('Error fetching sessions:', error);
-      return;
-    }
+    const promosReq = supabase
+      .from("promo_bookings")
+      .select("start_at, area, status");
 
-    const dateCounts: { [date: string]: { nonRes: number; res: number } } = {};
+    const [{ data: sessions }, { data: promos }] = await Promise.all([
+      sessionsReq,
+      promosReq,
+    ]);
 
-    data.forEach((session: CustomerSession) => {
-      if (session.reservation === 'yes' && session.reservation_date) {
-        const date = session.reservation_date;
-        if (!dateCounts[date]) dateCounts[date] = { nonRes: 0, res: 0 };
-        dateCounts[date].res += 1;
+    const result: CountMap = {};
+
+    // customer_sessions
+    (sessions ?? []).forEach((s: CustomerSessionRow) => {
+      if (s.reservation === "yes" && s.reservation_date) {
+        addCount(result, s.reservation_date, "reservation");
       } else {
-        const date = session.date;
-        if (!dateCounts[date]) dateCounts[date] = { nonRes: 0, res: 0 };
-        dateCounts[date].nonRes += 1;
+        addCount(result, s.date, "walkIn");
       }
     });
 
-    setCounts(dateCounts);
+    // promo_bookings
+    const now = new Date();
+    const todayStart = startOfDayLocal(now);
+    const todayEnd = endOfDayLocal(now);
+
+    (promos ?? []).forEach((p: PromoBookingRow) => {
+      const start = new Date(p.start_at);
+      if (!Number.isFinite(start.getTime())) return;
+
+      const dateKey = yyyyMmDdLocal(start);
+
+      if (p.area === "common_area") {
+        const isToday = start >= todayStart && start <= todayEnd;
+
+        if (isToday && start <= now) addCount(result, dateKey, "walkIn");
+        else addCount(result, dateKey, "reservation");
+      } else if (p.area === "conference_room") {
+        addCount(result, dateKey, "reservation");
+      }
+    });
+
+    setCounts(result);
   };
 
-  const tileContent = ({ date, view }: { date: Date; view: string }) => {
-    if (view === 'month') {
-      const dateStr = date.toISOString().split('T')[0];
-      const data = counts[dateStr];
-      if (data && (data.nonRes > 0 || data.res > 0)) {
-        return (
-          <div className="calendar-tile">
-            {data.nonRes > 0 && (
-              <div className="calendar-item">
-                <img src={customerIcon} alt="Customer" className="calendar-icon" />
-                <span className="calendar-count">{data.nonRes}</span>
-              </div>
-            )}
-            {data.res > 0 && (
-              <div className="calendar-item">
-                <img src={customerReservationIcon} alt="Reservation" className="calendar-icon" />
-                <span className="calendar-count">{data.res}</span>
-              </div>
-            )}
+  type TileArgs = {
+    date: Date;
+    view: "month" | "year" | "decade" | "century";
+  };
+
+  const tileContent = ({ date, view }: TileArgs): React.ReactNode => {
+    if (view !== "month") return null;
+
+    const key = yyyyMmDdLocal(date);
+    const data = counts[key];
+    if (!data) return null;
+
+    const showRes = data.reservation > 0;
+    const showWalk = data.walkIn > 0;
+    if (!showRes && !showWalk) return null;
+
+    return (
+      <>
+        {/* Reservation (top-left) with number */}
+        {showRes && (
+          <div className="cal-icon-wrap cal-reservation" title={`Reservation: ${data.reservation}`}>
+            <img src={reservationIcon} alt="Reservation" />
+            <span className="cal-count">{data.reservation}</span>
           </div>
-        );
-      }
-    }
-    return null;
+        )}
+
+        {/* Walk-in (bottom-right) with number */}
+        {showWalk && (
+          <div className="cal-icon-wrap cal-walkin" title={`Walk-in: ${data.walkIn}`}>
+            <img src={walkInIcon} alt="Walk-in" />
+            <span className="cal-count">{data.walkIn}</span>
+          </div>
+        )}
+      </>
+    );
   };
 
   return (
-    <div className="customer-calendar-container">
-      <h2>Customer Calendar</h2>
-      <Calendar tileContent={tileContent} />
+    <div className="customer-calendar-page">
+      <div className="customer-calendar-card">
+        <h2 className="calendar-title">Customer Calendar</h2>
+
+        <div className="calendar-legend">
+          <div className="legend-row">
+            <img src={reservationIcon} className="legend-icon" alt="Reservation" />
+            <span>
+              <strong>Reservation</strong> — future bookings & conference room
+            </span>
+          </div>
+
+          <div className="legend-row">
+            <img src={walkInIcon} className="legend-icon" alt="Walk-in" />
+            <span>
+              <strong>Walk-in</strong> — already started today
+            </span>
+          </div>
+        </div>
+
+        <div className="calendar-wrap">
+          <Calendar tileContent={tileContent} />
+        </div>
+      </div>
     </div>
   );
 };

@@ -639,45 +639,179 @@ ion-content,
   100% { transform: translateX(0); }
 }
 
-/* Customer calendar */
+/* =========================
+   CUSTOMER CALENDAR (GLOBAL)
+========================= */
 
-.calendar-tile {
-  position: relative;
+.customer-calendar-page {
+  width: 100%;
+  min-height: 100%;
   display: flex;
-  flex-direction: column;
-  align-items: center;
   justify-content: center;
-  height: 100%;
+  padding: 18px 12px;
 }
 
-.calendar-item {
+.customer-calendar-card {
+  width: min(860px, 100%);
+  border-radius: 18px;
+  padding: 16px 16px 18px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
+}
+
+.calendar-title {
+  margin: 0 0 10px;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+.calendar-legend {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.035);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  margin-bottom: 12px;
+}
+
+.legend-row {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  margin: 2px 0;
+  gap: 10px;
 }
 
-.calendar-icon {
+.legend-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.calendar-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+/* calendar box */
+.react-calendar {
+  width: min(820px, 100%);
+  border: none !important;
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.10);
+}
+
+.react-calendar__navigation button {
+  border-radius: 12px;
+  font-weight: 800;
+}
+
+/* weekdays */
+.react-calendar__month-view__weekdays {
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* ✅ remove BLUE selection highlight on tap */
+.react-calendar__tile--active,
+.react-calendar__tile:enabled:focus,
+.react-calendar__tile:enabled:active {
+  background: transparent !important;
+  color: inherit !important;
+  box-shadow: none !important;
+}
+
+/* ✅ keep current date yellow ALWAYS (even when tapped) */
+.react-calendar__tile--now {
+  background: rgba(255, 193, 7, 0.28) !important;
+  border: 1px solid rgba(255, 193, 7, 0.90) !important;
+  border-radius: 14px;
+}
+
+/* ✅ tile spacing + thin black border for every date */
+.react-calendar__tile {
+  position: relative;
+  border-radius: 14px;
+  padding: 14px 10px 18px;
+  overflow: hidden;
+
+  border: 1px solid rgba(0, 0, 0, 0.25); /* ✅ black thin border */
+  background-clip: padding-box;
+}
+
+.react-calendar__tile:enabled:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* date number always visible */
+.react-calendar__tile abbr {
+  position: relative;
+  z-index: 5;
+  font-weight: 900;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+/* =========================
+   CORNER ICONS + NUMBER
+========================= */
+
+.cal-icon-wrap {
+  position: absolute;
   width: 16px;
   height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 3; /* ✅ above tile border */
 }
 
-.calendar-count {
+.cal-icon-wrap img {
+  width: 10px; /* ✅ slightly smaller */
+  height: 10px;
+  object-fit: contain;
+}
+
+/* reservation: top-left */
+.cal-reservation {
+  top: 4px;
+  left: 4px;
+}
+
+/* walk-in: bottom-right */
+.cal-walkin {
+  bottom: 4px;
+  right: 4px;
+}
+
+/* number badge */
+.cal-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #ff3b30;
+  color: #fff;
   font-size: 10px;
-  font-weight: bold;
-  color: #333;
-  margin-top: 2px;
-}
-
-/* Optional: Style the calendar container */
-.customer-calendar-container {
-  padding: 20px;
+  font-weight: 900;
+  line-height: 14px;
   text-align: center;
+  border: 2px solid #fff;
 }
 
-.customer-calendar-container h2 {
-  margin-bottom: 20px;
-}
 
 /* =========================
    BOOK_ADD BACKGROUND (same as login)
