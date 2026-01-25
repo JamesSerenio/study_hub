@@ -24,7 +24,8 @@ import Admin_Item_Lists from "./Admin_Item_Lists";
 import Admin_customer_list from "./Admin_customer_list";
 import Admin_customer_reservation from "./Admin_customer_reservation";
 import Admin_Packages from "./Admin_Packages";
-import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List"; // ✅ ADD
+import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List";
+import Admin_Seat_Table from "./Admin_Seat_Table"; // ✅ ADD
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -33,7 +34,8 @@ import itemIcon from "../assets/item.png";
 import customerListIcon from "../assets/list.png";
 import reservationIcon from "../assets/reserve.png";
 import promotionIcon from "../assets/promotion.png";
-import discountIcon from "../assets/discount.png"; // ✅ ADD
+import discountIcon from "../assets/discount.png";
+import seatIcon from "../assets/seat.png"; // ✅ ADD
 import studyHubLogo from "../assets/study_hub.png";
 
 const Admin_menu: React.FC = () => {
@@ -47,15 +49,14 @@ const Admin_menu: React.FC = () => {
     { name: "Customer List", key: "customer_list", icon: customerListIcon },
     { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
 
+    // ✅ ADMIN SEAT TABLE
+    { name: "Seat Table", key: "seat_table", icon: seatIcon },
+
     // ✅ PROMOS
     { name: "Promotions", key: "packages", icon: promotionIcon },
 
     // ✅ DISCOUNT RECORDS
-    {
-      name: "Discount Records",
-      key: "discount_records",
-      icon: discountIcon,
-    },
+    { name: "Discount Records", key: "discount_records", icon: discountIcon },
   ];
 
   const renderContent = () => {
@@ -74,6 +75,9 @@ const Admin_menu: React.FC = () => {
 
       case "customer_reservation":
         return <Admin_customer_reservation />;
+
+      case "seat_table":
+        return <Admin_Seat_Table />;
 
       case "packages":
         return <Admin_Packages />;
@@ -101,34 +105,22 @@ const Admin_menu: React.FC = () => {
             <IonToolbar>
               <div className="menu-brand">
                 <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
-                <span className="menu-title-text figma-title">
-                  Me Tyme Lounge
-                </span>
+                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
               </div>
             </IonToolbar>
           </IonHeader>
 
           <IonContent>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4 }}
-            >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
                   <IonItem
                     button
                     lines="none"
-                    className={`menu-item ${
-                      activePage === item.key ? "active" : ""
-                    }`}
+                    className={`menu-item ${activePage === item.key ? "active" : ""}`}
                     onClick={() => setActivePage(item.key)}
                   >
-                    <img
-                      src={item.icon}
-                      alt={item.name}
-                      className="menu-icon"
-                    />
+                    <img src={item.icon} alt={item.name} className="menu-icon" />
                     <span className="menu-text">{item.name}</span>
                   </IonItem>
                 </IonMenuToggle>
