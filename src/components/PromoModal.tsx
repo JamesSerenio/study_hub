@@ -14,9 +14,9 @@ import {
   IonSelect,
   IonSelectOption,
   IonSpinner,
-  IonText,
   IonCard,
   IonCardContent,
+  IonAlert,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -177,7 +177,7 @@ const checkPromoAvailability = async (params: {
     };
   }
 
-  // 2) customer_sessions conflicts (blocks promo vs normal booking too)
+  // 2) customer_sessions conflicts
   // NOTE: store conference room sessions as seat_number = 'CONFERENCE_ROOM'
   const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
 
@@ -202,11 +202,24 @@ const checkPromoAvailability = async (params: {
   return { ok: true };
 };
 
+const isConferenceOverlapConstraint = (msg: string): boolean => {
+  const m = msg.toLowerCase();
+  return m.includes("promo_no_overlap_conference") || m.includes("exclusion constraint");
+};
+
 /* ================= COMPONENT ================= */
 
 const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatGroups }) => {
   const [loading, setLoading] = useState<boolean>(false);
-  const [err, setErr] = useState<string>("");
+
+  // ✅ Alert modal (instead of small text at top)
+  const [alertOpen, setAlertOpen] = useState<boolean>(false);
+  const [alertMessage, setAlertMessage] = useState<string>("");
+
+  const showAlert = (msg: string): void => {
+    setAlertMessage(msg);
+    setAlertOpen(true);
+  };
 
   const [fullName, setFullName] = useState<string>("");
   const [area, setArea] = useState<PackageArea>("common_area");
@@ -278,7 +291,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
   // ✅ Fetch blocked seats for the current time window (via seat_blocked_times view)
   const fetchBlocked = async (start: string, end: string): Promise<void> => {
-    // common area: check all seats; conference: check "CONFERENCE_ROOM"
     const seatKeys = [...allSeatValues, "CONFERENCE_ROOM"];
 
     const { data, error } = await supabase
@@ -296,9 +308,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     }
 
     const rows = (data ?? []) as SeatBlockedRow[];
-    const blockedSeats = rows
-      .map((r) => String(r.seat_number).trim())
-      .filter(Boolean);
+    const blockedSeats = rows.map((r) => String(r.seat_number).trim()).filter(Boolean);
 
     setOccupiedSeats(blockedSeats.filter((s) => s !== "CONFERENCE_ROOM"));
     setConferenceBlocked(blockedSeats.includes("CONFERENCE_ROOM"));
@@ -309,7 +319,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     const load = async (): Promise<void> => {
       setLoading(true);
-      setErr("");
 
       setFullName("");
       setArea("common_area");
@@ -330,8 +339,8 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       if (pkRes.error) {
         setPackages([]);
         setOptions([]);
-        setErr(pkRes.error.message);
         setLoading(false);
+        showAlert(pkRes.error.message);
         return;
       }
 
@@ -343,8 +352,8 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       if (opRes.error) {
         setPackages((pkRes.data as PackageRow[]) ?? []);
         setOptions([]);
-        setErr(opRes.error.message);
         setLoading(false);
+        showAlert(opRes.error.message);
         return;
       }
 
@@ -354,6 +363,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     };
 
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   useEffect(() => {
@@ -378,10 +388,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     }
 
     void fetchBlocked(startIso, endIso);
-
-    // if seat currently selected becomes occupied, remove it
-    // (prevents saving with a hidden/invalid seat)
-    // NOTE: only for common area
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, startIso, endIso, allSeatValues.join("|")]);
 
@@ -391,26 +397,41 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     if (occupiedSeats.includes(seatNumber)) setSeatNumber("");
   }, [area, seatNumber, occupiedSeats]);
 
-  const submitPromo = async (): Promise<void> => {
-    setErr("");
+  // ✅ Show modal (alert) if conference becomes blocked for selected schedule
+  useEffect(() => {
+    if (!isOpen) return;
+    if (area !== "conference_room") return;
+    if (!startIso || !endIso) return;
+    if (!conferenceBlocked) return;
 
+    showAlert("Conference room is not available for the selected schedule.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, area, startIso, endIso, conferenceBlocked]);
+
+  const submitPromo = async (): Promise<void> => {
     const name = fullName.trim();
-    if (!name) return setErr("Full name is required.");
-    if (!selectedPackage) return setErr("Select promo package.");
-    if (!selectedOption) return setErr("Select duration/price option.");
-    if (!startIso) return setErr("Select start date & time.");
-    if (!endIso) return setErr("Invalid end time.");
+
+    // ✅ required fields via modal (IonAlert)
+    if (!name) return showAlert("Full name is required.");
+    if (!selectedPackage) return showAlert("Select promo package.");
+    if (!selectedOption) return showAlert("Select duration/price option.");
+    if (!startIso) return showAlert("Select start date & time.");
+    if (!endIso) return showAlert("Invalid end time.");
 
     const startMs = new Date(startIso).getTime();
-    if (!Number.isFinite(startMs) || startMs < Date.now()) return setErr("Start time must be today or later.");
+    if (!Number.isFinite(startMs) || startMs < Date.now()) {
+      return showAlert("Start time must be today or later.");
+    }
 
     if (area === "conference_room" && conferenceBlocked) {
-      return setErr("Conference room is not available for the selected schedule.");
+      return showAlert("Conference room is not available for the selected schedule.");
     }
 
     if (area === "common_area") {
-      if (!seatNumber) return setErr("Seat number is required for Common Area.");
-      if (occupiedSeats.includes(seatNumber)) return setErr("Selected seat is already occupied for that schedule.");
+      if (!seatNumber) return showAlert("Seat number is required for Common Area.");
+      if (occupiedSeats.includes(seatNumber)) {
+        return showAlert("Selected seat is already occupied for that schedule.");
+      }
     }
 
     setLoading(true);
@@ -424,7 +445,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     if (!availability.ok) {
       setLoading(false);
-      return setErr(availability.message ?? "Not available.");
+      return showAlert(availability.message ?? "Not available.");
     }
 
     const userRes = await supabase.auth.getUser();
@@ -447,7 +468,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     if (ins.error) {
       setLoading(false);
-      return setErr(ins.error.message);
+
+      // ✅ friendly modal for exclusion constraint (conference overlap)
+      if (isConferenceOverlapConstraint(ins.error.message)) {
+        return showAlert("Conference room is not available for the selected schedule.");
+      }
+
+      return showAlert(ins.error.message);
     }
 
     setLoading(false);
@@ -469,23 +496,20 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       </IonHeader>
 
       <IonContent className="ion-padding">
+        {/* ✅ Modal alerts (required + conference not available + DB constraint) */}
+        <IonAlert
+          isOpen={alertOpen}
+          header="Notice"
+          message={alertMessage}
+          buttons={["OK"]}
+          onDidDismiss={() => setAlertOpen(false)}
+        />
+
         {loading && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <IonSpinner />
             <span>Loading...</span>
           </div>
-        )}
-
-        {err && (
-          <IonText color="danger">
-            <p style={{ marginTop: 0 }}>{err}</p>
-          </IonText>
-        )}
-
-        {area === "conference_room" && startIso && endIso && conferenceBlocked && (
-          <IonText color="danger">
-            <p style={{ marginTop: 0 }}>Conference room is occupied for the selected schedule.</p>
-          </IonText>
         )}
 
         <IonItem>
@@ -524,9 +548,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         </IonItem>
 
         {selectedPackage?.description ? (
-          <IonText>
-            <p style={{ marginTop: 10, opacity: 0.85 }}>{selectedPackage.description}</p>
-          </IonText>
+          <p style={{ marginTop: 10, opacity: 0.85 }}>{selectedPackage.description}</p>
         ) : null}
 
         {amenitiesList.length > 0 ? (
