@@ -55,7 +55,7 @@ type SeatGroup = { title: string; seats: string[] };
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (isReservation: boolean) => void; // ✅ changed
   seatGroups: SeatGroup[];
 };
 
@@ -481,28 +481,29 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     if (error) return alert(`Error saving session: ${error.message}`);
 
-    setForm({
-      full_name: "",
-      customer_type: "",
-      customer_field: "",
-      has_id: false,
-      id_number: "",
-      seat_number: [],
-      reservation: false,
-      reservation_date: undefined,
-      time_started: new Date().toISOString(),
-    });
+      const wasReservation = form.reservation;  
+      setForm({
+        full_name: "",
+        customer_type: "",
+        customer_field: "",
+        has_id: false,
+        id_number: "",
+        seat_number: [],
+        reservation: false,
+        reservation_date: undefined,
+        time_started: new Date().toISOString(),
+      });
 
-    setTimeAvail("00:00");
-    setTimeAvailInput("00:00");
-    setOpenTime(false);
+      setTimeAvail("00:00");
+      setTimeAvailInput("00:00");
+      setOpenTime(false);
 
-    setTimeStartedInput("00:00 am");
-    setTimeStartedNormalized("00:00 am");
-    timeStartedRef.current = "00:00 am";
+      setTimeStartedInput("00:00 am");
+      setTimeStartedNormalized("00:00 am");
+      timeStartedRef.current = "00:00 am";
+      
+      onSaved(wasReservation);  
 
-    onClose();
-    onSaved();
   };
 
   return (

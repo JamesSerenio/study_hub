@@ -10,14 +10,13 @@ import {
   IonTitle,
   IonButtons,
   IonIcon,
+  IonAlert, // ✅ ADD
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 
 import BookingModal from "../components/BookingModal";
 import AddOnsModal from "../components/AddOnsModal";
-
-// ✅ add this (create this modal component file later)
 import PromoModal from "../components/PromoModal";
 
 import leaves from "../assets/leave.png";
@@ -43,12 +42,20 @@ const Book_Add: React.FC = () => {
   // MAIN MODALS
   const [isBookingOpen, setIsBookingOpen] = useState(false);
   const [isAddOnsOpen, setIsAddOnsOpen] = useState(false);
-  const [isPromoOpen, setIsPromoOpen] = useState(false); // ✅ NEW
+  const [isPromoOpen, setIsPromoOpen] = useState(false);
 
-  // THANK YOU MODALS
-  const [bookingThanksOpen, setBookingThanksOpen] = useState(false);
+  // ✅ BOOKING SAVED = use IonAlert (same style as your Promo)
+  const [bookingSavedOpen, setBookingSavedOpen] = useState(false);
+  const [bookingSavedMessage, setBookingSavedMessage] = useState("Booking saved successfully.");
+
+  // ADD-ONS THANK YOU MODAL (unchanged)
   const [addOnsThanksOpen, setAddOnsThanksOpen] = useState(false);
-  const [promoThanksOpen, setPromoThanksOpen] = useState(false); // ✅ NEW
+
+  // ✅ Promo saved handler = refresh-only (OPTIONAL)
+  const handlePromoSaved = (): void => {
+    // refresh only if needed
+    // e.g. fetchPromoBookings();
+  };
 
   return (
     <IonPage className="bookadd-page">
@@ -76,7 +83,9 @@ const Book_Add: React.FC = () => {
                 />
                 <div className="bookadd-hero-text">
                   <p className="bookadd-hero-title">Welcome to Me Tyme Lounge!</p>
-                  <p className="bookadd-hero-subtitle">Rest, relax, and focus in a peaceful environment.</p>
+                  <p className="bookadd-hero-subtitle">
+                    Rest, relax, and focus in a peaceful environment.
+                  </p>
                 </div>
               </div>
 
@@ -89,7 +98,9 @@ const Book_Add: React.FC = () => {
             {/* TOPBAR */}
             <div className="bookadd-topbar">
               <p className="bookadd-topbar-title">Choose Action</p>
-              <p className="bookadd-topbar-subtitle">Book your seat, choose promos, or order add-ons separately.</p>
+              <p className="bookadd-topbar-subtitle">
+                Book your seat, choose promos, or order add-ons separately.
+              </p>
             </div>
 
             {/* ACTION BUTTONS */}
@@ -102,7 +113,6 @@ const Book_Add: React.FC = () => {
                 </IonButton>
               </div>
 
-              {/* ✅ NEW PROMO CARD (same layout) */}
               <div className="bookadd-btn-card bookadd-btn-promo">
                 <span className="bookadd-btn-label">Promo</span>
                 <p className="bookadd-btn-desc">Select package and schedule your start time.</p>
@@ -122,19 +132,23 @@ const Book_Add: React.FC = () => {
           </div>
         </div>
 
-        {/* MODALS (separate files) */}
+        {/* MODALS */}
         <BookingModal
           isOpen={isBookingOpen}
           onClose={() => setIsBookingOpen(false)}
-          onSaved={() => setBookingThanksOpen(true)}
+          onSaved={(isReservation: boolean) => {
+            setBookingSavedMessage(
+              isReservation ? "Reservation booking successfully." : "Booking saved successfully."
+            );
+            setBookingSavedOpen(true); // ✅ show IonAlert
+          }}
           seatGroups={SEAT_GROUPS}
         />
 
-        {/* ✅ NEW PROMO MODAL */}
         <PromoModal
           isOpen={isPromoOpen}
           onClose={() => setIsPromoOpen(false)}
-          onSaved={() => setPromoThanksOpen(true)}
+          onSaved={handlePromoSaved}
           seatGroups={SEAT_GROUPS}
         />
 
@@ -145,69 +159,21 @@ const Book_Add: React.FC = () => {
           seatGroups={SEAT_GROUPS}
         />
 
-        {/* THANK YOU MODAL: BOOKING */}
-        <IonModal
-          isOpen={bookingThanksOpen}
-          onDidDismiss={() => setBookingThanksOpen(false)}
-          className="bookadd-thanks-modal"
-        >
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>Thank you!</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setBookingThanksOpen(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-          <IonContent className="ion-padding">
-            <div className="bookadd-card">
-              <p className="summary-text" style={{ fontWeight: 800, marginBottom: 8 }}>
-                Thanks for booking.
-              </p>
-              <p className="summary-text" style={{ opacity: 0.85 }}>
-                Please wait a moment. Staff will review your booking details.
-              </p>
-              <IonButton expand="block" onClick={() => setBookingThanksOpen(false)}>
-                OK
-              </IonButton>
-            </div>
-          </IonContent>
-        </IonModal>
+        {/* ✅ BOOKING SAVED ALERT (same as Promo style) */}
+        <IonAlert
+          isOpen={bookingSavedOpen}
+          onDidDismiss={() => setBookingSavedOpen(false)}
+          header="Saved"
+          message={bookingSavedMessage}
+          buttons={[
+            {
+              text: "OK",
+              handler: () => setBookingSavedOpen(false),
+            },
+          ]}
+        />
 
-        {/* ✅ THANK YOU MODAL: PROMO */}
-        <IonModal
-          isOpen={promoThanksOpen}
-          onDidDismiss={() => setPromoThanksOpen(false)}
-          className="bookadd-thanks-modal"
-        >
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>Thank you!</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setPromoThanksOpen(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-          <IonContent className="ion-padding">
-            <div className="bookadd-card">
-              <p className="summary-text" style={{ fontWeight: 800, marginBottom: 8 }}>
-                Promo booked successfully.
-              </p>
-              <p className="summary-text" style={{ opacity: 0.85 }}>
-                Choose a promo package with discount for better savings.
-              </p>
-              <IonButton expand="block" onClick={() => setPromoThanksOpen(false)}>
-                OK
-              </IonButton>
-            </div>
-          </IonContent>
-        </IonModal>
-
-        {/* THANK YOU MODAL: ADD-ONS */}
+        {/* THANK YOU MODAL: ADD-ONS (unchanged) */}
         <IonModal
           isOpen={addOnsThanksOpen}
           onDidDismiss={() => setAddOnsThanksOpen(false)}
