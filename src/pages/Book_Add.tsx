@@ -5,14 +5,8 @@ import {
   IonHeader,
   IonContent,
   IonButton,
-  IonModal,
-  IonToolbar,
-  IonTitle,
-  IonButtons,
-  IonIcon,
-  IonAlert, // ✅ ADD
+  IonAlert,
 } from "@ionic/react";
-import { closeOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 
 import BookingModal from "../components/BookingModal";
@@ -44,17 +38,15 @@ const Book_Add: React.FC = () => {
   const [isAddOnsOpen, setIsAddOnsOpen] = useState(false);
   const [isPromoOpen, setIsPromoOpen] = useState(false);
 
-  // ✅ BOOKING SAVED = use IonAlert (same style as your Promo)
+  // BOOKING SAVED ALERT
   const [bookingSavedOpen, setBookingSavedOpen] = useState(false);
   const [bookingSavedMessage, setBookingSavedMessage] = useState("Booking saved successfully.");
 
-  // ADD-ONS THANK YOU MODAL (unchanged)
-  const [addOnsThanksOpen, setAddOnsThanksOpen] = useState(false);
+  // ADD-ONS SENT ALERT
+  const [addOnsSentOpen, setAddOnsSentOpen] = useState(false);
 
-  // ✅ Promo saved handler = refresh-only (OPTIONAL)
   const handlePromoSaved = (): void => {
-    // refresh only if needed
-    // e.g. fetchPromoBookings();
+    // optional refresh-only
   };
 
   return (
@@ -140,7 +132,7 @@ const Book_Add: React.FC = () => {
             setBookingSavedMessage(
               isReservation ? "Reservation booking successfully." : "Booking saved successfully."
             );
-            setBookingSavedOpen(true); // ✅ show IonAlert
+            setBookingSavedOpen(true);
           }}
           seatGroups={SEAT_GROUPS}
         />
@@ -155,54 +147,43 @@ const Book_Add: React.FC = () => {
         <AddOnsModal
           isOpen={isAddOnsOpen}
           onClose={() => setIsAddOnsOpen(false)}
-          onSaved={() => setAddOnsThanksOpen(true)}
+          onSaved={() => {
+            setAddOnsSentOpen(true); // ✅ show alert, close later on OK
+          }}
           seatGroups={SEAT_GROUPS}
         />
 
-        {/* ✅ BOOKING SAVED ALERT (same as Promo style) */}
+        {/* BOOKING ALERT (close form on OK) */}
         <IonAlert
           isOpen={bookingSavedOpen}
-          onDidDismiss={() => setBookingSavedOpen(false)}
           header="Saved"
           message={bookingSavedMessage}
           buttons={[
             {
               text: "OK",
-              handler: () => setBookingSavedOpen(false),
+              handler: () => {
+                setBookingSavedOpen(false);
+                setIsBookingOpen(false);
+              },
             },
           ]}
         />
 
-        {/* THANK YOU MODAL: ADD-ONS (unchanged) */}
-        <IonModal
-          isOpen={addOnsThanksOpen}
-          onDidDismiss={() => setAddOnsThanksOpen(false)}
-          className="bookadd-thanks-modal"
-        >
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>Thank you!</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setAddOnsThanksOpen(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-          <IonContent className="ion-padding">
-            <div className="bookadd-card">
-              <p className="summary-text" style={{ fontWeight: 800, marginBottom: 8 }}>
-                Thank you for your order.
-              </p>
-              <p className="summary-text" style={{ opacity: 0.85 }}>
-                Please wait a few minutes. Staff will confirm and deliver your add-ons.
-              </p>
-              <IonButton expand="block" onClick={() => setAddOnsThanksOpen(false)}>
-                OK
-              </IonButton>
-            </div>
-          </IonContent>
-        </IonModal>
+        {/* ✅ ADD-ONS ALERT (close form on OK) */}
+        <IonAlert
+          isOpen={addOnsSentOpen}
+          header="Sent"
+          message={"Order sent to staff. Please wait a few minutes."}
+          buttons={[
+            {
+              text: "OK",
+              handler: () => {
+                setAddOnsSentOpen(false);
+                setIsAddOnsOpen(false); // ✅ close AddOns form AFTER OK
+              },
+            },
+          ]}
+        />
       </IonContent>
     </IonPage>
   );

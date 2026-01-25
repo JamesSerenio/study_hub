@@ -47,7 +47,7 @@ type SeatGroup = { title: string; seats: string[] };
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => void; // ✅ parent will show alert + close on OK
   seatGroups: SeatGroup[];
 };
 
@@ -70,10 +70,15 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
     // Ensure at least 1 block on open
     setSelectedCategories((prev) => (prev.length === 0 ? [""] : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   const fetchAddOns = async (): Promise<void> => {
-    const { data, error } = await supabase.from("add_ons").select("*").order("category", { ascending: true });
+    const { data, error } = await supabase
+      .from("add_ons")
+      .select("*")
+      .order("category", { ascending: true });
+
     if (error) {
       console.error(error);
       alert("Error loading add-ons.");
@@ -111,7 +116,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
         const addOn = addOns.find((a) => a.id === id);
         if (!addOn) return prev;
-        return [...prev, { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity: q }];
+        return [
+          ...prev,
+          { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity: q },
+        ];
       }
 
       return prev.filter((s) => s.id !== id);
@@ -127,7 +135,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     });
   };
 
-  // ✅ Removing a block should NOT delete items (customer might still want them)
+  // ✅ Removing a block should NOT delete items
   const removeCategoryBlock = (index: number): void => {
     setSelectedCategories((prev) => {
       const next = prev.filter((_, i) => i !== index);
@@ -177,8 +185,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     }
 
     void fetchAddOns();
-    onClose();
+
+    // ✅ DO NOT close here. Parent will close AFTER OK on alert.
     onSaved();
+
+    // ✅ reset now (so next open is clean)
     resetAddOnsForm();
   };
 
@@ -260,39 +271,46 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                 </div>
 
                 {category && (
-                  <>
-                    <IonItem className="form-item">
-                      <IonLabel position="stacked">Select {category} Item</IonLabel>
-                      <IonSelect
-                        placeholder="Choose an item"
-                        onIonChange={(e) => {
-                          const selectedId = asString(e.detail.value);
-                          if (!selectedId) return;
+                  <IonItem className="form-item">
+                    <IonLabel position="stacked">Select {category} Item</IonLabel>
+                    <IonSelect
+                      placeholder="Choose an item"
+                      onIonChange={(e) => {
+                        const selectedId = asString(e.detail.value);
+                        if (!selectedId) return;
 
-                          const addOn = addOns.find((a) => a.id === selectedId);
-                          if (!addOn) return;
+                        const addOn = addOns.find((a) => a.id === selectedId);
+                        if (!addOn) return;
 
-                          setSelectedAddOns((prev) => {
-                            const existing = prev.find((s) => s.id === selectedId);
-                            if (existing) return prev; // already selected
-                            return [...prev, { id: selectedId, name: addOn.name, category: addOn.category, price: addOn.price, quantity: 1 }];
-                          });
-                        }}
-                      >
-                        {categoryItems.map((a) => (
-                          <IonSelectOption key={a.id} value={a.id}>
-                            {a.name} - ₱{a.price} (Stock: {a.stocks})
-                          </IonSelectOption>
-                        ))}
-                      </IonSelect>
-                    </IonItem>
-                  </>
+                        setSelectedAddOns((prev) => {
+                          const existing = prev.find((s) => s.id === selectedId);
+                          if (existing) return prev;
+                          return [
+                            ...prev,
+                            {
+                              id: selectedId,
+                              name: addOn.name,
+                              category: addOn.category,
+                              price: addOn.price,
+                              quantity: 1,
+                            },
+                          ];
+                        });
+                      }}
+                    >
+                      {categoryItems.map((a) => (
+                        <IonSelectOption key={a.id} value={a.id}>
+                          {a.name} - ₱{a.price} (Stock: {a.stocks})
+                        </IonSelectOption>
+                      ))}
+                    </IonSelect>
+                  </IonItem>
                 )}
               </div>
             );
           })}
 
-          {/* SELECTED ITEMS LIST (always visible) */}
+          {/* SELECTED ITEMS LIST */}
           {selectedAddOns.length > 0 && (
             <IonList style={{ marginTop: 12 }}>
               <IonListHeader>
@@ -331,7 +349,12 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                           }}
                         />
 
-                        <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
+                        <IonButton
+                          color="danger"
+                          onClick={() =>
+                            setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))
+                          }
+                        >
                           Remove
                         </IonButton>
                       </div>
