@@ -1,43 +1,92 @@
-// Admin_customer_list.tsx
-import React, { useEffect, useState } from "react";
+// src/pages/Admin_customer_list.tsx
+// ✅ Same logic as Customer_Lists:
+//    - Date filter (shows records by selected date)
+//    - Export to Excel (CSV) for selected date only (UTF-8 BOM + force Date/Time text + amount number only)
+//    - Total Amount shows ONLY ONE: Total Balance OR Total Change
+// ✅ Admin delete:
+//    - Delete single row
+//    - Delete ALL rows by selected date (one click)
+// ✅ No "any"
+
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
 const HOURLY_RATE = 20;
-const FREE_MINUTES = 5; // system-only (NOT shown on receipt)
+const FREE_MINUTES = 5;
 const DOWN_PAYMENT = 50;
 
 interface CustomerSession {
   id: string;
-  date: string;
+  date: string; // YYYY-MM-DD (Supabase date -> string)
   full_name: string;
   customer_type: string;
-  customer_field: string;
+  customer_field: string | null;
   has_id: boolean;
-  id_number: string;
+  id_number: string | null;
   hour_avail: string;
-  time_started: string;
-  time_ended: string;
-
-  // recommended: minutes stored in DB
-  total_time?: number;
-
-  total_amount: number;
+  time_started: string; // timestamptz
+  time_ended: string; // timestamptz
+  total_time: number | null; // minutes (or numeric)
+  total_amount: number; // system cost (DB numeric)
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
 }
 
+const yyyyMmDdLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+
+const formatTimeText = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const diffMinutes = (startIso: string, endIso: string): number => {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return Math.floor((end - start) / (1000 * 60));
+};
+
+const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
+  const minutesUsed = diffMinutes(startIso, endIso);
+  const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
+  const perMinute = HOURLY_RATE / 60;
+  return Number((chargeMinutes * perMinute).toFixed(2));
+};
+
+const formatMinutesToTime = (minutes: number): string => {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "0 min";
+  const hrs = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+
+  if (hrs === 0) return `${mins} min`;
+  if (mins === 0) return `${hrs} hour${hrs > 1 ? "s" : ""}`;
+  return `${hrs} hr ${mins} min`;
+};
+
 const Admin_customer_list: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
 
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingDate, setDeletingDate] = useState<string | null>(null);
 
   // auto refresh OPEN time display
   const [nowTick, setNowTick] = useState<number>(Date.now());
+
+  // ✅ Date filter
+  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   useEffect(() => {
     void fetchCustomerSessions();
@@ -48,7 +97,7 @@ const Admin_customer_list: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
 
-  const fetchCustomerSessions = async () => {
+  const fetchCustomerSessions = async (): Promise<void> => {
     setLoading(true);
 
     const { data, error } = await supabase
@@ -67,44 +116,22 @@ const Admin_customer_list: React.FC = () => {
     setLoading(false);
   };
 
+  const filteredSessions = useMemo(() => {
+    return sessions.filter((s) => (s.date ?? "") === selectedDate);
+  }, [sessions, selectedDate]);
+
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
     const end = new Date(s.time_ended);
     return end.getFullYear() >= 2999;
   };
 
-  const diffMinutes = (startIso: string, endIso: string): number => {
-    const start = new Date(startIso).getTime();
-    const end = new Date(endIso).getTime();
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
-    return Math.floor((end - start) / (1000 * 60));
-  };
-
-  const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
-    const minutesUsed = diffMinutes(startIso, endIso);
-    const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
-    const perMinute = HOURLY_RATE / 60;
-    return Number((chargeMinutes * perMinute).toFixed(2));
-  };
-
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
 
-    // if DB has total_time (minutes)
-    if (typeof s.total_time === "number") return Number(s.total_time || 0);
+    if (typeof s.total_time === "number" && Number.isFinite(s.total_time)) return Number(s.total_time || 0);
 
-    // fallback: compute from timestamps
     return diffMinutes(s.time_started, s.time_ended);
-  };
-
-  const formatMinutesToTime = (minutes: number): string => {
-    if (!minutes || minutes <= 0) return "0 min";
-    const hrs = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-
-    if (hrs === 0) return `${mins} min`;
-    if (mins === 0) return `${hrs} hour${hrs > 1 ? "s" : ""}`;
-    return `${hrs} hr ${mins} min`;
   };
 
   // ✅ total cost (OPEN uses live)
@@ -113,12 +140,22 @@ const Admin_customer_list: React.FC = () => {
     return Number(s.total_amount || 0);
   };
 
-  // ✅ balance (this should match TOTAL BALANCE)
+  // ✅ TWO categories (display only one)
   const getSessionBalance = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
     return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
   };
 
+  const getSessionChange = (s: CustomerSession): number => {
+    const totalCost = getSessionTotalCost(s);
+    return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
+  };
+
+  const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
+    const bal = getSessionBalance(s);
+    if (bal > 0) return { label: "Total Balance", value: bal };
+    return { label: "Total Change", value: getSessionChange(s) };
+  };
 
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
@@ -133,7 +170,7 @@ const Admin_customer_list: React.FC = () => {
         .update({
           time_ended: nowIso,
           total_time: totalMinutes, // minutes
-          total_amount: totalCost,  // system cost
+          total_amount: totalCost, // system cost
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
@@ -179,33 +216,159 @@ const Admin_customer_list: React.FC = () => {
     }
   };
 
-  const renderTimeOut = (s: CustomerSession) =>
-    isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleTimeString("en-PH");
+  // ✅ Delete ALL by selected date
+  const deleteByDate = async (): Promise<void> => {
+    if (!selectedDate) return;
 
-  const renderStatus = (s: CustomerSession) => {
+    const ok = window.confirm(`Delete ALL records on date: ${selectedDate}?\n\nThis will remove them from the database.`);
+    if (!ok) return;
+
+    try {
+      setDeletingDate(selectedDate);
+
+      const { error } = await supabase
+        .from("customer_sessions")
+        .delete()
+        .eq("date", selectedDate)
+        .neq("reservation", "yes");
+
+      if (error) {
+        alert(`Delete by date error: ${error.message}`);
+        return;
+      }
+
+      // remove from UI
+      setSessions((prev) => prev.filter((s) => s.date !== selectedDate));
+      setSelectedSession(null);
+    } catch (e) {
+      console.error(e);
+      alert("Delete by date failed.");
+    } finally {
+      setDeletingDate(null);
+    }
+  };
+
+  const renderTimeOut = (s: CustomerSession): string =>
+    isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
+
+  const renderStatus = (s: CustomerSession): string => {
     if (isOpenTimeSession(s)) return "Ongoing";
     return new Date() > new Date(s.time_ended) ? "Finished" : "Ongoing";
   };
 
-  // ✅ payment summary where "Total Amount" = balance (same as TOTAL BALANCE)
-  const getPaymentSummary = (s: CustomerSession) => {
-    const totalCost = getSessionTotalCost(s);
-    const down = DOWN_PAYMENT;
+  // ✅ Export to Excel (CSV) for selected date only
+  // - UTF-8 BOM
+  // - Date/Time forced as TEXT
+  // - Amount as NUMBER only
+  // - Export ONLY ONE (Balance OR Change) as label+amount
+  const exportToExcel = (): void => {
+    if (!selectedDate) {
+      alert("Please select a date.");
+      return;
+    }
+    if (filteredSessions.length === 0) {
+      alert("No records for selected date.");
+      return;
+    }
 
-    const change = Number(Math.max(0, down - totalCost).toFixed(2));
-    const balance = Number(Math.max(0, totalCost - down).toFixed(2));
+    const headers = [
+      "Date",
+      "Full Name",
+      "Type",
+      "Field",
+      "Has ID",
+      "Specific ID",
+      "Hours",
+      "Time In",
+      "Time Out",
+      "Total Time",
+      "Amount Label",
+      "Amount",
+      "Seat",
+      "Status",
+    ];
 
-    return { totalCost, down, change, balance };
+    const rows = filteredSessions.map((s) => {
+      const timeIn = formatTimeText(s.time_started);
+      const timeOut = isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
+      const status = renderStatus(s);
+
+      const totalMins = getDisplayedTotalMinutes(s);
+      const disp = getDisplayAmount(s);
+
+      return [
+        `\t${s.date}`,
+        s.full_name,
+        s.customer_type,
+        s.customer_field ?? "",
+        s.has_id ? "Yes" : "No",
+        s.id_number ?? "N/A",
+        s.hour_avail,
+        `\t${timeIn}`,
+        `\t${timeOut}`,
+        formatMinutesToTime(totalMins),
+        disp.label,
+        disp.value.toFixed(2),
+        s.seat_number,
+        status,
+      ];
+    });
+
+    const csv =
+      "\ufeff" +
+      [headers, ...rows]
+        .map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(","))
+        .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `admin-nonreservation-${selectedDate}.csv`;
+    a.click();
+
+    URL.revokeObjectURL(url);
   };
 
   return (
     <div className="customer-lists-container">
-      <h2 className="customer-lists-title">Admin Customer Lists - Non Reservation</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h2 className="customer-lists-title" style={{ margin: 0 }}>
+          Admin Customer Lists - Non Reservation
+        </h2>
+
+        {/* ✅ Date filter + Export + Delete by date */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+          />
+
+          <button className="receipt-btn" onClick={exportToExcel} disabled={filteredSessions.length === 0}>
+            Export to Excel
+          </button>
+
+          <button
+            className="receipt-btn"
+            onClick={() => void deleteByDate()}
+            disabled={filteredSessions.length === 0 || deletingDate === selectedDate}
+            style={{ background: "#b00020" }}
+          >
+            {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, opacity: 0.85 }}>
+        Showing records for: <strong>{selectedDate}</strong> ({filteredSessions.length})
+      </div>
 
       {loading ? (
         <p>Loading...</p>
-      ) : sessions.length === 0 ? (
-        <p>No data found</p>
+      ) : filteredSessions.length === 0 ? (
+        <p>No data found for this date</p>
       ) : (
         <table className="customer-table">
           <thead>
@@ -220,7 +383,7 @@ const Admin_customer_list: React.FC = () => {
               <th>Time In</th>
               <th>Time Out</th>
               <th>Total Time</th>
-              <th>Total Amount</th>
+              <th>Total Balance / Change</th>
               <th>Seat</th>
               <th>Status</th>
               <th>Action</th>
@@ -228,31 +391,36 @@ const Admin_customer_list: React.FC = () => {
           </thead>
 
           <tbody>
-            {sessions.map((session) => {
+            {filteredSessions.map((session) => {
               const open = isOpenTimeSession(session);
               const totalMins = getDisplayedTotalMinutes(session);
+              const disp = getDisplayAmount(session);
 
               return (
                 <tr key={session.id}>
                   <td>{session.date}</td>
                   <td>{session.full_name}</td>
                   <td>{session.customer_type}</td>
-                  <td>{session.customer_field}</td>
+                  <td>{session.customer_field ?? ""}</td>
                   <td>{session.has_id ? "Yes" : "No"}</td>
-                  <td>{session.id_number || "N/A"}</td>
+                  <td>{session.id_number ?? "N/A"}</td>
                   <td>{session.hour_avail}</td>
-                  <td>{new Date(session.time_started).toLocaleTimeString("en-PH")}</td>
+                  <td>{formatTimeText(session.time_started)}</td>
                   <td>{renderTimeOut(session)}</td>
 
                   <td>{formatMinutesToTime(totalMins)}</td>
 
-                  {/* ✅ Total Amount = BALANCE */}
-                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontWeight: 800 }}>{disp.label}</span>
+                      <span>₱{disp.value.toFixed(2)}</span>
+                    </div>
+                  </td>
 
                   <td>{session.seat_number}</td>
                   <td>{renderStatus(session)}</td>
 
-                  <td style={{ display: "flex", gap: 8 }}>
+                  <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {open && (
                       <button
                         className="receipt-btn"
@@ -271,6 +439,7 @@ const Admin_customer_list: React.FC = () => {
                       className="receipt-btn"
                       disabled={deletingId === session.id}
                       onClick={() => void deleteSession(session)}
+                      style={{ background: "#444" }}
                     >
                       {deletingId === session.id ? "Deleting..." : "Delete"}
                     </button>
@@ -310,7 +479,7 @@ const Admin_customer_list: React.FC = () => {
 
             <div className="receipt-row">
               <span>Field</span>
-              <span>{selectedSession.customer_field}</span>
+              <span>{selectedSession.customer_field ?? ""}</span>
             </div>
 
             <div className="receipt-row">
@@ -322,7 +491,7 @@ const Admin_customer_list: React.FC = () => {
 
             <div className="receipt-row">
               <span>Time In</span>
-              <span>{new Date(selectedSession.time_started).toLocaleTimeString("en-PH")}</span>
+              <span>{formatTimeText(selectedSession.time_started)}</span>
             </div>
 
             <div className="receipt-row">
@@ -351,42 +520,30 @@ const Admin_customer_list: React.FC = () => {
             <hr />
 
             {(() => {
-              const { down, change, balance } = getPaymentSummary(selectedSession);
-
-              const isChange = change > 0;
-              const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
-              const totalValue = isChange ? change : balance;
+              const disp = getDisplayAmount(selectedSession);
+              const totalCost = getSessionTotalCost(selectedSession);
 
               return (
                 <>
-                  {/* ✅ Total Amount = BALANCE (matches TOTAL BALANCE) */}
                   <div className="receipt-row">
-                    <span>Total Amount</span>
-                    <span>₱{balance.toFixed(2)}</span>
+                    <span>{disp.label}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Down Payment</span>
-                    <span>₱{down.toFixed(2)}</span>
+                    <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
-                  {change > 0 && (
-                    <div className="receipt-row">
-                      <span>Change</span>
-                      <span>₱{change.toFixed(2)}</span>
-                    </div>
-                  )}
-
-                  {balance > 0 && (
-                    <div className="receipt-row">
-                      <span>Balance</span>
-                      <span>₱{balance.toFixed(2)}</span>
-                    </div>
-                  )}
+                  {/* optional debug */}
+                  <div className="receipt-row">
+                    <span>System Cost</span>
+                    <span>₱{totalCost.toFixed(2)}</span>
+                  </div>
 
                   <div className="receipt-total">
-                    <span>{totalLabel}</span>
-                    <span>₱{Number(totalValue || 0).toFixed(2)}</span>
+                    <span>{disp.label.toUpperCase()}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
                 </>
               );
