@@ -1,5 +1,12 @@
-import React, { useEffect, useState } from "react";
-import { IonPage, IonContent, IonSpinner, IonText } from "@ionic/react";
+// src/pages/Customer_Add_ons.tsx
+
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  IonPage,
+  IonContent,
+  IonSpinner,
+  IonText,
+} from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 
 type NumericLike = number | string;
@@ -34,6 +41,8 @@ interface CustomerAddOnMerged {
   category: string;
 }
 
+/* ---------------- helpers ---------------- */
+
 const toNumber = (v: NumericLike | null | undefined): number => {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "string") {
@@ -43,13 +52,32 @@ const toNumber = (v: NumericLike | null | undefined): number => {
   return 0;
 };
 
+const yyyyMmDdLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const extractDate = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return yyyyMmDdLocal(d);
+};
+
+/* ---------------- component ---------------- */
+
 const Customer_Add_ons: React.FC = () => {
   const [records, setRecords] = useState<CustomerAddOnMerged[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
+  // ✅ date filter
+  const [selectedDate, setSelectedDate] = useState<string>(
+    yyyyMmDdLocal(new Date())
+  );
+
   useEffect(() => {
-    fetchAddOns();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void fetchAddOns();
   }, []);
 
   const fetchAddOns = async (): Promise<void> => {
@@ -57,28 +85,26 @@ const Customer_Add_ons: React.FC = () => {
 
     const { data: rows, error } = await supabase
       .from("customer_session_add_ons")
-      .select(
-        `
-          id,
-          created_at,
-          add_on_id,
-          quantity,
-          price,
-          total,
-          full_name,
-          seat_number
-        `
-      )
+      .select(`
+        id,
+        created_at,
+        add_on_id,
+        quantity,
+        price,
+        total,
+        full_name,
+        seat_number
+      `)
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.error("Error fetching customer_session_add_ons:", error);
+      console.error("Error fetching add-ons:", error);
       setRecords([]);
       setLoading(false);
       return;
     }
 
-    const sessionRows = (rows ?? []) as unknown as CustomerSessionAddOnRow[];
+    const sessionRows = (rows ?? []) as CustomerSessionAddOnRow[];
 
     if (sessionRows.length === 0) {
       setRecords([]);
@@ -86,17 +112,19 @@ const Customer_Add_ons: React.FC = () => {
       return;
     }
 
-    const addOnIds = Array.from(new Set(sessionRows.map((r) => r.add_on_id)));
+    const addOnIds = Array.from(
+      new Set(sessionRows.map((r) => r.add_on_id))
+    );
 
-    const { data: addOnRows, error: addOnErr } = await supabase
+    const { data: addOnRows } = await supabase
       .from("add_ons")
       .select("id, name, category")
       .in("id", addOnIds);
 
-    if (addOnErr) console.error("Error fetching add_ons:", addOnErr);
-
     const addOnMap = new Map<string, AddOnInfo>();
-    ((addOnRows ?? []) as AddOnInfo[]).forEach((a) => addOnMap.set(a.id, a));
+    (addOnRows ?? []).forEach((a) =>
+      addOnMap.set(a.id, a)
+    );
 
     const merged: CustomerAddOnMerged[] = sessionRows.map((r) => {
       const addOn = addOnMap.get(r.add_on_id);
@@ -118,12 +146,43 @@ const Customer_Add_ons: React.FC = () => {
     setLoading(false);
   };
 
+  /* ✅ filtered by selected date */
+  const filteredRecords = useMemo(() => {
+    return records.filter(
+      (r) => extractDate(r.created_at) === selectedDate
+    );
+  }, [records, selectedDate]);
+
   return (
     <IonPage>
       <IonContent className="ion-padding">
-        <h2 style={{ fontWeight: 800, marginBottom: 12 }}>
-          Customer Add-Ons Records
-        </h2>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+            marginBottom: 10,
+          }}
+        >
+          <h2 style={{ fontWeight: 800, margin: 0 }}>
+            Customer Add-Ons Records
+          </h2>
+
+          {/* ✅ DATE FILTER */}
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) =>
+              setSelectedDate(e.currentTarget.value)
+            }
+          />
+        </div>
+
+        <div style={{ marginBottom: 10, opacity: 0.8 }}>
+          Showing records for: <strong>{selectedDate}</strong>
+        </div>
 
         {loading && (
           <div style={{ textAlign: "center", marginTop: 30 }}>
@@ -131,56 +190,46 @@ const Customer_Add_ons: React.FC = () => {
           </div>
         )}
 
-        {!loading && records.length === 0 && (
-          <IonText>No add-ons recorded.</IonText>
+        {!loading && filteredRecords.length === 0 && (
+          <IonText>No add-ons found for this date.</IonText>
         )}
 
-        {!loading && records.length > 0 && (
-            <div className="customer-addons-container">
+        {!loading && filteredRecords.length > 0 && (
+          <div className="customer-addons-container">
             <table className="customer-addons-table">
-                <thead>
+              <thead>
                 <tr>
-                    <th>Date</th>
-                    <th>Full Name</th>
-                    <th>Seat</th>
-                    <th>Category</th>
-                    <th>Item</th>
-                    <th>Qty</th>
-                    <th>Price</th>
-                    <th>Total</th>
+                  <th>Date</th>
+                  <th>Full Name</th>
+                  <th>Seat</th>
+                  <th>Category</th>
+                  <th>Item</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Total</th>
                 </tr>
-                </thead>
+              </thead>
 
-                <tbody>
-                {records.map((row) => (
-                    <tr key={row.id}>
+              <tbody>
+                {filteredRecords.map((row) => (
+                  <tr key={row.id}>
                     <td>
-                        {row.created_at
-                        ? new Date(row.created_at).toLocaleString()
-                        : "-"}
+                      {new Date(row.created_at).toLocaleString("en-PH")}
                     </td>
-
                     <td>{row.full_name || "-"}</td>
-
                     <td>{row.seat_number || "-"}</td>
-
                     <td>{row.category}</td>
-
                     <td>{row.item_name}</td>
-
                     <td>{row.quantity}</td>
-
                     <td>₱{row.price.toFixed(2)}</td>
-
                     <td style={{ fontWeight: 800 }}>
-                        ₱{row.total.toFixed(2)}
+                      ₱{row.total.toFixed(2)}
                     </td>
-                    </tr>
+                  </tr>
                 ))}
-                </tbody>
+              </tbody>
             </table>
-            </div>
-
+          </div>
         )}
       </IonContent>
     </IonPage>

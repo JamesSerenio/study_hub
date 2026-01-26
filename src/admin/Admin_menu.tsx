@@ -29,6 +29,7 @@ import Admin_Packages from "./Admin_Packages";
 import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List";
 import Admin_Seat_Table from "./Admin_Seat_Table";
 import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses&Expired";
+import Admin_Customer_Add_ons from "./Admin_Customer_Add_ons"; // ✅ NEW
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -39,7 +40,8 @@ import reservationIcon from "../assets/reserve.png";
 import promotionIcon from "../assets/promotion.png";
 import discountIcon from "../assets/discount.png";
 import seatIcon from "../assets/seat.png";
-import expenseIcon from "../assets/expense.png"; // ✅ ADD
+import expenseIcon from "../assets/expense.png";
+import hamburgerIcon from "../assets/hamburger.png"; // ✅ ADD
 import studyHubLogo from "../assets/study_hub.png";
 
 type MenuKey =
@@ -47,6 +49,7 @@ type MenuKey =
   | "add_ons"
   | "item_lists"
   | "staff_expenses"
+  | "customer_add_ons"     // ✅ NEW
   | "customer_list"
   | "customer_reservation"
   | "seat_table"
@@ -68,19 +71,23 @@ const Admin_menu: React.FC = () => {
     { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
     { name: "Item Lists", key: "item_lists", icon: itemIcon },
 
-    // ✅ NEW PAGE
+    // ✅ STAFF EXPENSES / EXPIRED
     { name: "Staff Expenses", key: "staff_expenses", icon: expenseIcon },
+
+    // ✅ CUSTOMER ADD-ONS HISTORY
+    {
+      name: "Customer Add-Ons",
+      key: "customer_add_ons",
+      icon: hamburgerIcon,
+    },
 
     { name: "Customer List", key: "customer_list", icon: customerListIcon },
     { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
 
-    // ✅ ADMIN SEAT TABLE
     { name: "Seat Table", key: "seat_table", icon: seatIcon },
 
-    // ✅ PROMOS
     { name: "Promotions", key: "packages", icon: promotionIcon },
 
-    // ✅ DISCOUNT RECORDS
     { name: "Discount Records", key: "discount_records", icon: discountIcon },
   ];
 
@@ -97,6 +104,9 @@ const Admin_menu: React.FC = () => {
 
       case "staff_expenses":
         return <Admin_Staff_Expenses_Expired />;
+
+      case "customer_add_ons":
+        return <Admin_Customer_Add_ons />;
 
       case "customer_list":
         return <Admin_customer_list />;
@@ -133,17 +143,15 @@ const Admin_menu: React.FC = () => {
             <IonToolbar>
               <div className="menu-brand">
                 <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
-                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+                <span className="menu-title-text figma-title">
+                  Me Tyme Lounge
+                </span>
               </div>
             </IonToolbar>
           </IonHeader>
 
           <IonContent>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4 }}
-            >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
                   <IonItem

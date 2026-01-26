@@ -33,7 +33,7 @@ import listIcon from "../assets/list.png";
 import reserveIcon from "../assets/reserve.png";
 import calendarIcon from "../assets/calendar.png";
 import foodIcon from "../assets/food.png";
-import onsIcon from "../assets/ons.png";
+import onsIcon from "../assets/hamburger.png";
 import discountIcon from "../assets/discount.png";
 
 const Staff_menu: React.FC = () => {

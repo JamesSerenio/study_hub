@@ -1,5 +1,13 @@
-// Admin_customer_reservation.tsx
-import React, { useEffect, useState } from "react";
+// src/pages/Admin_customer_reservation.tsx
+// ✅ Date filter (shows records by selected reservation_date)
+// ✅ Export to Excel (CSV) for selected date only (UTF-8 BOM, Date/Time as TEXT, Amount as NUMBER only)
+// ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both) in table + receipt
+// ✅ Delete single row
+// ✅ Delete by DATE (deletes ALL records with reservation_date = selectedDate from DB)
+// ✅ Promo filtered out (DB + frontend)
+// ✅ OPEN sessions auto-update display
+
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
@@ -21,13 +29,27 @@ interface CustomerSession {
 
   // minutes stored in DB (numeric may come as number|string)
   total_time: number | string;
-
   total_amount: number | string;
 
   reservation: string;
-  reservation_date: string | null;
+  reservation_date: string | null; // YYYY-MM-DD
   seat_number: string;
 }
+
+const yyyyMmDdLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+
+const formatTimeText = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
 
 const Admin_customer_reservation: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
@@ -36,7 +58,12 @@ const Admin_customer_reservation: React.FC = () => {
 
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingDate, setDeletingDate] = useState<string | null>(null);
+
   const [nowTick, setNowTick] = useState<number>(Date.now());
+
+  // ✅ date filter
+  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   useEffect(() => {
     void fetchReservations();
@@ -57,7 +84,6 @@ const Admin_customer_reservation: React.FC = () => {
     return 0;
   };
 
-  // ✅ promo detector (case/space insensitive)
   const isPromoType = (t: string | null | undefined): boolean => {
     const v = (t ?? "").trim().toLowerCase();
     return v === "promo";
@@ -70,7 +96,6 @@ const Admin_customer_reservation: React.FC = () => {
       .from("customer_sessions")
       .select(`*`)
       .eq("reservation", "yes")
-      // ✅ do NOT record/show promo reservations here
       .neq("customer_type", "promo")
       .order("reservation_date", { ascending: false });
 
@@ -82,12 +107,15 @@ const Admin_customer_reservation: React.FC = () => {
       return;
     }
 
-    // ✅ extra safety in frontend for "Promo", " PROMO ", etc.
     const cleaned = ((data as CustomerSession[]) || []).filter((s) => !isPromoType(s.customer_type));
-
     setSessions(cleaned);
     setLoading(false);
   };
+
+  // ✅ filter by selectedDate (reservation_date)
+  const filteredSessions = useMemo(() => {
+    return sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
+  }, [sessions, selectedDate]);
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -110,7 +138,6 @@ const Admin_customer_reservation: React.FC = () => {
 
     if (hrs === 0) return `${mins} min`;
     if (mins === 0) return `${hrs} hour${hrs > 1 ? "s" : ""}`;
-
     return `${hrs} hr ${mins} min`;
   };
 
@@ -121,15 +148,12 @@ const Admin_customer_reservation: React.FC = () => {
     return Number((chargeMinutes * perMinute).toFixed(2));
   };
 
-  // ✅ scheduled start = reservation_date (date) + time_started (time)
   const getScheduledStartDateTime = (s: CustomerSession): Date => {
     const start = new Date(s.time_started);
-
     if (s.reservation_date) {
       const d = new Date(s.reservation_date);
       start.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
     }
-
     return start;
   };
 
@@ -143,13 +167,10 @@ const Admin_customer_reservation: React.FC = () => {
     return "Finished";
   };
 
-  // ✅ Stop Time only appears when NOW >= scheduled date+time
   const canShowStopButton = (session: CustomerSession): boolean => {
     if (!isOpenTimeSession(session)) return false;
-
     const startMs = getScheduledStartDateTime(session).getTime();
     if (!Number.isFinite(startMs)) return false;
-
     return nowTick >= startMs;
   };
 
@@ -164,12 +185,10 @@ const Admin_customer_reservation: React.FC = () => {
     return Number(timeCost.toFixed(2));
   };
 
-  // ✅ total cost (open uses live)
   const getSessionTotalCost = (s: CustomerSession): number => {
     return isOpenTimeSession(s) ? getLiveTotalCost(s) : toNum(s.total_amount);
   };
 
-  // ✅ balance after downpayment (this is what "Total Amount" should show)
   const getSessionBalance = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
     return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
@@ -178,6 +197,15 @@ const Admin_customer_reservation: React.FC = () => {
   const getSessionChange = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
     return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
+  };
+
+  // ✅ ONLY ONE display value
+  const getDisplayAmount = (
+    s: CustomerSession
+  ): { label: "Total Balance" | "Total Change"; value: number } => {
+    const bal = getSessionBalance(s);
+    if (bal > 0) return { label: "Total Balance", value: bal };
+    return { label: "Total Change", value: getSessionChange(s) };
   };
 
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
@@ -191,7 +219,6 @@ const Admin_customer_reservation: React.FC = () => {
 
       const nowIso = new Date().toISOString();
       const totalMinutes = diffMinutes(session.time_started, nowIso);
-
       const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
       const { data: updated, error } = await supabase
@@ -211,7 +238,6 @@ const Admin_customer_reservation: React.FC = () => {
         return;
       }
 
-      // ✅ if it becomes promo, remove from list
       setSessions((prev) => {
         const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
         return next.filter((s) => !isPromoType(s.customer_type));
@@ -226,12 +252,9 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // ✅ Admin delete (requires RLS policy to allow admin role)
   const deleteSession = async (session: CustomerSession): Promise<void> => {
     const ok = window.confirm(
-      `Delete this reservation record?\n\n${session.full_name}\nReservation Date: ${
-        session.reservation_date ? new Date(session.reservation_date).toLocaleDateString("en-PH") : "N/A"
-      }`
+      `Delete this reservation record?\n\n${session.full_name}\nReservation Date: ${session.reservation_date ?? "N/A"}`
     );
     if (!ok) return;
 
@@ -255,27 +278,163 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
+  // ✅ delete ALL rows by selectedDate
+  const deleteByDate = async (): Promise<void> => {
+    if (!selectedDate) {
+      alert("Please select a date first.");
+      return;
+    }
+
+    const count = filteredSessions.length;
+    const ok = window.confirm(
+      `Delete ALL reservation records on ${selectedDate}?\n\nThis will delete ${count} record(s) from the database.`
+    );
+    if (!ok) return;
+
+    try {
+      setDeletingDate(selectedDate);
+
+      const { error } = await supabase
+        .from("customer_sessions")
+        .delete()
+        .eq("reservation", "yes")
+        .eq("reservation_date", selectedDate)
+        .neq("customer_type", "promo");
+
+      if (error) {
+        alert(`Delete by date error: ${error.message}`);
+        return;
+      }
+
+      // remove from UI
+      setSessions((prev) => prev.filter((s) => (s.reservation_date ?? "") !== selectedDate));
+      setSelectedSession((prev) => ((prev?.reservation_date ?? "") === selectedDate ? null : prev));
+    } catch (e) {
+      console.error(e);
+      alert("Delete by date failed.");
+    } finally {
+      setDeletingDate(null);
+    }
+  };
+
   const renderTimeOut = (s: CustomerSession): string =>
-    isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleString("en-PH");
+    isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
+
+  // ✅ Export to Excel (CSV) for selected date only
+  // FIXED:
+  // - UTF-8 BOM
+  // - Date/Time forced as TEXT
+  // - Amount as NUMBER only
+  // - Exports ONE: Amount Label + Amount
+  const exportToExcel = (): void => {
+    if (!selectedDate) {
+      alert("Please select a date.");
+      return;
+    }
+    if (filteredSessions.length === 0) {
+      alert("No records for selected date.");
+      return;
+    }
+
+    const headers = [
+      "Reservation Date",
+      "Full Name",
+      "Field",
+      "Has ID",
+      "Specific ID",
+      "Hours",
+      "Time In",
+      "Time Out",
+      "Total Time (min)",
+      "Amount Label",
+      "Amount",
+      "Seat",
+      "Status",
+    ];
+
+    const rows = filteredSessions.map((s) => {
+      const timeIn = formatTimeText(s.time_started);
+      const timeOut = isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
+      const status = getStatus(s);
+      const disp = getDisplayAmount(s);
+
+      return [
+        `\t${s.reservation_date ?? ""}`, // force text
+        s.full_name,
+        s.customer_field ?? "",
+        s.has_id ? "Yes" : "No",
+        s.id_number ?? "N/A",
+        s.hour_avail,
+        `\t${timeIn}`, // force text
+        `\t${timeOut}`, // force text
+        String(getDisplayedTotalMinutes(s) ?? 0),
+        disp.label,
+        disp.value.toFixed(2), // number only
+        s.seat_number,
+        status,
+      ];
+    });
+
+    const csv =
+      "\ufeff" +
+      [headers, ...rows]
+        .map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(","))
+        .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `admin-reservations-${selectedDate}.csv`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="customer-lists-container">
-      <h2 className="customer-lists-title">Admin Customer Reservations</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h2 className="customer-lists-title" style={{ margin: 0 }}>
+          Admin Customer Reservations
+        </h2>
+
+        {/* ✅ Date filter + Export + Delete by Date */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+          />
+
+          <button className="receipt-btn" onClick={exportToExcel}>
+            Export to Excel
+          </button>
+
+          <button
+            className="receipt-btn"
+            onClick={() => void deleteByDate()}
+            disabled={deletingDate === selectedDate}
+          >
+            {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, opacity: 0.85 }}>
+        Showing records for: <strong>{selectedDate}</strong>
+      </div>
 
       {loading ? (
         <p>Loading...</p>
-      ) : sessions.length === 0 ? (
-        <p>No reservation records found</p>
+      ) : filteredSessions.length === 0 ? (
+        <p>No reservation records found for this date</p>
       ) : (
         <table className="customer-table">
           <thead>
             <tr>
               <th>Reservation Date</th>
               <th>Full Name</th>
-
-              {/* ❌ removed promo/type display */}
-              {/* <th>Type</th> */}
-
               <th>Field</th>
               <th>Has ID</th>
               <th>Specific ID</th>
@@ -283,7 +442,7 @@ const Admin_customer_reservation: React.FC = () => {
               <th>Time In</th>
               <th>Time Out</th>
               <th>Total Time</th>
-              <th>Total Amount</th>
+              <th>Total Balance / Change</th>
               <th>Seat</th>
               <th>Status</th>
               <th>Action</th>
@@ -291,32 +450,31 @@ const Admin_customer_reservation: React.FC = () => {
           </thead>
 
           <tbody>
-            {sessions.map((session) => {
+            {filteredSessions.map((session) => {
               const showStop = canShowStopButton(session);
               const mins = getDisplayedTotalMinutes(session);
+              const disp = getDisplayAmount(session);
 
               return (
                 <tr key={session.id}>
-                  <td>
-                    {session.reservation_date
-                      ? new Date(session.reservation_date).toLocaleDateString("en-PH")
-                      : "N/A"}
-                  </td>
+                  <td>{session.reservation_date ?? "N/A"}</td>
                   <td>{session.full_name}</td>
-
-                  {/* ❌ removed promo/type display */}
-                  {/* <td>{session.customer_type}</td> */}
-
                   <td>{session.customer_field}</td>
                   <td>{session.has_id ? "Yes" : "No"}</td>
                   <td>{session.id_number || "N/A"}</td>
                   <td>{session.hour_avail}</td>
-                  <td>{new Date(session.time_started).toLocaleString("en-PH")}</td>
+                  <td>{formatTimeText(session.time_started)}</td>
                   <td>{renderTimeOut(session)}</td>
 
                   <td>{formatMinutesToTime(mins)}</td>
 
-                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
+                  {/* ✅ ONLY ONE OUTPUT */}
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontWeight: 800 }}>{disp.label}</span>
+                      <span>₱{disp.value.toFixed(2)}</span>
+                    </div>
+                  </td>
 
                   <td>{session.seat_number}</td>
                   <td>{getStatus(session)}</td>
@@ -364,11 +522,7 @@ const Admin_customer_reservation: React.FC = () => {
 
             <div className="receipt-row">
               <span>Reservation Date</span>
-              <span>
-                {selectedSession.reservation_date
-                  ? new Date(selectedSession.reservation_date).toLocaleDateString("en-PH")
-                  : "N/A"}
-              </span>
+              <span>{selectedSession.reservation_date ?? "N/A"}</span>
             </div>
 
             <div className="receipt-row">
@@ -385,7 +539,7 @@ const Admin_customer_reservation: React.FC = () => {
 
             <div className="receipt-row">
               <span>Time In</span>
-              <span>{new Date(selectedSession.time_started).toLocaleString("en-PH")}</span>
+              <span>{formatTimeText(selectedSession.time_started)}</span>
             </div>
 
             <div className="receipt-row">
@@ -414,17 +568,15 @@ const Admin_customer_reservation: React.FC = () => {
             <hr />
 
             {(() => {
-              const change = getSessionChange(selectedSession);
-              const balance = getSessionBalance(selectedSession);
-
-              const totalLabel = change > 0 ? "TOTAL CHANGE" : "TOTAL BALANCE";
-              const totalValue = change > 0 ? change : balance;
+              const disp = getDisplayAmount(selectedSession);
+              const totalCost = getSessionTotalCost(selectedSession);
 
               return (
                 <>
+                  {/* ✅ ONLY ONE SUMMARY LINE */}
                   <div className="receipt-row">
-                    <span>Total Amount</span>
-                    <span>₱{balance.toFixed(2)}</span>
+                    <span>{disp.label}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
@@ -432,23 +584,15 @@ const Admin_customer_reservation: React.FC = () => {
                     <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
-                  {change > 0 && (
-                    <div className="receipt-row">
-                      <span>Change</span>
-                      <span>₱{change.toFixed(2)}</span>
-                    </div>
-                  )}
-
-                  {balance > 0 && (
-                    <div className="receipt-row">
-                      <span>Balance</span>
-                      <span>₱{balance.toFixed(2)}</span>
-                    </div>
-                  )}
+                  {/* optional debug (remove if you want hidden) */}
+                  <div className="receipt-row">
+                    <span>System Cost</span>
+                    <span>₱{Number(totalCost || 0).toFixed(2)}</span>
+                  </div>
 
                   <div className="receipt-total">
-                    <span>{totalLabel}</span>
-                    <span>₱{Number(totalValue || 0).toFixed(2)}</span>
+                    <span>{disp.label.toUpperCase()}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
                 </>
               );

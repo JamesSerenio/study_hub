@@ -2,7 +2,11 @@
 // ✅ Date filter (shows records by selected date)
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both)
 // ✅ Receipt summary shows ONLY: Total Balance OR Total Change (NO Total Due / Return)
-// ✅ REMOVED: Export to Excel
+// ✅ DISCOUNT feature:
+//    - Discount button per customer -> modal
+//    - Discount kind: percent (%) or amount (₱) or none
+//    - Auto recompute totals (table + receipt)
+// ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
@@ -11,6 +15,8 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 5; // system-only (HIDDEN on receipt)
 const DOWN_PAYMENT = 50;
+
+type DiscountKind = "none" | "percent" | "amount";
 
 interface CustomerSession {
   id: string;
@@ -28,6 +34,10 @@ interface CustomerSession {
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
+
+  // ✅ NEW
+  discount_kind?: DiscountKind;
+  discount_value?: number;
 }
 
 const yyyyMmDdLocal = (d: Date): string => {
@@ -43,14 +53,60 @@ const formatTimeText = (iso: string): string => {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
+const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
+
+const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
+  const v = Number.isFinite(value) ? Math.max(0, value) : 0;
+  if (kind === "percent" && v > 0) return `${v}%`;
+  if (kind === "amount" && v > 0) return `₱${v.toFixed(2)}`;
+  return "—";
+};
+
+const getDiscountText = (s: CustomerSession): string => {
+  const kind = (s.discount_kind ?? "none") as DiscountKind;
+  const value = Number(s.discount_value ?? 0);
+  return getDiscountTextFrom(kind, value);
+};
+
+const applyDiscount = (
+  baseCost: number,
+  kind: DiscountKind,
+  value: number
+): { discountedCost: number; discountAmount: number } => {
+  const cost = Number.isFinite(baseCost) ? Math.max(0, baseCost) : 0;
+  const v = Number.isFinite(value) ? Math.max(0, value) : 0;
+
+  if (kind === "percent") {
+    const pct = clamp(v, 0, 100);
+    const disc = Number(((cost * pct) / 100).toFixed(2));
+    const final = Number(Math.max(0, cost - disc).toFixed(2));
+    return { discountedCost: final, discountAmount: disc };
+  }
+
+  if (kind === "amount") {
+    const disc = Number(Math.min(cost, v).toFixed(2));
+    const final = Number(Math.max(0, cost - disc).toFixed(2));
+    return { discountedCost: final, discountAmount: disc };
+  }
+
+  return { discountedCost: Number(cost.toFixed(2)), discountAmount: 0 };
+};
+
 const Customer_Lists: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
 
   // ✅ Date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+
+  // ✅ Discount modal state
+  const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
+  const [discountKind, setDiscountKind] = useState<DiscountKind>("none");
+  const [discountInput, setDiscountInput] = useState<string>("0");
+  const [savingDiscount, setSavingDiscount] = useState<boolean>(false);
 
   useEffect(() => {
     void fetchCustomerSessions();
@@ -72,10 +128,12 @@ const Customer_Lists: React.FC = () => {
     if (error) {
       console.error(error);
       alert("Error loading customer lists");
-    } else {
-      setSessions((data as CustomerSession[]) || []);
+      setSessions([]);
+      setLoading(false);
+      return;
     }
 
+    setSessions((data as CustomerSession[]) || []);
     setLoading(false);
   };
 
@@ -114,9 +172,17 @@ const Customer_Lists: React.FC = () => {
     return computeCostWithFreeMinutes(s.time_started, nowIso);
   };
 
-  // ✅ Total system cost (OPEN uses live; CLOSED uses DB)
-  const getSessionTotalCost = (s: CustomerSession): number => {
+  // ✅ Base system cost before discount (OPEN uses live; CLOSED uses DB)
+  const getBaseSystemCost = (s: CustomerSession): number => {
     return isOpenTimeSession(s) ? getLiveTotalCost(s) : Number(s.total_amount || 0);
+  };
+
+  // ✅ Final system cost after discount (used by balance/change)
+  const getSessionTotalCost = (s: CustomerSession): number => {
+    const base = getBaseSystemCost(s);
+    const kind = (s.discount_kind ?? "none") as DiscountKind;
+    const value = Number(s.discount_value ?? 0);
+    return applyDiscount(base, kind, value).discountedCost;
   };
 
   // ✅ TWO categories (but we will DISPLAY only one)
@@ -131,7 +197,9 @@ const Customer_Lists: React.FC = () => {
   };
 
   // ✅ One display value for table/receipt
-  const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
+  const getDisplayAmount = (
+    s: CustomerSession
+  ): { label: "Total Balance" | "Total Change"; value: number } => {
     const balance = getSessionBalance(s);
     if (balance > 0) return { label: "Total Balance", value: balance };
     return { label: "Total Change", value: getSessionChange(s) };
@@ -190,6 +258,52 @@ const Customer_Lists: React.FC = () => {
     return Math.max(0, used - FREE_MINUTES);
   };
 
+  // ✅ Discount modal handlers
+  const openDiscountModal = (s: CustomerSession): void => {
+    const k = (s.discount_kind ?? "none") as DiscountKind;
+    const v = Number(s.discount_value ?? 0);
+    setDiscountTarget(s);
+    setDiscountKind(k);
+    setDiscountInput(String(Number.isFinite(v) ? v : 0));
+  };
+
+  const saveDiscount = async (): Promise<void> => {
+    if (!discountTarget) return;
+
+    const raw = Number(discountInput);
+    const clean = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+    const finalValue = discountKind === "percent" ? clamp(clean, 0, 100) : clean;
+
+    try {
+      setSavingDiscount(true);
+
+      const { data: updated, error } = await supabase
+        .from("customer_sessions")
+        .update({
+          discount_kind: discountKind,
+          discount_value: finalValue,
+        })
+        .eq("id", discountTarget.id)
+        .select("*")
+        .single();
+
+      if (error || !updated) {
+        alert(`Save discount error: ${error?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setSessions((prev) => prev.map((s) => (s.id === discountTarget.id ? (updated as CustomerSession) : s)));
+      setSelectedSession((prev) => (prev?.id === discountTarget.id ? (updated as CustomerSession) : prev));
+
+      setDiscountTarget(null);
+    } catch (e) {
+      console.error(e);
+      alert("Save discount failed.");
+    } finally {
+      setSavingDiscount(false);
+    }
+  };
+
   return (
     <div className="customer-lists-container">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -230,6 +344,7 @@ const Customer_Lists: React.FC = () => {
               <th>Time Out</th>
               <th>Total Hours</th>
               <th>Total Balance / Change</th>
+              <th>Discount</th>
               <th>Seat</th>
               <th>Status</th>
               <th>Action</th>
@@ -252,7 +367,6 @@ const Customer_Lists: React.FC = () => {
                   <td>{session.hour_avail}</td>
                   <td>{formatTimeText(session.time_started)}</td>
                   <td>{renderTimeOut(session)}</td>
-
                   <td>{session.total_time}</td>
 
                   {/* ✅ ONLY ONE OUTPUT */}
@@ -260,6 +374,16 @@ const Customer_Lists: React.FC = () => {
                     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                       <span style={{ fontWeight: 800 }}>{disp.label}</span>
                       <span>₱{disp.value.toFixed(2)}</span>
+                    </div>
+                  </td>
+
+                  {/* ✅ DISCOUNT */}
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <span style={{ fontWeight: 800 }}>{getDiscountText(session)}</span>
+                      <button className="receipt-btn" onClick={() => openDiscountModal(session)}>
+                        Discount
+                      </button>
                     </div>
                   </td>
 
@@ -286,6 +410,106 @@ const Customer_Lists: React.FC = () => {
             })}
           </tbody>
         </table>
+      )}
+
+      {/* DISCOUNT MODAL */}
+      {discountTarget && (
+        <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
+          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+            <h3 className="receipt-title">DISCOUNT</h3>
+            <p className="receipt-subtitle">{discountTarget.full_name}</p>
+
+            <hr />
+
+            <div className="receipt-row">
+              <span>Discount Type</span>
+              <select
+                value={discountKind}
+                onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}
+              >
+                <option value="none">None</option>
+                <option value="percent">Percent (%)</option>
+                <option value="amount">Peso (₱)</option>
+              </select>
+            </div>
+
+            <div className="receipt-row">
+              <span>Value</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 900 }}>
+                  {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
+                </span>
+
+                <input
+                  type="number"
+                  min="0"
+                  step={discountKind === "percent" ? "1" : "0.01"}
+                  value={discountInput}
+                  onChange={(e) => setDiscountInput(e.currentTarget.value)}
+                  style={{ width: 140 }}
+                  disabled={discountKind === "none"}
+                />
+              </div>
+            </div>
+
+            {(() => {
+              const base = getBaseSystemCost(discountTarget);
+              const val = Number(discountInput);
+              const safeVal = Number.isFinite(val) ? val : 0;
+
+              const { discountedCost, discountAmount } = applyDiscount(
+                base,
+                discountKind,
+                discountKind === "percent" ? clamp(Math.max(0, safeVal), 0, 100) : Math.max(0, safeVal)
+              );
+
+              return (
+                <>
+                  <hr />
+
+                  <div className="receipt-row">
+                    <span>System Cost (Before)</span>
+                    <span>₱{base.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Discount</span>
+                    <span>
+                      {getDiscountTextFrom(
+                        discountKind,
+                        discountKind === "percent" ? clamp(Math.max(0, safeVal), 0, 100) : Math.max(0, safeVal)
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Discount Amount</span>
+                    <span>₱{discountAmount.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-total">
+                    <span>FINAL SYSTEM COST</span>
+                    <span>₱{discountedCost.toFixed(2)}</span>
+                  </div>
+                </>
+              );
+            })()}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+              <button className="receipt-btn" onClick={() => setDiscountTarget(null)} style={{ flex: 1 }}>
+                Cancel
+              </button>
+              <button
+                className="receipt-btn"
+                onClick={() => void saveDiscount()}
+                disabled={savingDiscount}
+                style={{ flex: 1 }}
+              >
+                {savingDiscount ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* RECEIPT MODAL */}
@@ -363,7 +587,13 @@ const Customer_Lists: React.FC = () => {
 
             {(() => {
               const disp = getDisplayAmount(selectedSession);
-              const totalCost = getSessionTotalCost(selectedSession);
+
+              const baseCost = getBaseSystemCost(selectedSession);
+              const kind = (selectedSession.discount_kind ?? "none") as DiscountKind;
+              const value = Number(selectedSession.discount_value ?? 0);
+
+              const calc = applyDiscount(baseCost, kind, value);
+              const finalCost = calc.discountedCost;
 
               return (
                 <>
@@ -378,13 +608,24 @@ const Customer_Lists: React.FC = () => {
                     <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
-                  {/* Optional debug line (remove if you want hidden) */}
+                  {/* ✅ Discount text */}
                   <div className="receipt-row">
-                    <span>System Cost</span>
-                    <span>₱{totalCost.toFixed(2)}</span>
+                    <span>Discount</span>
+                    <span>{getDiscountText(selectedSession)}</span>
                   </div>
 
-                  {/* ✅ NO TOTAL DUE / RETURN */}
+                  {/* ✅ Discount amount */}
+                  <div className="receipt-row">
+                    <span>Discount Amount</span>
+                    <span>₱{calc.discountAmount.toFixed(2)}</span>
+                  </div>
+
+                  {/* ✅ Final system cost (after discount) */}
+                  <div className="receipt-row">
+                    <span>System Cost</span>
+                    <span>₱{finalCost.toFixed(2)}</span>
+                  </div>
+
                   <div className="receipt-total">
                     <span>{disp.label.toUpperCase()}</span>
                     <span>₱{disp.value.toFixed(2)}</span>
