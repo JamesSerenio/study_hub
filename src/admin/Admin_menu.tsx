@@ -1,3 +1,5 @@
+// src/pages/Admin_menu.tsx
+
 import React, { useState } from "react";
 import {
   IonButtons,
@@ -25,7 +27,8 @@ import Admin_customer_list from "./Admin_customer_list";
 import Admin_customer_reservation from "./Admin_customer_reservation";
 import Admin_Packages from "./Admin_Packages";
 import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List";
-import Admin_Seat_Table from "./Admin_Seat_Table"; // ✅ ADD
+import Admin_Seat_Table from "./Admin_Seat_Table";
+import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses_Expired"; // ✅ ADD
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -35,17 +38,39 @@ import customerListIcon from "../assets/list.png";
 import reservationIcon from "../assets/reserve.png";
 import promotionIcon from "../assets/promotion.png";
 import discountIcon from "../assets/discount.png";
-import seatIcon from "../assets/seat.png"; // ✅ ADD
+import seatIcon from "../assets/seat.png";
+import expenseIcon from "../assets/expense.png"; // ✅ ADD
 import studyHubLogo from "../assets/study_hub.png";
+
+type MenuKey =
+  | "dashboard"
+  | "add_ons"
+  | "item_lists"
+  | "staff_expenses"
+  | "customer_list"
+  | "customer_reservation"
+  | "seat_table"
+  | "packages"
+  | "discount_records";
+
+type MenuItem = {
+  name: string;
+  key: MenuKey;
+  icon: string;
+};
 
 const Admin_menu: React.FC = () => {
   const history = useHistory();
-  const [activePage, setActivePage] = useState<string>("dashboard");
+  const [activePage, setActivePage] = useState<MenuKey>("dashboard");
 
-  const menuItems = [
+  const menuItems: MenuItem[] = [
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
     { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
     { name: "Item Lists", key: "item_lists", icon: itemIcon },
+
+    // ✅ NEW PAGE
+    { name: "Staff Expenses", key: "staff_expenses", icon: expenseIcon },
+
     { name: "Customer List", key: "customer_list", icon: customerListIcon },
     { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
 
@@ -59,7 +84,7 @@ const Admin_menu: React.FC = () => {
     { name: "Discount Records", key: "discount_records", icon: discountIcon },
   ];
 
-  const renderContent = () => {
+  const renderContent = (): React.ReactNode => {
     switch (activePage) {
       case "dashboard":
         return <Admin_Dashboard />;
@@ -69,6 +94,9 @@ const Admin_menu: React.FC = () => {
 
       case "item_lists":
         return <Admin_Item_Lists />;
+
+      case "staff_expenses":
+        return <Admin_Staff_Expenses_Expired />;
 
       case "customer_list":
         return <Admin_customer_list />;
@@ -90,7 +118,7 @@ const Admin_menu: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = (): void => {
     localStorage.clear();
     sessionStorage.clear();
     history.push("/login");
@@ -111,7 +139,11 @@ const Admin_menu: React.FC = () => {
           </IonHeader>
 
           <IonContent>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4 }}
+            >
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
                   <IonItem
