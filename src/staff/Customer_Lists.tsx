@@ -1,4 +1,11 @@
-import React, { useEffect, useState } from "react";
+// src/pages/Customer_Lists.tsx
+// ✅ Date filter (shows records by selected date)
+// ✅ Export to Excel (CSV) for selected date only
+// ✅ FIX Excel issues: UTF-8 BOM, force Date/Time as TEXT, Amount as NUMBER only
+// ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both)
+// ✅ Receipt summary shows ONLY: Total Balance OR Total Change (NO Total Due / Return)
+
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
@@ -8,31 +15,53 @@ const DOWN_PAYMENT = 50;
 
 interface CustomerSession {
   id: string;
-  date: string;
+  date: string; // YYYY-MM-DD
   full_name: string;
   customer_type: string;
-  customer_field: string;
+  customer_field: string | null;
   has_id: boolean;
-  id_number: string;
+  id_number: string | null;
   hour_avail: string;
   time_started: string;
   time_ended: string;
   total_time: number;
-  total_amount: number;
+  total_amount: number; // DB numeric
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
 }
 
+const yyyyMmDdLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+
+const formatTimeText = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
 const Customer_Lists: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+
+  // ✅ Date filter
+  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   useEffect(() => {
     void fetchCustomerSessions();
   }, []);
+
+  const filteredSessions = useMemo(() => {
+    return sessions.filter((s) => (s.date ?? "") === selectedDate);
+  }, [sessions, selectedDate]);
 
   const fetchCustomerSessions = async (): Promise<void> => {
     setLoading(true);
@@ -59,7 +88,6 @@ const Customer_Lists: React.FC = () => {
     return end.getFullYear() >= 2999;
   };
 
-  // minutes difference (integer)
   const diffMinutes = (startIso: string, endIso: string): number => {
     const start = new Date(startIso).getTime();
     const end = new Date(endIso).getTime();
@@ -89,12 +117,12 @@ const Customer_Lists: React.FC = () => {
     return computeCostWithFreeMinutes(s.time_started, nowIso);
   };
 
-  // ✅ Total system cost (open uses live; closed uses saved)
+  // ✅ Total system cost (OPEN uses live; CLOSED uses DB)
   const getSessionTotalCost = (s: CustomerSession): number => {
     return isOpenTimeSession(s) ? getLiveTotalCost(s) : Number(s.total_amount || 0);
   };
 
-  // ✅ Balance after downpayment (this is what you want as "Total Amount")
+  // ✅ TWO categories (but we will DISPLAY only one)
   const getSessionBalance = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
     return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
@@ -103,6 +131,15 @@ const Customer_Lists: React.FC = () => {
   const getSessionChange = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
     return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
+  };
+
+  // ✅ One display value for table/receipt:
+  // If balance > 0 => show balance
+  // else show change
+  const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
+    const balance = getSessionBalance(s);
+    if (balance > 0) return { label: "Total Balance", value: balance };
+    return { label: "Total Change", value: getSessionChange(s) };
   };
 
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
@@ -140,34 +177,126 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  const renderTimeOut = (s: CustomerSession) =>
-    isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleTimeString();
+  const renderTimeOut = (s: CustomerSession): string =>
+    isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
 
-  const renderStatus = (s: CustomerSession) => {
+  const renderStatus = (s: CustomerSession): string => {
     if (isOpenTimeSession(s)) return "Ongoing";
     return new Date() > new Date(s.time_ended) ? "Finished" : "Ongoing";
   };
 
-  // ✅ Minutes used on receipt (OPEN sessions show running minutes)
   const getUsedMinutesForReceipt = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
     return diffMinutes(s.time_started, s.time_ended);
   };
 
-  // ✅ Charge minutes shown on receipt (optional, no FREE row)
   const getChargeMinutesForReceipt = (s: CustomerSession): number => {
     const used = getUsedMinutesForReceipt(s);
     return Math.max(0, used - FREE_MINUTES);
   };
 
+  // ✅ Export to Excel (CSV) for selected date only
+  // - UTF-8 BOM (removes weird chars)
+  // - Date/Time forced as TEXT
+  // - Amount exported as NUMBER only
+  // - Exports ONLY ONE of Balance/Change as columns: Amount Label + Amount
+  const exportToExcel = (): void => {
+    if (!selectedDate) {
+      alert("Please select a date.");
+      return;
+    }
+    if (filteredSessions.length === 0) {
+      alert("No records for selected date.");
+      return;
+    }
+
+    const headers = [
+      "Date",
+      "Full Name",
+      "Type",
+      "Field",
+      "Has ID",
+      "Specific ID",
+      "Hours",
+      "Time In",
+      "Time Out",
+      "Total Hours",
+      "Amount Label",
+      "Amount",
+      "Seat",
+      "Status",
+    ];
+
+    const rows = filteredSessions.map((s) => {
+      const timeIn = formatTimeText(s.time_started);
+      const timeOut = isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
+      const status = renderStatus(s);
+
+      const disp = getDisplayAmount(s);
+
+      return [
+        `\t${s.date}`,
+        s.full_name,
+        s.customer_type,
+        s.customer_field ?? "",
+        s.has_id ? "Yes" : "No",
+        s.id_number ?? "N/A",
+        s.hour_avail,
+        `\t${timeIn}`,
+        `\t${timeOut}`,
+        String(s.total_time ?? 0),
+        disp.label,
+        disp.value.toFixed(2),
+        s.seat_number,
+        status,
+      ];
+    });
+
+    const csv =
+      "\ufeff" +
+      [headers, ...rows]
+        .map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(","))
+        .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `customer-nonreservation-${selectedDate}.csv`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="customer-lists-container">
-      <h2 className="customer-lists-title">Customer Lists - Non Reservation</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h2 className="customer-lists-title" style={{ margin: 0 }}>
+          Customer Lists - Non Reservation
+        </h2>
+
+        {/* ✅ Date filter + Export */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+          />
+          <button className="receipt-btn" onClick={exportToExcel}>
+            Export to Excel
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, opacity: 0.85 }}>
+        Showing records for: <strong>{selectedDate}</strong>
+      </div>
 
       {loading ? (
         <p>Loading...</p>
-      ) : sessions.length === 0 ? (
-        <p>No data found</p>
+      ) : filteredSessions.length === 0 ? (
+        <p>No data found for this date</p>
       ) : (
         <table className="customer-table">
           <thead>
@@ -182,7 +311,7 @@ const Customer_Lists: React.FC = () => {
               <th>Time In</th>
               <th>Time Out</th>
               <th>Total Hours</th>
-              <th>Total Amount</th>
+              <th>Total Balance / Change</th>
               <th>Seat</th>
               <th>Status</th>
               <th>Action</th>
@@ -190,26 +319,31 @@ const Customer_Lists: React.FC = () => {
           </thead>
 
           <tbody>
-            {sessions.map((session) => {
+            {filteredSessions.map((session) => {
               const open = isOpenTimeSession(session);
+              const disp = getDisplayAmount(session);
 
               return (
                 <tr key={session.id}>
                   <td>{session.date}</td>
                   <td>{session.full_name}</td>
                   <td>{session.customer_type}</td>
-                  <td>{session.customer_field}</td>
+                  <td>{session.customer_field ?? ""}</td>
                   <td>{session.has_id ? "Yes" : "No"}</td>
-                  <td>{session.id_number || "N/A"}</td>
+                  <td>{session.id_number ?? "N/A"}</td>
                   <td>{session.hour_avail}</td>
-                  <td>{new Date(session.time_started).toLocaleTimeString()}</td>
+                  <td>{formatTimeText(session.time_started)}</td>
                   <td>{renderTimeOut(session)}</td>
 
-                  {/* keep showing DB value (open may still be 0) */}
                   <td>{session.total_time}</td>
 
-                  {/* ✅ Total Amount = BALANCE (same as TOTAL BALANCE) */}
-                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
+                  {/* ✅ ONLY ONE OUTPUT */}
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontWeight: 800 }}>{disp.label}</span>
+                      <span>₱{disp.value.toFixed(2)}</span>
+                    </div>
+                  </td>
 
                   <td>{session.seat_number}</td>
                   <td>{renderStatus(session)}</td>
@@ -264,7 +398,7 @@ const Customer_Lists: React.FC = () => {
 
             <div className="receipt-row">
               <span>Field</span>
-              <span>{selectedSession.customer_field}</span>
+              <span>{selectedSession.customer_field ?? ""}</span>
             </div>
 
             <div className="receipt-row">
@@ -276,7 +410,7 @@ const Customer_Lists: React.FC = () => {
 
             <div className="receipt-row">
               <span>Time In</span>
-              <span>{new Date(selectedSession.time_started).toLocaleTimeString()}</span>
+              <span>{formatTimeText(selectedSession.time_started)}</span>
             </div>
 
             <div className="receipt-row">
@@ -288,8 +422,6 @@ const Customer_Lists: React.FC = () => {
               <span>Minutes Used</span>
               <span>{getUsedMinutesForReceipt(selectedSession)} min</span>
             </div>
-
-            {/* ✅ no FREE MINUTES row */}
 
             <div className="receipt-row">
               <span>Charge Minutes</span>
@@ -312,22 +444,15 @@ const Customer_Lists: React.FC = () => {
             <hr />
 
             {(() => {
-              // ✅ system cost (for computing balance/change)
+              const disp = getDisplayAmount(selectedSession);
               const totalCost = getSessionTotalCost(selectedSession);
-
-              const change = getSessionChange(selectedSession);
-              const balance = getSessionBalance(selectedSession);
-
-              const isChange = change > 0;
-              const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
-              const totalValue = isChange ? change : balance;
 
               return (
                 <>
-                  {/* ✅ Total Amount must match TOTAL BALANCE */}
+                  {/* ✅ ONLY ONE SUMMARY LINE */}
                   <div className="receipt-row">
-                    <span>Total Amount</span>
-                    <span>₱{balance.toFixed(2)}</span>
+                    <span>{disp.label}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
@@ -335,29 +460,16 @@ const Customer_Lists: React.FC = () => {
                     <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
-                  {change > 0 && (
-                    <div className="receipt-row">
-                      <span>Change</span>
-                      <span>₱{change.toFixed(2)}</span>
-                    </div>
-                  )}
-
-                  {balance > 0 && (
-                    <div className="receipt-row">
-                      <span>Balance</span>
-                      <span>₱{balance.toFixed(2)}</span>
-                    </div>
-                  )}
-
-                  {/* optional: show system computed cost (remove if you want hidden) */}
+                  {/* Optional debug line (remove if you want hidden) */}
                   <div className="receipt-row">
                     <span>System Cost</span>
                     <span>₱{totalCost.toFixed(2)}</span>
                   </div>
 
+                  {/* ✅ NO TOTAL DUE / RETURN */}
                   <div className="receipt-total">
-                    <span>{totalLabel}</span>
-                    <span>₱{Number(totalValue || 0).toFixed(2)}</span>
+                    <span>{disp.label.toUpperCase()}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
                 </>
               );

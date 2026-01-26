@@ -28,7 +28,7 @@ import Admin_customer_reservation from "./Admin_customer_reservation";
 import Admin_Packages from "./Admin_Packages";
 import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List";
 import Admin_Seat_Table from "./Admin_Seat_Table";
-import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses_Expired"; // ✅ ADD
+import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses&Expired";
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
