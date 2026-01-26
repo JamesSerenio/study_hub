@@ -748,6 +748,13 @@ ion-content,
   background: rgba(0, 0, 0, 0.06);
 }
 
+.react-calendar__tile:disabled {
+  background: transparent !important;
+  border-color: rgba(0,0,0,0.10) !important;
+  color: rgba(0,0,0,0.25) !important;
+}
+
+
 /* date number always visible */
 .react-calendar__tile abbr {
   position: relative;
@@ -1649,4 +1656,70 @@ ion-content,
   .bookadd-actions {
     grid-template-columns: 1fr;
   }
+}
+
+/* =========================
+   ADMIN STAFF EXPENSES PAGE
+========================= */
+.admin-exp-topbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.admin-exp-count {
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+.admin-exp-loading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-exp-grid {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.admin-exp-head {
+  background: rgba(0, 0, 0, 0.06);
+  font-weight: 900;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.admin-exp-row {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 6px 0;
+}
+
+.admin-exp-row:last-child {
+  border-bottom: none;
+}
+
+.admin-exp-strong {
+  font-weight: 900;
+}
+
+.admin-exp-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.78;
+  line-height: 1.2;
+}
+
+.admin-exp-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* voided style */
+.admin-exp-row.is-voided {
+  opacity: 0.6;
+  background: rgba(0, 0, 0, 0.03);
 }

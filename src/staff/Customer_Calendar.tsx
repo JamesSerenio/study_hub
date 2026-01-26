@@ -6,6 +6,8 @@
 // ✅ Walk-in     = BOTTOM-RIGHT (with count)
 // ✅ Removes blue tap highlight (keeps yellow current date)
 // ✅ customer_sessions + promo_bookings logic
+// ✅ FIX: hides neighboring month days (no 26–31 / no extra "1")
+// ✅ FIX: Sunday-first calendar
 
 import React, { useEffect, useState } from "react";
 import Calendar from "react-calendar";
@@ -19,13 +21,13 @@ import reservationIcon from "../assets/customer.png";
 type Area = "common_area" | "conference_room" | string;
 
 interface CustomerSessionRow {
-  date: string;
-  reservation: string;
-  reservation_date: string | null;
+  date: string; // yyyy-mm-dd
+  reservation: string; // "yes" | "no"
+  reservation_date: string | null; // yyyy-mm-dd
 }
 
 interface PromoBookingRow {
-  start_at: string;
+  start_at: string; // ISO
   area: Area;
   status: string;
 }
@@ -59,6 +61,11 @@ const addCount = (m: CountMap, date: string, key: keyof Counts): void => {
   ensure(m, date)[key] += 1;
 };
 
+type TileArgs = {
+  date: Date;
+  view: "month" | "year" | "decade" | "century";
+};
+
 const Customer_Calendar: React.FC = () => {
   const [counts, setCounts] = useState<CountMap>({});
 
@@ -71,14 +78,13 @@ const Customer_Calendar: React.FC = () => {
       .from("customer_sessions")
       .select("date, reservation, reservation_date");
 
-    const promosReq = supabase
-      .from("promo_bookings")
-      .select("start_at, area, status");
+    const promosReq = supabase.from("promo_bookings").select("start_at, area, status");
 
-    const [{ data: sessions }, { data: promos }] = await Promise.all([
-      sessionsReq,
-      promosReq,
-    ]);
+    const [{ data: sessions, error: sErr }, { data: promos, error: pErr }] =
+      await Promise.all([sessionsReq, promosReq]);
+
+    if (sErr) console.error("customer_sessions error:", sErr.message);
+    if (pErr) console.error("promo_bookings error:", pErr.message);
 
     const result: CountMap = {};
 
@@ -105,6 +111,7 @@ const Customer_Calendar: React.FC = () => {
       if (p.area === "common_area") {
         const isToday = start >= todayStart && start <= todayEnd;
 
+        // If it's today and already started -> walk-in, else future -> reservation
         if (isToday && start <= now) addCount(result, dateKey, "walkIn");
         else addCount(result, dateKey, "reservation");
       } else if (p.area === "conference_room") {
@@ -113,11 +120,6 @@ const Customer_Calendar: React.FC = () => {
     });
 
     setCounts(result);
-  };
-
-  type TileArgs = {
-    date: Date;
-    view: "month" | "year" | "decade" | "century";
   };
 
   const tileContent = ({ date, view }: TileArgs): React.ReactNode => {
@@ -135,7 +137,10 @@ const Customer_Calendar: React.FC = () => {
       <>
         {/* Reservation (top-left) with number */}
         {showRes && (
-          <div className="cal-icon-wrap cal-reservation" title={`Reservation: ${data.reservation}`}>
+          <div
+            className="cal-icon-wrap cal-reservation"
+            title={`Reservation: ${data.reservation}`}
+          >
             <img src={reservationIcon} alt="Reservation" />
             <span className="cal-count">{data.reservation}</span>
           </div>
@@ -174,7 +179,12 @@ const Customer_Calendar: React.FC = () => {
         </div>
 
         <div className="calendar-wrap">
-          <Calendar tileContent={tileContent} />
+        <Calendar
+          tileContent={tileContent}
+          showNeighboringMonth={false}
+          showFixedNumberOfWeeks={false}
+          locale="en-US"
+        />
         </div>
       </div>
     </div>
