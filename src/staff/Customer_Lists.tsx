@@ -1,9 +1,8 @@
 // src/pages/Customer_Lists.tsx
 // ✅ Date filter (shows records by selected date)
-// ✅ Export to Excel (CSV) for selected date only
-// ✅ FIX Excel issues: UTF-8 BOM, force Date/Time as TEXT, Amount as NUMBER only
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both)
 // ✅ Receipt summary shows ONLY: Total Balance OR Total Change (NO Total Due / Return)
+// ✅ REMOVED: Export to Excel
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
@@ -37,8 +36,6 @@ const yyyyMmDdLocal = (d: Date): string => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
-
-const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
 
 const formatTimeText = (iso: string): string => {
   const d = new Date(iso);
@@ -133,9 +130,7 @@ const Customer_Lists: React.FC = () => {
     return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
   };
 
-  // ✅ One display value for table/receipt:
-  // If balance > 0 => show balance
-  // else show change
+  // ✅ One display value for table/receipt
   const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
     const balance = getSessionBalance(s);
     if (balance > 0) return { label: "Total Balance", value: balance };
@@ -195,80 +190,6 @@ const Customer_Lists: React.FC = () => {
     return Math.max(0, used - FREE_MINUTES);
   };
 
-  // ✅ Export to Excel (CSV) for selected date only
-  // - UTF-8 BOM (removes weird chars)
-  // - Date/Time forced as TEXT
-  // - Amount exported as NUMBER only
-  // - Exports ONLY ONE of Balance/Change as columns: Amount Label + Amount
-  const exportToExcel = (): void => {
-    if (!selectedDate) {
-      alert("Please select a date.");
-      return;
-    }
-    if (filteredSessions.length === 0) {
-      alert("No records for selected date.");
-      return;
-    }
-
-    const headers = [
-      "Date",
-      "Full Name",
-      "Type",
-      "Field",
-      "Has ID",
-      "Specific ID",
-      "Hours",
-      "Time In",
-      "Time Out",
-      "Total Hours",
-      "Amount Label",
-      "Amount",
-      "Seat",
-      "Status",
-    ];
-
-    const rows = filteredSessions.map((s) => {
-      const timeIn = formatTimeText(s.time_started);
-      const timeOut = isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
-      const status = renderStatus(s);
-
-      const disp = getDisplayAmount(s);
-
-      return [
-        `\t${s.date}`,
-        s.full_name,
-        s.customer_type,
-        s.customer_field ?? "",
-        s.has_id ? "Yes" : "No",
-        s.id_number ?? "N/A",
-        s.hour_avail,
-        `\t${timeIn}`,
-        `\t${timeOut}`,
-        String(s.total_time ?? 0),
-        disp.label,
-        disp.value.toFixed(2),
-        s.seat_number,
-        status,
-      ];
-    });
-
-    const csv =
-      "\ufeff" +
-      [headers, ...rows]
-        .map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(","))
-        .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `customer-nonreservation-${selectedDate}.csv`;
-    a.click();
-
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <div className="customer-lists-container">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -276,16 +197,13 @@ const Customer_Lists: React.FC = () => {
           Customer Lists - Non Reservation
         </h2>
 
-        {/* ✅ Date filter + Export */}
+        {/* ✅ Date filter ONLY */}
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <input
             type="date"
             value={selectedDate}
             onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
           />
-          <button className="receipt-btn" onClick={exportToExcel}>
-            Export to Excel
-          </button>
         </div>
       </div>
 
