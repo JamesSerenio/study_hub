@@ -1,5 +1,11 @@
 // src/pages/Customer_Reservations.tsx
-import React, { useEffect, useState } from "react";
+// ✅ Date filter (shows reservations by selected reservation_date)
+// ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both)
+// ✅ Receipt summary shows ONLY: Total Balance OR Total Change (NO Total Due / Return)
+// ✅ Promo type filtered out (DB + frontend)
+// ✅ OPEN sessions auto-update display
+
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
@@ -11,7 +17,7 @@ interface CustomerSession {
   id: string;
   date: string;
   full_name: string;
-  customer_type: string; // promo type exists in DB, but we will FILTER it out here
+  customer_type: string;
   customer_field: string;
   has_id: boolean;
   id_number: string | null;
@@ -23,9 +29,22 @@ interface CustomerSession {
   total_amount: number | string;
 
   reservation: string;
-  reservation_date: string | null;
+  reservation_date: string | null; // YYYY-MM-DD in DB (date)
   seat_number: string;
 }
+
+const yyyyMmDdLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const formatTimeText = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
 
 const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
@@ -33,6 +52,9 @@ const Customer_Reservations: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
+
+  // ✅ date filter (by reservation_date)
+  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   useEffect(() => {
     void fetchReservations();
@@ -53,7 +75,6 @@ const Customer_Reservations: React.FC = () => {
     return 0;
   };
 
-  // ✅ treat "promo" as a special type we DON'T want to record/show in reservations
   const isPromoType = (t: string | null | undefined): boolean => {
     const v = (t ?? "").trim().toLowerCase();
     return v === "promo";
@@ -66,8 +87,6 @@ const Customer_Reservations: React.FC = () => {
       .from("customer_sessions")
       .select(`*`)
       .eq("reservation", "yes")
-      // ✅ do NOT include promo records in this page
-      // this excludes exact "promo" (case-insensitive handled in JS filter too)
       .neq("customer_type", "promo")
       .order("reservation_date", { ascending: false });
 
@@ -79,12 +98,15 @@ const Customer_Reservations: React.FC = () => {
       return;
     }
 
-    // ✅ extra safety: filter promo in frontend too (handles "Promo", "PROMO", " promo ")
     const cleaned = ((data as CustomerSession[]) || []).filter((s) => !isPromoType(s.customer_type));
-
     setSessions(cleaned);
     setLoading(false);
   };
+
+  // ✅ filter sessions by reservation_date
+  const filteredSessions = useMemo(() => {
+    return sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
+  }, [sessions, selectedDate]);
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -152,6 +174,15 @@ const Customer_Reservations: React.FC = () => {
     return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
   };
 
+  // ✅ one display amount only
+  const getDisplayAmount = (
+    s: CustomerSession
+  ): { label: "Total Balance" | "Total Change"; value: number } => {
+    const bal = getSessionBalance(s);
+    if (bal > 0) return { label: "Total Balance", value: bal };
+    return { label: "Total Change", value: getSessionChange(s) };
+  };
+
   const getStatus = (session: CustomerSession): string => {
     const now = new Date(nowTick);
     const start = getScheduledStartDateTime(session);
@@ -183,15 +214,14 @@ const Customer_Reservations: React.FC = () => {
       const nowIso = new Date().toISOString();
       const totalMinutes = diffMinutes(session.time_started, nowIso);
 
-      const timeCost = computeCostWithFreeMinutes(session.time_started, nowIso);
-      const totalCost = Number(timeCost.toFixed(2));
+      const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
           time_ended: nowIso,
           total_time: totalMinutes,
-          total_amount: totalCost,
+          total_amount: Number(totalCost.toFixed(2)),
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
@@ -203,15 +233,12 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      // if updated row became promo somehow, remove it from the list
       setSessions((prev) => {
         const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
         return next.filter((s) => !isPromoType(s.customer_type));
       });
 
-      setSelectedSession((prev) =>
-        prev?.id === session.id ? (updated as CustomerSession) : prev
-      );
+      setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
       console.error(e);
       alert("Stop Time failed.");
@@ -221,7 +248,7 @@ const Customer_Reservations: React.FC = () => {
   };
 
   const renderTimeOut = (s: CustomerSession): string =>
-    isOpenTimeSession(s) ? "OPEN" : new Date(s.time_ended).toLocaleString("en-PH");
+    isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
 
   const getUsedMinutesForReceipt = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
@@ -235,12 +262,29 @@ const Customer_Reservations: React.FC = () => {
 
   return (
     <div className="customer-lists-container">
-      <h2 className="customer-lists-title">Customer Reservations</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h2 className="customer-lists-title" style={{ margin: 0 }}>
+          Customer Reservations
+        </h2>
+
+        {/* ✅ Date filter same style as Customer List */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, opacity: 0.85 }}>
+        Showing records for: <strong>{selectedDate}</strong>
+      </div>
 
       {loading ? (
         <p>Loading...</p>
-      ) : sessions.length === 0 ? (
-        <p>No reservation records found</p>
+      ) : filteredSessions.length === 0 ? (
+        <p>No reservation records found for this date</p>
       ) : (
         <table className="customer-table">
           <thead>
@@ -254,7 +298,7 @@ const Customer_Reservations: React.FC = () => {
               <th>Time In</th>
               <th>Time Out</th>
               <th>Total Time</th>
-              <th>Total Amount</th>
+              <th>Total Balance / Change</th>
               <th>Seat</th>
               <th>Status</th>
               <th>Action</th>
@@ -262,27 +306,30 @@ const Customer_Reservations: React.FC = () => {
           </thead>
 
           <tbody>
-            {sessions.map((session) => {
+            {filteredSessions.map((session) => {
               const open = isOpenTimeSession(session);
+              const disp = getDisplayAmount(session);
 
               return (
                 <tr key={session.id}>
-                  <td>
-                    {session.reservation_date
-                      ? new Date(session.reservation_date).toLocaleDateString("en-PH")
-                      : "N/A"}
-                  </td>
+                  <td>{session.reservation_date ?? "N/A"}</td>
                   <td>{session.full_name}</td>
                   <td>{session.customer_field}</td>
                   <td>{session.has_id ? "Yes" : "No"}</td>
                   <td>{session.id_number || "N/A"}</td>
                   <td>{session.hour_avail}</td>
-                  <td>{new Date(session.time_started).toLocaleString("en-PH")}</td>
+                  <td>{formatTimeText(session.time_started)}</td>
                   <td>{renderTimeOut(session)}</td>
 
                   <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
 
-                  <td>₱{getSessionBalance(session).toFixed(2)}</td>
+                  {/* ✅ ONLY ONE OUTPUT */}
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontWeight: 800 }}>{disp.label}</span>
+                      <span>₱{disp.value.toFixed(2)}</span>
+                    </div>
+                  </td>
 
                   <td>{session.seat_number}</td>
                   <td>{getStatus(session)}</td>
@@ -322,11 +369,7 @@ const Customer_Reservations: React.FC = () => {
 
             <div className="receipt-row">
               <span>Reservation Date</span>
-              <span>
-                {selectedSession.reservation_date
-                  ? new Date(selectedSession.reservation_date).toLocaleDateString("en-PH")
-                  : "N/A"}
-              </span>
+              <span>{selectedSession.reservation_date ?? "N/A"}</span>
             </div>
 
             <div className="receipt-row">
@@ -343,7 +386,7 @@ const Customer_Reservations: React.FC = () => {
 
             <div className="receipt-row">
               <span>Time In</span>
-              <span>{new Date(selectedSession.time_started).toLocaleString("en-PH")}</span>
+              <span>{formatTimeText(selectedSession.time_started)}</span>
             </div>
 
             <div className="receipt-row">
@@ -377,18 +420,15 @@ const Customer_Reservations: React.FC = () => {
             <hr />
 
             {(() => {
-              const change = getSessionChange(selectedSession);
-              const balance = getSessionBalance(selectedSession);
-
-              const isChange = change > 0;
-              const totalLabel = isChange ? "TOTAL CHANGE" : "TOTAL BALANCE";
-              const totalValue = isChange ? change : balance;
+              const disp = getDisplayAmount(selectedSession);
+              const totalCost = getSessionTotalCost(selectedSession);
 
               return (
                 <>
+                  {/* ✅ ONLY ONE SUMMARY LINE */}
                   <div className="receipt-row">
-                    <span>Total Amount</span>
-                    <span>₱{balance.toFixed(2)}</span>
+                    <span>{disp.label}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
@@ -396,23 +436,15 @@ const Customer_Reservations: React.FC = () => {
                     <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
-                  {change > 0 && (
-                    <div className="receipt-row">
-                      <span>Change</span>
-                      <span>₱{change.toFixed(2)}</span>
-                    </div>
-                  )}
-
-                  {balance > 0 && (
-                    <div className="receipt-row">
-                      <span>Balance</span>
-                      <span>₱{balance.toFixed(2)}</span>
-                    </div>
-                  )}
+                  {/* Optional debug line (remove if you want hidden) */}
+                  <div className="receipt-row">
+                    <span>System Cost</span>
+                    <span>₱{Number(totalCost || 0).toFixed(2)}</span>
+                  </div>
 
                   <div className="receipt-total">
-                    <span>{totalLabel}</span>
-                    <span>₱{Number(totalValue || 0).toFixed(2)}</span>
+                    <span>{disp.label.toUpperCase()}</span>
+                    <span>₱{disp.value.toFixed(2)}</span>
                   </div>
                 </>
               );
