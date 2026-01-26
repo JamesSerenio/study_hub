@@ -68,7 +68,7 @@ const STORAGE_KEY = "seatmap_pin_positions_v1";
 const CONFERENCE_ID = "CONFERENCE_ROOM";
 
 const STATUS_COLOR: Record<SeatStatus, string> = {
-  temp_available: "seat-blue",
+  temp_available: "seat-green",
   occupied_temp: "seat-yellow",
   occupied: "seat-orange",
   reserved: "seat-purple",
@@ -606,7 +606,7 @@ const Admin_Seat_Table: React.FC = () => {
 
             <div className="seatmap-legend">
               <div className="legend-item">
-                <span className="legend-dot seat-blue" /> Temporarily Available
+                <span className="legend-dot seat-green" /> Temporarily Available
               </div>
               <div className="legend-item">
                 <span className="legend-dot seat-yellow" /> Occupied Temporarily (Admin)
