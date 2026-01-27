@@ -2,10 +2,14 @@
 // ✅ Date filter (shows records by selected reservation_date)
 // ✅ Export to Excel (CSV) for selected date only (UTF-8 BOM, Date/Time as TEXT, Amount as NUMBER only)
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both) in table + receipt
+// ✅ Discount + Discount Reason (saved, NOT shown on receipt)
+// ✅ Payment (GCash/Cash) + Auto PAID/UNPAID on SAVE PAYMENT
+// ✅ Manual PAID/UNPAID toggle still works
 // ✅ Delete single row
 // ✅ Delete by DATE (deletes ALL records with reservation_date = selectedDate from DB)
 // ✅ Promo filtered out (DB + frontend)
 // ✅ OPEN sessions auto-update display
+// ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
@@ -14,6 +18,8 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 5; // hidden
 const DOWN_PAYMENT = 50;
+
+type DiscountKind = "none" | "percent" | "amount";
 
 interface CustomerSession {
   id: string;
@@ -34,6 +40,19 @@ interface CustomerSession {
   reservation: string;
   reservation_date: string | null; // YYYY-MM-DD
   seat_number: string;
+
+  // DISCOUNT
+  discount_kind?: DiscountKind;
+  discount_value?: number;
+  discount_reason?: string | null;
+
+  // PAYMENT
+  gcash_amount?: number;
+  cash_amount?: number;
+
+  // PAID STATUS
+  is_paid?: boolean | number | string | null;
+  paid_at?: string | null;
 }
 
 const yyyyMmDdLocal = (d: Date): string => {
@@ -51,6 +70,65 @@ const formatTimeText = (iso: string): string => {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
+const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
+const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
+
+const toMoney = (v: unknown): number => {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const toBool = (v: unknown): boolean => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    return s === "true" || s === "1" || s === "yes" || s === "paid";
+  }
+  return false;
+};
+
+const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
+  const v = Number.isFinite(value) ? Math.max(0, value) : 0;
+  if (kind === "percent" && v > 0) return `${v}%`;
+  if (kind === "amount" && v > 0) return `₱${v.toFixed(2)}`;
+  return "—";
+};
+
+const applyDiscount = (
+  baseCost: number,
+  kind: DiscountKind,
+  value: number
+): { discountedCost: number; discountAmount: number } => {
+  const cost = Number.isFinite(baseCost) ? Math.max(0, baseCost) : 0;
+  const v = Number.isFinite(value) ? Math.max(0, value) : 0;
+
+  if (kind === "percent") {
+    const pct = clamp(v, 0, 100);
+    const disc = round2((cost * pct) / 100);
+    const final = round2(Math.max(0, cost - disc));
+    return { discountedCost: final, discountAmount: disc };
+  }
+
+  if (kind === "amount") {
+    const disc = round2(Math.min(cost, v));
+    const final = round2(Math.max(0, cost - disc));
+    return { discountedCost: final, discountAmount: disc };
+  }
+
+  return { discountedCost: round2(cost), discountAmount: 0 };
+};
+
+// keep gcash (clamp to due), cash = remaining
+const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
+  const d = round2(Math.max(0, due));
+  if (d <= 0) return { gcash: 0, cash: 0 };
+
+  const g = round2(Math.min(d, Math.max(0, gcash)));
+  const c = round2(Math.max(0, d - g));
+  return { gcash: g, cash: c };
+};
+
 const Admin_customer_reservation: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,8 +140,24 @@ const Admin_customer_reservation: React.FC = () => {
 
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
-  // ✅ date filter
+  // date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+
+  // Discount modal
+  const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
+  const [discountKind, setDiscountKind] = useState<DiscountKind>("none");
+  const [discountInput, setDiscountInput] = useState<string>("0");
+  const [discountReason, setDiscountReason] = useState<string>("");
+  const [savingDiscount, setSavingDiscount] = useState<boolean>(false);
+
+  // Payment modal
+  const [paymentTarget, setPaymentTarget] = useState<CustomerSession | null>(null);
+  const [gcashInput, setGcashInput] = useState<string>("0");
+  const [cashInput, setCashInput] = useState<string>("0");
+  const [savingPayment, setSavingPayment] = useState<boolean>(false);
+
+  // Paid toggle busy id
+  const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchReservations();
@@ -76,7 +170,7 @@ const Admin_customer_reservation: React.FC = () => {
   }, []);
 
   const toNum = (v: number | string | null | undefined): number => {
-    if (typeof v === "number") return v;
+    if (typeof v === "number") return Number.isFinite(v) ? v : 0;
     if (typeof v === "string") {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
@@ -112,7 +206,7 @@ const Admin_customer_reservation: React.FC = () => {
     setLoading(false);
   };
 
-  // ✅ filter by selectedDate (reservation_date)
+  // filter by selectedDate (reservation_date)
   const filteredSessions = useMemo(() => {
     return sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
   }, [sessions, selectedDate]);
@@ -131,8 +225,7 @@ const Admin_customer_reservation: React.FC = () => {
   };
 
   const formatMinutesToTime = (minutes: number): string => {
-    if (!minutes || minutes <= 0) return "0 min";
-
+    if (!Number.isFinite(minutes) || minutes <= 0) return "0 min";
     const hrs = Math.floor(minutes / 60);
     const mins = minutes % 60;
 
@@ -145,7 +238,7 @@ const Admin_customer_reservation: React.FC = () => {
     const minutesUsed = diffMinutes(startIso, endIso);
     const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
     const perMinute = HOURLY_RATE / 60;
-    return Number((chargeMinutes * perMinute).toFixed(2));
+    return round2(chargeMinutes * perMinute);
   };
 
   const getScheduledStartDateTime = (s: CustomerSession): Date => {
@@ -179,33 +272,53 @@ const Admin_customer_reservation: React.FC = () => {
     return toNum(s.total_time);
   };
 
-  const getLiveTotalCost = (s: CustomerSession): number => {
-    const endIso = new Date(nowTick).toISOString();
-    const timeCost = computeCostWithFreeMinutes(s.time_started, endIso);
-    return Number(timeCost.toFixed(2));
+  // Base cost before discount (OPEN uses live; CLOSED uses DB)
+  const getBaseSystemCost = (s: CustomerSession): number => {
+    if (isOpenTimeSession(s)) return computeCostWithFreeMinutes(s.time_started, new Date(nowTick).toISOString());
+    return round2(toNum(s.total_amount));
   };
 
+  const getDiscountInfo = (s: CustomerSession): { kind: DiscountKind; value: number; reason: string } => {
+    const kind = (s.discount_kind ?? "none") as DiscountKind;
+    const value = toMoney(s.discount_value ?? 0);
+    const reason = String(s.discount_reason ?? "").trim();
+    return { kind, value, reason };
+  };
+
+  const getDiscountText = (s: CustomerSession): string => {
+    const di = getDiscountInfo(s);
+    return getDiscountTextFrom(di.kind, di.value);
+  };
+
+  // Final cost after discount
   const getSessionTotalCost = (s: CustomerSession): number => {
-    return isOpenTimeSession(s) ? getLiveTotalCost(s) : toNum(s.total_amount);
+    const base = getBaseSystemCost(s);
+    const di = getDiscountInfo(s);
+    return applyDiscount(base, di.kind, di.value).discountedCost;
   };
 
   const getSessionBalance = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
-    return Number(Math.max(0, totalCost - DOWN_PAYMENT).toFixed(2));
+    return round2(Math.max(0, totalCost - DOWN_PAYMENT));
   };
 
   const getSessionChange = (s: CustomerSession): number => {
     const totalCost = getSessionTotalCost(s);
-    return Number(Math.max(0, DOWN_PAYMENT - totalCost).toFixed(2));
+    return round2(Math.max(0, DOWN_PAYMENT - totalCost));
   };
 
-  // ✅ ONLY ONE display value
-  const getDisplayAmount = (
-    s: CustomerSession
-  ): { label: "Total Balance" | "Total Change"; value: number } => {
+  // ONLY ONE display value
+  const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
     const bal = getSessionBalance(s);
     if (bal > 0) return { label: "Total Balance", value: bal };
     return { label: "Total Change", value: getSessionChange(s) };
+  };
+
+  const getPaidInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
+    const gcash = round2(Math.max(0, toMoney(s.gcash_amount ?? 0)));
+    const cash = round2(Math.max(0, toMoney(s.cash_amount ?? 0)));
+    const totalPaid = round2(gcash + cash);
+    return { gcash, cash, totalPaid };
   };
 
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
@@ -278,7 +391,7 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // ✅ delete ALL rows by selectedDate
+  // delete ALL rows by selectedDate
   const deleteByDate = async (): Promise<void> => {
     if (!selectedDate) {
       alert("Please select a date first.");
@@ -306,7 +419,6 @@ const Admin_customer_reservation: React.FC = () => {
         return;
       }
 
-      // remove from UI
       setSessions((prev) => prev.filter((s) => (s.reservation_date ?? "") !== selectedDate));
       setSelectedSession((prev) => ((prev?.reservation_date ?? "") === selectedDate ? null : prev));
     } catch (e) {
@@ -317,15 +429,188 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  const renderTimeOut = (s: CustomerSession): string =>
-    isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
+  const renderTimeOut = (s: CustomerSession): string => (isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended));
 
-  // ✅ Export to Excel (CSV) for selected date only
-  // FIXED:
-  // - UTF-8 BOM
-  // - Date/Time forced as TEXT
-  // - Amount as NUMBER only
-  // - Exports ONE: Amount Label + Amount
+  // -----------------------
+  // DISCOUNT MODAL
+  // -----------------------
+  const openDiscountModal = (s: CustomerSession): void => {
+    const di = getDiscountInfo(s);
+    setDiscountTarget(s);
+    setDiscountKind(di.kind);
+    setDiscountInput(String(Number.isFinite(di.value) ? di.value : 0));
+    setDiscountReason(di.reason);
+  };
+
+  const saveDiscount = async (): Promise<void> => {
+    if (!discountTarget) return;
+
+    const raw = Number(discountInput);
+    const clean = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+    const finalValue = discountKind === "percent" ? clamp(clean, 0, 100) : clean;
+
+    // recompute due AFTER discount, then auto-adjust payments
+    const base = getBaseSystemCost(discountTarget);
+    const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
+    const due = round2(Math.max(0, discounted - DOWN_PAYMENT));
+
+    const prevPay = getPaidInfo(discountTarget);
+    const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
+
+    const totalPaid = round2(adjPay.gcash + adjPay.cash);
+    const autoPaid = due > 0 && totalPaid >= due;
+
+    try {
+      setSavingDiscount(true);
+
+      const { data: updated, error } = await supabase
+        .from("customer_sessions")
+        .update({
+          discount_kind: discountKind,
+          discount_value: finalValue,
+          discount_reason: discountReason.trim(),
+
+          // auto adjust payment to new due
+          gcash_amount: adjPay.gcash,
+          cash_amount: adjPay.cash,
+
+          // auto set paid status
+          is_paid: autoPaid,
+          paid_at: autoPaid ? new Date().toISOString() : null,
+        })
+        .eq("id", discountTarget.id)
+        .select("*")
+        .single();
+
+      if (error || !updated) {
+        alert(`Save discount error: ${error?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setSessions((prev) => prev.map((s) => (s.id === discountTarget.id ? (updated as CustomerSession) : s)));
+      setSelectedSession((prev) => (prev?.id === discountTarget.id ? (updated as CustomerSession) : prev));
+      setDiscountTarget(null);
+    } catch (e) {
+      console.error(e);
+      alert("Save discount failed.");
+    } finally {
+      setSavingDiscount(false);
+    }
+  };
+
+  // -----------------------
+  // PAYMENT MODAL
+  // -----------------------
+  const openPaymentModal = (s: CustomerSession): void => {
+    const due = getSessionBalance(s); // after discount
+    const pi = getPaidInfo(s);
+
+    const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
+    const adj = recalcPaymentsToDue(due, existingGcash);
+
+    setPaymentTarget(s);
+    setGcashInput(String(adj.gcash));
+    setCashInput(String(adj.cash));
+  };
+
+  const setGcashAndAutoCash = (s: CustomerSession, gcashStr: string): void => {
+    const due = getSessionBalance(s);
+    const gc = Math.max(0, toMoney(gcashStr));
+    const adj = recalcPaymentsToDue(due, gc);
+    setGcashInput(String(adj.gcash));
+    setCashInput(String(adj.cash));
+  };
+
+  const setCashAndAutoGcash = (s: CustomerSession, cashStr: string): void => {
+    const due = round2(Math.max(0, getSessionBalance(s)));
+    const ca = round2(Math.max(0, toMoney(cashStr)));
+
+    const cash = round2(Math.min(due, ca));
+    const gcash = round2(Math.max(0, due - cash));
+
+    setCashInput(String(cash));
+    setGcashInput(String(gcash));
+  };
+
+  const savePayment = async (): Promise<void> => {
+    if (!paymentTarget) return;
+
+    const due = getSessionBalance(paymentTarget); // after discount
+    const gcIn = Math.max(0, toMoney(gcashInput));
+    const adj = recalcPaymentsToDue(due, gcIn);
+
+    const totalPaid = round2(adj.gcash + adj.cash);
+    const isPaidAuto = due > 0 && totalPaid >= due;
+
+    try {
+      setSavingPayment(true);
+
+      const { data: updated, error } = await supabase
+        .from("customer_sessions")
+        .update({
+          gcash_amount: adj.gcash,
+          cash_amount: adj.cash,
+          is_paid: isPaidAuto,
+          paid_at: isPaidAuto ? new Date().toISOString() : null,
+        })
+        .eq("id", paymentTarget.id)
+        .select("*")
+        .single();
+
+      if (error || !updated) {
+        alert(`Save payment error: ${error?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setSessions((prev) => prev.map((s) => (s.id === paymentTarget.id ? (updated as CustomerSession) : s)));
+      setSelectedSession((prev) => (prev?.id === paymentTarget.id ? (updated as CustomerSession) : prev));
+      setPaymentTarget(null);
+    } catch (e) {
+      console.error(e);
+      alert("Save payment failed.");
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
+  // -----------------------
+  // PAID / UNPAID TOGGLE (manual)
+  // -----------------------
+  const togglePaid = async (s: CustomerSession): Promise<void> => {
+    try {
+      setTogglingPaidId(s.id);
+
+      const currentPaid = toBool(s.is_paid);
+      const nextPaid = !currentPaid;
+
+      const { data: updated, error } = await supabase
+        .from("customer_sessions")
+        .update({
+          is_paid: nextPaid,
+          paid_at: nextPaid ? new Date().toISOString() : null,
+        })
+        .eq("id", s.id)
+        .select("*")
+        .single();
+
+      if (error || !updated) {
+        alert(`Toggle paid error: ${error?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setSessions((prev) => prev.map((x) => (x.id === s.id ? (updated as CustomerSession) : x)));
+      setSelectedSession((prev) => (prev?.id === s.id ? (updated as CustomerSession) : prev));
+    } catch (e) {
+      console.error(e);
+      alert("Toggle paid failed.");
+    } finally {
+      setTogglingPaidId(null);
+    }
+  };
+
+  // -----------------------
+  // Export CSV for selected date only
+  // -----------------------
   const exportToExcel = (): void => {
     if (!selectedDate) {
       alert("Please select a date.");
@@ -348,6 +633,14 @@ const Admin_customer_reservation: React.FC = () => {
       "Total Time (min)",
       "Amount Label",
       "Amount",
+      "Discount",
+      "Discount Amount",
+      "System Cost (After Discount)",
+      "GCash",
+      "Cash",
+      "Total Paid",
+      "Remaining Balance",
+      "Paid?",
       "Seat",
       "Status",
     ];
@@ -356,30 +649,45 @@ const Admin_customer_reservation: React.FC = () => {
       const timeIn = formatTimeText(s.time_started);
       const timeOut = isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
       const status = getStatus(s);
+
+      const mins = getDisplayedTotalMinutes(s);
       const disp = getDisplayAmount(s);
 
+      const base = getBaseSystemCost(s);
+      const di = getDiscountInfo(s);
+      const calc = applyDiscount(base, di.kind, di.value);
+
+      const pi = getPaidInfo(s);
+      const due = getSessionBalance(s);
+      const remaining = round2(Math.max(0, due - pi.totalPaid));
+
       return [
-        `\t${s.reservation_date ?? ""}`, // force text
+        `\t${s.reservation_date ?? ""}`,
         s.full_name,
         s.customer_field ?? "",
         s.has_id ? "Yes" : "No",
         s.id_number ?? "N/A",
         s.hour_avail,
-        `\t${timeIn}`, // force text
-        `\t${timeOut}`, // force text
-        String(getDisplayedTotalMinutes(s) ?? 0),
+        `\t${timeIn}`,
+        `\t${timeOut}`,
+        String(mins ?? 0),
         disp.label,
-        disp.value.toFixed(2), // number only
+        disp.value.toFixed(2),
+        getDiscountTextFrom(di.kind, di.value),
+        calc.discountAmount.toFixed(2),
+        calc.discountedCost.toFixed(2),
+        pi.gcash.toFixed(2),
+        pi.cash.toFixed(2),
+        pi.totalPaid.toFixed(2),
+        remaining.toFixed(2),
+        toBool(s.is_paid) ? "PAID" : "UNPAID",
         s.seat_number,
         status,
       ];
     });
 
     const csv =
-      "\ufeff" +
-      [headers, ...rows]
-        .map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(","))
-        .join("\n");
+      "\ufeff" + [headers, ...rows].map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(",")).join("\n");
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -399,23 +707,14 @@ const Admin_customer_reservation: React.FC = () => {
           Admin Customer Reservations
         </h2>
 
-        {/* ✅ Date filter + Export + Delete by Date */}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-          />
+          <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
 
           <button className="receipt-btn" onClick={exportToExcel}>
             Export to Excel
           </button>
 
-          <button
-            className="receipt-btn"
-            onClick={() => void deleteByDate()}
-            disabled={deletingDate === selectedDate}
-          >
+          <button className="receipt-btn" onClick={() => void deleteByDate()} disabled={deletingDate === selectedDate}>
             {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
           </button>
         </div>
@@ -443,6 +742,9 @@ const Admin_customer_reservation: React.FC = () => {
               <th>Time Out</th>
               <th>Total Time</th>
               <th>Total Balance / Change</th>
+              <th>Discount</th>
+              <th>Payment</th>
+              <th>Paid?</th>
               <th>Seat</th>
               <th>Status</th>
               <th>Action</th>
@@ -454,6 +756,9 @@ const Admin_customer_reservation: React.FC = () => {
               const showStop = canShowStopButton(session);
               const mins = getDisplayedTotalMinutes(session);
               const disp = getDisplayAmount(session);
+
+              const due = getSessionBalance(session);
+              const pi = getPaidInfo(session);
 
               return (
                 <tr key={session.id}>
@@ -468,7 +773,6 @@ const Admin_customer_reservation: React.FC = () => {
 
                   <td>{formatMinutesToTime(mins)}</td>
 
-                  {/* ✅ ONLY ONE OUTPUT */}
                   <td>
                     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                       <span style={{ fontWeight: 800 }}>{disp.label}</span>
@@ -476,10 +780,50 @@ const Admin_customer_reservation: React.FC = () => {
                     </div>
                   </td>
 
+                  {/* DISCOUNT */}
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <span style={{ fontWeight: 800 }}>{getDiscountText(session)}</span>
+                      <button className="receipt-btn" onClick={() => openDiscountModal(session)}>
+                        Discount
+                      </button>
+                    </div>
+                  </td>
+
+                  {/* PAYMENT */}
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <span style={{ fontWeight: 800 }}>
+                        GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
+                      </span>
+                      <button
+                        className="receipt-btn"
+                        onClick={() => openPaymentModal(session)}
+                        disabled={due <= 0}
+                        title={due <= 0 ? "No balance due" : "Set GCash/Cash payment"}
+                      >
+                        Payment
+                      </button>
+                    </div>
+                  </td>
+
+                  {/* PAID */}
+                  <td>
+                    <button
+                      className="receipt-btn"
+                      onClick={() => void togglePaid(session)}
+                      disabled={togglingPaidId === session.id}
+                      style={{ background: toBool(session.is_paid) ? "#1b5e20" : "#b00020" }}
+                      title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
+                    >
+                      {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                    </button>
+                  </td>
+
                   <td>{session.seat_number}</td>
                   <td>{getStatus(session)}</td>
 
-                  <td style={{ display: "flex", gap: 8 }}>
+                  <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {showStop && (
                       <button
                         className="receipt-btn"
@@ -494,11 +838,7 @@ const Admin_customer_reservation: React.FC = () => {
                       View Receipt
                     </button>
 
-                    <button
-                      className="receipt-btn"
-                      disabled={deletingId === session.id}
-                      onClick={() => void deleteSession(session)}
-                    >
+                    <button className="receipt-btn" disabled={deletingId === session.id} onClick={() => void deleteSession(session)}>
                       {deletingId === session.id ? "Deleting..." : "Delete"}
                     </button>
                   </td>
@@ -507,6 +847,189 @@ const Admin_customer_reservation: React.FC = () => {
             })}
           </tbody>
         </table>
+      )}
+
+      {/* DISCOUNT MODAL (has reason, receipt will NOT show reason) */}
+      {discountTarget && (
+        <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
+          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+            <h3 className="receipt-title">DISCOUNT</h3>
+            <p className="receipt-subtitle">{discountTarget.full_name}</p>
+
+            <hr />
+
+            <div className="receipt-row">
+              <span>Discount Type</span>
+              <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
+                <option value="none">None</option>
+                <option value="percent">Percent (%)</option>
+                <option value="amount">Peso (₱)</option>
+              </select>
+            </div>
+
+            <div className="receipt-row">
+              <span>Value</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 900 }}>{discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}</span>
+
+                <input
+                  type="number"
+                  min="0"
+                  step={discountKind === "percent" ? "1" : "0.01"}
+                  value={discountInput}
+                  onChange={(e) => setDiscountInput(e.currentTarget.value)}
+                  style={{ width: 140 }}
+                  disabled={discountKind === "none"}
+                />
+              </div>
+            </div>
+
+            <div className="receipt-row">
+              <span>Reason</span>
+              <input
+                type="text"
+                value={discountReason}
+                onChange={(e) => setDiscountReason(e.currentTarget.value)}
+                placeholder="e.g. Student discount / Promo / Goodwill"
+                style={{ width: 220 }}
+              />
+            </div>
+
+            {(() => {
+              const base = getBaseSystemCost(discountTarget);
+              const val = toMoney(discountInput);
+              const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+
+              const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
+              const due = round2(Math.max(0, discountedCost - DOWN_PAYMENT));
+
+              const prevPay = getPaidInfo(discountTarget);
+              const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
+
+              return (
+                <>
+                  <hr />
+
+                  <div className="receipt-row">
+                    <span>System Cost (Before)</span>
+                    <span>₱{base.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Discount</span>
+                    <span>{getDiscountTextFrom(discountKind, appliedVal)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Discount Amount</span>
+                    <span>₱{discountAmount.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Final System Cost</span>
+                    <span>₱{discountedCost.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-total">
+                    <span>NEW TOTAL BALANCE</span>
+                    <span>₱{due.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Auto Payment After Save</span>
+                    <span>
+                      GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                    </span>
+                  </div>
+                </>
+              );
+            })()}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+              <button className="receipt-btn" onClick={() => setDiscountTarget(null)} style={{ flex: 1 }}>
+                Cancel
+              </button>
+              <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount} style={{ flex: 1 }}>
+                {savingDiscount ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PAYMENT MODAL */}
+      {paymentTarget && (
+        <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
+          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+            <h3 className="receipt-title">PAYMENT</h3>
+            <p className="receipt-subtitle">{paymentTarget.full_name}</p>
+
+            <hr />
+
+            {(() => {
+              const due = getSessionBalance(paymentTarget);
+              const gcIn = Math.max(0, toMoney(gcashInput));
+              const adj = recalcPaymentsToDue(due, gcIn);
+
+              const totalPaid = round2(adj.gcash + adj.cash);
+              const remaining = round2(Math.max(0, due - totalPaid));
+
+              return (
+                <>
+                  <div className="receipt-row">
+                    <span>Total Balance (Due)</span>
+                    <span>₱{due.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>GCash</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={gcashInput}
+                      onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                      style={{ width: 160 }}
+                    />
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Cash</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={cashInput}
+                      onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                      style={{ width: 160 }}
+                    />
+                  </div>
+
+                  <hr />
+
+                  <div className="receipt-row">
+                    <span>Total Paid</span>
+                    <span>₱{totalPaid.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Remaining</span>
+                    <span>₱{remaining.toFixed(2)}</span>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                    <button className="receipt-btn" onClick={() => setPaymentTarget(null)} style={{ flex: 1 }}>
+                      Cancel
+                    </button>
+                    <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment} style={{ flex: 1 }}>
+                      {savingPayment ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
       )}
 
       {/* RECEIPT MODAL */}
@@ -569,11 +1092,17 @@ const Admin_customer_reservation: React.FC = () => {
 
             {(() => {
               const disp = getDisplayAmount(selectedSession);
-              const totalCost = getSessionTotalCost(selectedSession);
+
+              const baseCost = getBaseSystemCost(selectedSession);
+              const di = getDiscountInfo(selectedSession);
+              const calc = applyDiscount(baseCost, di.kind, di.value);
+
+              const pi = getPaidInfo(selectedSession);
+              const due = getSessionBalance(selectedSession);
+              const remaining = round2(Math.max(0, due - pi.totalPaid));
 
               return (
                 <>
-                  {/* ✅ ONLY ONE SUMMARY LINE */}
                   <div className="receipt-row">
                     <span>{disp.label}</span>
                     <span>₱{disp.value.toFixed(2)}</span>
@@ -584,10 +1113,48 @@ const Admin_customer_reservation: React.FC = () => {
                     <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
                   </div>
 
-                  {/* optional debug (remove if you want hidden) */}
+                  <div className="receipt-row">
+                    <span>Discount</span>
+                    <span>{getDiscountTextFrom(di.kind, di.value)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Discount Amount</span>
+                    <span>₱{calc.discountAmount.toFixed(2)}</span>
+                  </div>
+
+                  {/* ❌ NO DISCOUNT REASON ON RECEIPT */}
+
                   <div className="receipt-row">
                     <span>System Cost</span>
-                    <span>₱{Number(totalCost || 0).toFixed(2)}</span>
+                    <span>₱{calc.discountedCost.toFixed(2)}</span>
+                  </div>
+
+                  <hr />
+
+                  <div className="receipt-row">
+                    <span>GCash</span>
+                    <span>₱{pi.gcash.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Cash</span>
+                    <span>₱{pi.cash.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Total Paid</span>
+                    <span>₱{pi.totalPaid.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Remaining Balance</span>
+                    <span>₱{remaining.toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>Status</span>
+                    <span style={{ fontWeight: 900 }}>{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
                   </div>
 
                   <div className="receipt-total">
