@@ -1345,7 +1345,7 @@ ion-content,
 /* colors */
 .seat-green { background: #00d75a; }
 .seat-yellow { background: #f4c542; }
-.seat-orange { background: #d88a2a; }
+.seat-orange { background: red; }
 .seat-purple { background: #b55cff; }
 
 /* legend */
@@ -1724,3 +1724,306 @@ ion-content,
   background: rgba(0, 0, 0, 0.03);
 }
 
+/* Put this in: src/theme/global.css */
+
+/* ===== LAYOUT ===== */
+.ssr-wrap {
+  max-width: 980px;
+  margin: 0 auto;
+  display: grid;
+  gap: 14px;
+}
+
+.ssr-loading {
+  min-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+}
+
+.ssr-loading-text {
+  font-size: 13px;
+  opacity: 0.72;
+}
+
+/* ===== HEADER ===== */
+.ssr-header {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.ssr-title {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+.ssr-subtitle {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.ssr-header-right {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.ssr-pill {
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.6);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.ssr-pill--muted {
+  opacity: 0.85;
+}
+
+/* ===== CARD ===== */
+.ssr-card {
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+}
+
+.ssr-card-body {
+  padding: 14px;
+}
+
+.ssr-card-title {
+  display: block;
+  font-size: 16px;
+  font-weight: 900;
+  margin-bottom: 10px;
+}
+
+.ssr-card-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.ssr-total-chip {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.78;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* ===== STARTING BALANCE INPUTS ===== */
+.ssr-item {
+  --background: transparent;
+  --padding-start: 0px;
+  --inner-padding-end: 0px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  padding: 10px 12px;
+}
+
+.ssr-label {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.75;
+}
+
+.ssr-input {
+  font-weight: 900;
+}
+
+/* ===== TABLE ===== */
+.ssr-table {
+  width: 100%;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.ssr-table-head,
+.ssr-table-row,
+.ssr-table-footer {
+  display: grid;
+  grid-template-columns: 1.1fr 1.2fr 1fr 1.2fr;
+  align-items: center;
+}
+
+.ssr-table-head {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ssr-table-row {
+  padding: 10px 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.ssr-th,
+.ssr-td {
+  font-size: 12px;
+}
+
+.ssr-th--center,
+.ssr-td--center {
+  text-align: center;
+}
+
+.ssr-th--right,
+.ssr-td--right {
+  text-align: right;
+}
+
+/* badges */
+.ssr-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.ssr-badge--cash {
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.ssr-badge--coin {
+  background: rgba(59, 130, 246, 0.14);
+}
+
+/* qty input (plain html input - stable & fast) */
+.ssr-qty {
+  width: 86px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.8);
+  outline: none;
+  font-weight: 900;
+  font-size: 12px;
+  text-align: center;
+}
+
+.ssr-qty:focus {
+  border-color: rgba(0, 0, 0, 0.32);
+}
+
+/* table footer */
+.ssr-table-footer {
+  padding: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.ssr-footer-left {
+  grid-column: 1 / 4;
+  font-weight: 900;
+  font-size: 13px;
+}
+
+.ssr-footer-right {
+  grid-column: 4 / 5;
+  text-align: right;
+  font-weight: 900;
+}
+
+/* ===== SUMMARY ===== */
+.ssr-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.ssr-sum-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.ssr-sum-label {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.75;
+}
+
+.ssr-sum-value {
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.ssr-divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.12);
+  margin: 4px 0;
+}
+
+.ssr-system {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.ssr-system-title {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.ssr-system-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.72;
+  line-height: 1.35;
+}
+
+.ssr-system-right {
+  font-size: 18px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 520px) {
+  .ssr-table-head,
+  .ssr-table-row,
+  .ssr-table-footer {
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+  }
+
+  .ssr-qty {
+    width: 70px;
+  }
+
+  .ssr-system-right {
+    font-size: 16px;
+  }
+}
