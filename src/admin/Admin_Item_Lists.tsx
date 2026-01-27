@@ -317,7 +317,7 @@ const Admin_Item_Lists: React.FC = () => {
                     <IonCol>{addOn.restocked}</IonCol>
                     <IonCol>{addOn.sold}</IonCol>
                     <IonCol>{addOn.stocks}</IonCol>
-                    <IonCol>₱{addOn.expenses.toFixed(2)}</IonCol>
+                    <IonCol>{addOn.expenses}</IonCol>
                     <IonCol>₱{addOn.overall_sales.toFixed(2)}</IonCol>
                     <IonCol>₱{addOn.expected_sales.toFixed(2)}</IonCol>
                     <IonCol>

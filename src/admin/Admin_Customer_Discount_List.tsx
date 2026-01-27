@@ -1,3 +1,7 @@
+// src/pages/Admin_Customer_Discount_List.tsx
+// ✅ Full code + Export to Excel (by selected date)
+// ✅ strict TS (NO "any")
+
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
@@ -194,10 +198,9 @@ const applyDiscount = (
 };
 
 /**
- * ✅ The ONLY rule for payment:
- * Total Paid must equal Due (no more, no less).
- * If user types GCash -> Cash auto updates.
- * If user types Cash -> GCash auto updates.
+ * ✅ Total Paid must equal Due.
+ * If user edits GCash -> Cash auto updates.
+ * If user edits Cash -> GCash auto updates.
  */
 const normalizePaymentToDue = (
   due: number,
@@ -217,7 +220,6 @@ const normalizePaymentToDue = (
     return { gcash: g, cash: c };
   }
 
-  // edited cash
   const c = round2(Math.min(d, cIn));
   const g = round2(Math.max(0, d - c));
   return { gcash: g, cash: c };
@@ -249,6 +251,24 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
     packages: row.packages ?? null,
     package_options: row.package_options ?? null,
   };
+};
+
+/* ====== EXPORT (CSV opens in Excel) ====== */
+
+const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+
+const downloadCsv = (filename: string, rows: string[][]): void => {
+  const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 };
 
 /* ================= COMPONENT ================= */
@@ -364,11 +384,80 @@ const Admin_Customer_Discount_List: React.FC = () => {
     return { due: round2(calc.discountedCost), discountAmount: round2(calc.discountAmount) };
   };
 
+  /* ====== EXPORT BY DATE ====== */
+  const exportToExcelByDate = (): void => {
+    const header: string[] = [
+      "Created At",
+      "Customer",
+      "Area",
+      "Seat",
+      "Package",
+      "Option",
+      "Start",
+      "End",
+      "System Cost (Before)",
+      "Discount Type",
+      "Discount Value",
+      "Discount Amount",
+      "Final Cost",
+      "GCash",
+      "Cash",
+      "Total Paid",
+      "Remaining",
+      "Paid?",
+      "Status",
+      "Reason",
+    ];
+
+    const lines: string[][] = [header];
+
+    filteredRows.forEach((r) => {
+      const opt = r.package_options;
+      const optionText =
+        opt?.option_name && opt?.duration_value && opt?.duration_unit
+          ? `${opt.option_name} • ${formatDuration(Number(opt.duration_value), opt.duration_unit)}`
+          : opt?.option_name || "—";
+
+      const base = round2(Math.max(0, toNumber(r.price)));
+      const { discountedCost, discountAmount } = applyDiscount(base, r.discount_kind, r.discount_value);
+      const due = round2(discountedCost);
+
+      const pi = getPaidInfo(r);
+      const remaining = round2(Math.max(0, due - pi.totalPaid));
+
+      lines.push([
+        new Date(r.created_at).toLocaleString("en-PH"),
+        r.full_name,
+        prettyArea(r.area),
+        seatLabel(r),
+        r.packages?.title || "—",
+        optionText,
+        new Date(r.start_at).toLocaleString("en-PH"),
+        new Date(r.end_at).toLocaleString("en-PH"),
+        base.toFixed(2),
+        r.discount_kind,
+        String(round2(r.discount_value)),
+        discountAmount.toFixed(2),
+        due.toFixed(2),
+        pi.gcash.toFixed(2),
+        pi.cash.toFixed(2),
+        pi.totalPaid.toFixed(2),
+        remaining.toFixed(2),
+        toBool(r.is_paid) ? "PAID" : "UNPAID",
+        getStatus(r.start_at, r.end_at),
+        (r.discount_reason ?? "").trim(),
+      ]);
+    });
+
+    downloadCsv(`admin_promo_records_${selectedDate}.csv`, lines);
+  };
+
+  /* ====== PAYMENT ====== */
+
   const openPaymentModal = (r: PromoBookingRow): void => {
     const d = getDueAfterDiscount(r).due;
     const pi = getPaidInfo(r);
 
-    // ✅ normalize current amounts to due (keep current cash as priority? we keep gcash as priority here)
     const adj = normalizePaymentToDue(d, pi.gcash, pi.cash, "gcash");
 
     setPaymentTarget(r);
@@ -401,7 +490,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
     const g = round2(Math.max(0, toNumber(gcashInput)));
     const c = round2(Math.max(0, toNumber(cashInput)));
-    const adj = normalizePaymentToDue(due, g, c, "gcash"); // safe normalize
+    const adj = normalizePaymentToDue(due, g, c, "gcash");
 
     const totalPaid = round2(adj.gcash + adj.cash);
     const isPaidAuto = due > 0 ? totalPaid >= due : false;
@@ -463,14 +552,14 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  // ✅ DISCOUNT MODAL
+  /* ====== DISCOUNT ====== */
+
   const openDiscountModal = (r: PromoBookingRow): void => {
     setDiscountTarget(r);
     setDiscountKind(r.discount_kind ?? "none");
     setDiscountValueInput(String(round2(toNumber(r.discount_value))));
     setDiscountReasonInput(String(r.discount_reason ?? ""));
 
-    // initialize payment inputs based on due after discount (current values)
     const dueNow = getDueAfterDiscount(r).due;
     const pi = getPaidInfo(r);
     const adj = normalizePaymentToDue(dueNow, pi.gcash, pi.cash, "gcash");
@@ -490,7 +579,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
     const calc = applyDiscount(base, discountKind, finalVal);
     const newDue = round2(calc.discountedCost);
 
-    // ✅ normalize payments to NEW due (user typed in modal)
     const g = round2(Math.max(0, toNumber(gcashInput)));
     const c = round2(Math.max(0, toNumber(cashInput)));
     const adjPay = normalizePaymentToDue(newDue, g, c, "gcash");
@@ -667,7 +755,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  // ✅ DELETE BY DATE (promo_bookings by created_at day)
   const deleteByDate = async (): Promise<void> => {
     if (!selectedDate) {
       alert("Please select a date first.");
@@ -696,7 +783,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
         return;
       }
 
-      // remove from UI
       setRows((prev) => prev.filter((r) => getCreatedDateLocal(r.created_at) !== selectedDate));
       setSelected((prev) => (prev && getCreatedDateLocal(prev.created_at) === selectedDate ? null : prev));
     } catch (e) {
@@ -714,9 +800,18 @@ const Admin_Customer_Discount_List: React.FC = () => {
           Admin Discount / Promo Records
         </h2>
 
-        {/* ✅ DATE FILTER + DELETE BY DATE */}
+        {/* ✅ DATE FILTER + EXPORT + DELETE BY DATE */}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+          />
+
+          <button className="receipt-btn" onClick={exportToExcelByDate} disabled={filteredRows.length === 0}>
+            Export to Excel
+          </button>
+
           <button className="receipt-btn" onClick={() => void deleteByDate()} disabled={deletingDate === selectedDate}>
             {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
           </button>
@@ -847,7 +942,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
                       View Receipt
                     </button>
 
-                    <button className="receipt-btn" disabled={deletingId === r.id} onClick={() => void deletePromoBooking(r)}>
+                    <button
+                      className="receipt-btn"
+                      disabled={deletingId === r.id}
+                      onClick={() => void deletePromoBooking(r)}
+                    >
                       {deletingId === r.id ? "Deleting..." : "Delete"}
                     </button>
                   </td>
@@ -930,7 +1029,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
                     <button className="receipt-btn" onClick={() => setPaymentTarget(null)} style={{ flex: 1 }}>
                       Cancel
                     </button>
-                    <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment} style={{ flex: 1 }}>
+                    <button
+                      className="receipt-btn"
+                      onClick={() => void savePayment()}
+                      disabled={savingPayment}
+                      style={{ flex: 1 }}
+                    >
                       {savingPayment ? "Saving..." : "Save"}
                     </button>
                   </div>
@@ -995,7 +1099,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
               const { discountedCost, discountAmount } = applyDiscount(base, discountKind, val);
 
-              // preview payment after discount using CURRENT inputs
               const gIn = round2(Math.max(0, toNumber(gcashInput)));
               const cIn = round2(Math.max(0, toNumber(cashInput)));
               const adjPay = normalizePaymentToDue(discountedCost, gIn, cIn, "gcash");
@@ -1048,7 +1151,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
                     <button className="receipt-btn" onClick={() => setDiscountTarget(null)} style={{ flex: 1 }}>
                       Cancel
                     </button>
-                    <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount} style={{ flex: 1 }}>
+                    <button
+                      className="receipt-btn"
+                      onClick={() => void saveDiscount()}
+                      disabled={savingDiscount}
+                      style={{ flex: 1 }}
+                    >
                       {savingDiscount ? "Saving..." : "Save"}
                     </button>
                   </div>
@@ -1130,7 +1238,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
             {(() => {
               const base = round2(Math.max(0, toNumber(selected.price)));
-              const { discountedCost, discountAmount } = applyDiscount(base, selected.discount_kind, selected.discount_value);
+              const { discountedCost, discountAmount } = applyDiscount(
+                base,
+                selected.discount_kind,
+                selected.discount_value
+              );
               const due = round2(discountedCost);
 
               const pi = getPaidInfo(selected);
@@ -1139,7 +1251,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
               return (
                 <>
-                  {/* ✅ show discount in receipt */}
                   <div className="receipt-row">
                     <span>System Cost (Before)</span>
                     <span>₱{base.toFixed(2)}</span>
@@ -1201,6 +1312,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* NOTE: your existing Discount/Payment buttons in table should already call
+         openDiscountModal / openPaymentModal and your delete buttons call deletePromoBooking
+         as in your current code. */}
     </div>
   );
 };
