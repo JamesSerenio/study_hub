@@ -1,9 +1,10 @@
-// PromoModal.tsx
+// src/components/PromoModal.tsx
 // ✅ STRICT TS
 // ✅ NO any
 // ✅ Required/errors/success = IonAlert modal only
 // ✅ Conference overlap (promo_no_overlap_conference) = friendly modal
 // ✅ After success OK: closes THIS promo modal only (does NOT trigger parent "Thank you" unless your parent onSaved() shows it)
+// ✅ THEMED: className="booking-modal" + bookadd-card + form-item (same as Booking)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -55,7 +56,7 @@ interface PackageOptionRow {
 interface PromoModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void; // IMPORTANT: parent should ONLY refresh, not open "Thank you" modal
+  onSaved: () => void; // parent refresh ONLY
   seatGroups: SeatGroup[];
 }
 
@@ -135,7 +136,10 @@ const computeEndIso = (startIso: string, opt: PackageOptionRow): string => {
   return d.toISOString();
 };
 
-const computeStatus = (startIso: string, endIso: string): "upcoming" | "ongoing" | "finished" => {
+const computeStatus = (
+  startIso: string,
+  endIso: string
+): "upcoming" | "ongoing" | "finished" => {
   const now = Date.now();
   const start = new Date(startIso).getTime();
   const end = new Date(endIso).getTime();
@@ -154,7 +158,7 @@ const checkPromoAvailability = async (params: {
 }): Promise<{ ok: boolean; message?: string }> => {
   const { area, seatNumber, startIso, endIso } = params;
 
-  // promo_bookings conflicts (blocking statuses)
+  // promo_bookings conflicts
   let q1 = supabase
     .from("promo_bookings")
     .select("id", { count: "exact", head: true })
@@ -398,7 +402,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     if (occupiedSeats.includes(seatNumber)) setSeatNumber("");
   }, [area, seatNumber, occupiedSeats]);
 
-  // conference auto warning (modal)
+  // conference auto warning
   useEffect(() => {
     if (!isOpen) return;
     if (area !== "conference_room") return;
@@ -472,13 +476,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     setLoading(false);
 
-    // ✅ success: show modal, then close PromoModal on OK
-    onSaved(); // parent refresh ONLY (IMPORTANT)
+    onSaved(); // refresh only
     showAlert("Saved", "Promo booking saved successfully.", "close_after_save");
   };
 
   return (
-    <IonModal isOpen={isOpen} onDidDismiss={onClose}>
+    <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
       <IonHeader>
         <IonToolbar>
           <IonTitle>Promo</IonTitle>
@@ -501,154 +504,164 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
             if (afterAlert === "close_after_save") {
               setAfterAlert("none");
-              onClose(); // ✅ closes promo modal after user taps OK
+              onClose();
             }
           }}
         />
 
-        {loading && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-            <IonSpinner />
-            <span>Loading...</span>
-          </div>
-        )}
+        <div className="bookadd-card">
+          {loading && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <IonSpinner />
+              <span style={{ fontWeight: 800, color: "rgba(31,41,55,0.85)" }}>Loading...</span>
+            </div>
+          )}
 
-        <IonItem>
-          <IonLabel position="stacked">Full Name</IonLabel>
-          <IonInput value={fullName} onIonInput={(e) => setFullName(String(e.detail.value ?? ""))} />
-        </IonItem>
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Full Name</IonLabel>
+            <IonInput value={fullName} onIonInput={(e) => setFullName(String(e.detail.value ?? ""))} />
+          </IonItem>
 
-        <IonItem>
-          <IonLabel position="stacked">Area</IonLabel>
-          <IonSelect
-            value={area}
-            onIonChange={(e) => {
-              const v: unknown = e.detail.value;
-              setArea(isPackageArea(v) ? v : "common_area");
-            }}
-          >
-            <IonSelectOption value="common_area">Common Area</IonSelectOption>
-            <IonSelectOption value="conference_room">Conference Room</IonSelectOption>
-          </IonSelect>
-        </IonItem>
-
-        <IonItem>
-          <IonLabel position="stacked">Promo Package</IonLabel>
-          <IonSelect
-            value={packageId}
-            placeholder={areaPackages.length ? "Select package" : "No packages for this area"}
-            disabled={areaPackages.length === 0}
-            onIonChange={(e) => setPackageId(String(e.detail.value ?? ""))}
-          >
-            {areaPackages.map((p) => (
-              <IonSelectOption key={p.id} value={p.id}>
-                {p.title}
-              </IonSelectOption>
-            ))}
-          </IonSelect>
-        </IonItem>
-
-        {selectedPackage?.description ? (
-          <p style={{ marginTop: 10, opacity: 0.85 }}>{selectedPackage.description}</p>
-        ) : null}
-
-        {amenitiesList.length > 0 ? (
-          <IonCard style={{ marginTop: 10 }}>
-            <IonCardContent>
-              <strong>AMENITIES</strong>
-              <ul style={{ margin: "8px 0 0 18px" }}>
-                {amenitiesList.map((a, i) => (
-                  <li key={`${a}-${i}`}>{a}</li>
-                ))}
-              </ul>
-            </IonCardContent>
-          </IonCard>
-        ) : null}
-
-        <IonItem>
-          <IonLabel position="stacked">Duration / Price</IonLabel>
-          <IonSelect
-            value={optionId}
-            placeholder={packageId ? "Select option" : "Select package first"}
-            disabled={!packageId}
-            onIonChange={(e) => setOptionId(String(e.detail.value ?? ""))}
-          >
-            {packageOptions.map((o) => (
-              <IonSelectOption key={o.id} value={o.id}>
-                {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱
-                {toNum(o.price).toFixed(2)}
-              </IonSelectOption>
-            ))}
-          </IonSelect>
-        </IonItem>
-
-        <IonItem>
-          <IonLabel position="stacked">Start Date & Time</IonLabel>
-          <IonInput
-            type="datetime-local"
-            min={minLocalNow()}
-            value={startIso ? isoToLocal(startIso) : ""}
-            onIonInput={(e) => {
-              const v = String(e.detail.value ?? "");
-              setStartIso(v ? localToIso(v) : "");
-            }}
-          />
-        </IonItem>
-
-        {area === "common_area" ? (
-          <IonItem>
-            <IonLabel position="stacked">Seat Number</IonLabel>
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Area</IonLabel>
             <IonSelect
-              value={seatNumber}
-              placeholder={
-                startIso && endIso
-                  ? availableSeatOptions.length
-                    ? "Select seat"
-                    : "No available seats"
-                  : "Select date & time first"
-              }
-              disabled={!startIso || !endIso || availableSeatOptions.length === 0}
-              onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}
+              value={area}
+              onIonChange={(e) => {
+                const v: unknown = e.detail.value;
+                setArea(isPackageArea(v) ? v : "common_area");
+              }}
             >
-              {availableSeatOptions.map((s) => (
-                <IonSelectOption key={s.value} value={s.value}>
-                  {s.label}
+              <IonSelectOption value="common_area">Common Area</IonSelectOption>
+              <IonSelectOption value="conference_room">Conference Room</IonSelectOption>
+            </IonSelect>
+          </IonItem>
+
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Promo Package</IonLabel>
+            <IonSelect
+              value={packageId}
+              placeholder={areaPackages.length ? "Select package" : "No packages for this area"}
+              disabled={areaPackages.length === 0}
+              onIonChange={(e) => setPackageId(String(e.detail.value ?? ""))}
+            >
+              {areaPackages.map((p) => (
+                <IonSelectOption key={p.id} value={p.id}>
+                  {p.title}
                 </IonSelectOption>
               ))}
             </IonSelect>
           </IonItem>
-        ) : null}
 
-        <IonCard style={{ marginTop: 12 }}>
-          <IonCardContent>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-              <span style={{ opacity: 0.85 }}>Total Amount</span>
-              <strong>₱{totalAmount.toFixed(2)}</strong>
-            </div>
+          {selectedPackage?.description ? (
+            <p style={{ marginTop: 10, opacity: 0.85, fontWeight: 700 }}>
+              {selectedPackage.description}
+            </p>
+          ) : null}
 
-            {selectedOption ? (
-              <div style={{ marginTop: 8, opacity: 0.85, fontSize: 13 }}>
-                Duration: {formatDuration(Number(selectedOption.duration_value), selectedOption.duration_unit)}
+          {amenitiesList.length > 0 ? (
+            <IonCard className="promo-card" style={{ marginTop: 10 }}>
+              <IonCardContent>
+                <strong>AMENITIES</strong>
+                <ul style={{ margin: "8px 0 0 18px" }}>
+                  {amenitiesList.map((a, i) => (
+                    <li key={`${a}-${i}`}>{a}</li>
+                  ))}
+                </ul>
+              </IonCardContent>
+            </IonCard>
+          ) : null}
+
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Duration / Price</IonLabel>
+            <IonSelect
+              value={optionId}
+              placeholder={packageId ? "Select option" : "Select package first"}
+              disabled={!packageId}
+              onIonChange={(e) => setOptionId(String(e.detail.value ?? ""))}
+            >
+              {packageOptions.map((o) => (
+                <IonSelectOption key={o.id} value={o.id}>
+                  {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱
+                  {toNum(o.price).toFixed(2)}
+                </IonSelectOption>
+              ))}
+            </IonSelect>
+          </IonItem>
+
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Start Date & Time</IonLabel>
+            <IonInput
+              type="datetime-local"
+              min={minLocalNow()}
+              value={startIso ? isoToLocal(startIso) : ""}
+              onIonInput={(e) => {
+                const v = String(e.detail.value ?? "");
+                setStartIso(v ? localToIso(v) : "");
+              }}
+            />
+          </IonItem>
+
+          {area === "common_area" ? (
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Seat Number</IonLabel>
+              <IonSelect
+                value={seatNumber}
+                placeholder={
+                  startIso && endIso
+                    ? availableSeatOptions.length
+                      ? "Select seat"
+                      : "No available seats"
+                    : "Select date & time first"
+                }
+                disabled={!startIso || !endIso || availableSeatOptions.length === 0}
+                onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}
+              >
+                {availableSeatOptions.map((s) => (
+                  <IonSelectOption key={s.value} value={s.value}>
+                    {s.label}
+                  </IonSelectOption>
+                ))}
+              </IonSelect>
+            </IonItem>
+          ) : null}
+
+          <IonCard className="promo-card" style={{ marginTop: 12 }}>
+            <IonCardContent>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <span style={{ opacity: 0.85 }}>Total Amount</span>
+                <strong>₱{totalAmount.toFixed(2)}</strong>
               </div>
-            ) : null}
 
-            {endTimeLabel ? (
-              <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
-                Time End: <strong>{endTimeLabel}</strong>
-              </div>
-            ) : null}
+              {selectedOption ? (
+                <div style={{ marginTop: 8, opacity: 0.85, fontSize: 13 }}>
+                  Duration: {formatDuration(Number(selectedOption.duration_value), selectedOption.duration_unit)}
+                </div>
+              ) : null}
 
-            {statusPreview ? (
-              <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
-                Status: <strong>{statusPreview}</strong>
-              </div>
-            ) : null}
-          </IonCardContent>
-        </IonCard>
+              {endTimeLabel ? (
+                <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
+                  Time End: <strong>{endTimeLabel}</strong>
+                </div>
+              ) : null}
 
-        <IonButton expand="block" style={{ marginTop: 12 }} disabled={loading} onClick={() => void submitPromo()}>
-          Save Promo Booking
-        </IonButton>
+              {statusPreview ? (
+                <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
+                  Status: <strong>{statusPreview}</strong>
+                </div>
+              ) : null}
+            </IonCardContent>
+          </IonCard>
+
+          <IonButton
+            expand="block"
+            className="promo-save-btn"
+            style={{ marginTop: 12 }}
+            disabled={loading}
+            onClick={() => void submitPromo()}
+          >
+            Save Promo Booking
+          </IonButton>
+        </div>
       </IonContent>
     </IonModal>
   );

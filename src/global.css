@@ -1324,30 +1324,20 @@ ion-content,
 
 
 /* =========================================================
-   BOOKING MODAL - FULL THEME + RESPONSIVE + FADE ANIMATION
+   BOOKING MODAL - FINAL (NO DUPLICATES)
    Requires: IonModal className="booking-modal"
 ========================================================= */
 
 /* -------------------------
-   Background inside modal
+   Backdrop + modal container
 -------------------------- */
-.booking-modal ion-content {
-  --background: linear-gradient(
-    180deg,
-    rgba(246, 232, 206, 0.96),
-    rgba(228, 193, 130, 0.96)
-  );
-}
-
-/* make modal spacing safe on all devices */
-.booking-modal::part(content) {
-  padding: clamp(10px, 2vw, 18px);
-  animation: bookingFadeIn 220ms ease-out both;
-}
-
-/* backdrop opacity (soft) */
 ion-modal.booking-modal {
+  --background: transparent !important;
   --backdrop-opacity: 0.35;
+}
+
+.booking-modal::part(backdrop) {
+  background: rgba(0, 0, 0, 0.45);
 }
 
 /* -------------------------
@@ -1371,7 +1361,6 @@ ion-modal.booking-modal {
   }
 }
 
-/* Reduced motion support */
 @media (prefers-reduced-motion: reduce) {
   .booking-modal::part(content),
   .booking-modal .bookadd-card {
@@ -1380,7 +1369,181 @@ ion-modal.booking-modal {
 }
 
 /* -------------------------
-   Main Booking Card
+   MAIN modal wrapper (removes white sides)
+-------------------------- */
+.booking-modal::part(content) {
+  /* ✅ remove all white frame + same theme background */
+  background: linear-gradient(
+    180deg,
+    rgba(246, 232, 206, 0.98),
+    rgba(228, 193, 130, 0.98)
+  ) !important;
+
+  /* ✅ dialog sizing (responsive) */
+  width: min(620px, 92vw) !important;
+  max-height: 86vh;
+
+  /* ✅ no default padding (we control it inside) */
+  padding: 0 !important;
+
+  border-radius: 22px;
+  margin: auto;
+
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+
+  animation: bookingFadeIn 220ms ease-out both;
+}
+
+/* ============================================
+   SMOOTH SCROLL (BOOKING MODAL)
+============================================ */
+
+/* make scrolling smooth */
+.booking-modal ion-content::part(scroll) {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch; /* iOS momentum */
+  overscroll-behavior: contain;      /* stop parent bounce */
+}
+
+/* optional: smooth feel habang nag scroll */
+.booking-modal ion-content::part(scroll) {
+  scrollbar-gutter: stable;
+}
+
+/* =====================================================
+   IONDATETIME (CALENDAR) THEME
+   Match Seat Background Color
+===================================================== */
+
+/* whole calendar container */
+.booking-modal ion-datetime {
+  --background: rgba(248, 238, 220, 0.95);
+  --color: #2b2b2b;
+
+  border-radius: 16px;
+  padding: 10px;
+
+  border: 1px solid rgba(160, 130, 80, 0.35);
+}
+
+/* calendar month / header */
+.booking-modal ion-datetime::part(header) {
+  background: rgba(248, 238, 220, 1);
+  color: #2f9e63;
+  font-weight: 900;
+  border-bottom: 1px solid rgba(160, 130, 80, 0.35);
+}
+
+/* month-year text */
+.booking-modal ion-datetime::part(title) {
+  color: #2f9e63;
+  font-weight: 900;
+}
+
+/* arrows */
+.booking-modal ion-datetime::part(calendar-next-button),
+.booking-modal ion-datetime::part(calendar-prev-button) {
+  color: #2f9e63;
+}
+
+/* weekday labels (S M T W T F S) */
+.booking-modal ion-datetime::part(weekday) {
+  color: rgba(47, 158, 99, 0.75);
+  font-weight: 800;
+}
+
+/* day numbers */
+.booking-modal ion-datetime::part(calendar-day) {
+  color: #2b2b2b;
+  font-weight: 700;
+  border-radius: 10px;
+}
+
+/* today */
+.booking-modal ion-datetime::part(today) {
+  border: 2px solid #2f9e63;
+  color: #2f9e63;
+}
+
+/* selected date */
+.booking-modal ion-datetime::part(calendar-day-active) {
+  background: #2f9e63;
+  color: #fff;
+  border-radius: 12px;
+  font-weight: 900;
+}
+
+/* hover (desktop) */
+.booking-modal ion-datetime::part(calendar-day):hover {
+  background: rgba(47, 158, 99, 0.15);
+}
+
+/* disabled dates */
+.booking-modal ion-datetime::part(calendar-day-disabled) {
+  color: rgba(0, 0, 0, 0.25);
+}
+
+/* remove default white panel */
+.booking-modal ion-datetime::part(content) {
+  background: transparent;
+}
+
+/* smooth animation */
+.booking-modal ion-datetime {
+  animation: calendarFade 200ms ease-out both;
+}
+
+@keyframes calendarFade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+/* -------------------------
+   Header (remove white)
+-------------------------- */
+.booking-modal ion-header,
+.booking-modal ion-toolbar {
+  background: transparent !important;
+  --background: transparent !important;
+  box-shadow: none !important;
+}
+
+.booking-modal ion-header::after {
+  display: none !important;
+}
+
+.booking-modal ion-title {
+  color: #2f9e63;
+  font-weight: 900;
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+
+.booking-modal ion-toolbar ion-button,
+.booking-modal ion-toolbar ion-icon {
+  color: #2f9e63;
+}
+
+/* -------------------------
+   IonContent spacing (inside wrapper)
+-------------------------- */
+.booking-modal ion-content {
+  --background: transparent;
+  --padding-start: 12px;
+  --padding-end: 12px;
+  --padding-top: 12px;
+  --padding-bottom: 14px;
+}
+
+/* -------------------------
+   Main booking card (glass)
 -------------------------- */
 .booking-modal .bookadd-card {
   width: 100%;
@@ -1403,21 +1566,29 @@ ion-modal.booking-modal {
 }
 
 /* -------------------------
-   Form Items (IonItem)
+   FORM ITEMS (same bg as seat)
 -------------------------- */
 .booking-modal .form-item {
   margin-bottom: clamp(8px, 1.6vw, 12px);
   border-radius: clamp(12px, 2vw, 14px);
   padding: clamp(9px, 1.6vw, 12px);
 
-  background: rgba(255, 255, 255, 0.62);
-  border: 1px solid rgba(31, 41, 55, 0.12);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  /* ✅ same as seat panel */
+  background: rgba(248, 238, 220, 0.92);
+
+  border: 1px solid rgba(160, 130, 80, 0.35);
+  box-shadow: none;
 
   --inner-padding-end: 10px;
 }
 
-/* Labels: green accent (not dark, not light) */
+/* remove IonItem internal white */
+.booking-modal ion-item {
+  --background: transparent !important;
+  background: transparent !important;
+}
+
+/* Labels */
 .booking-modal .form-item ion-label {
   font-weight: 900;
   color: #2f9e63;
@@ -1428,51 +1599,57 @@ ion-modal.booking-modal {
   font-size: clamp(12px, 1.25vw, 13px);
 }
 
-/* Inputs/select text */
+/* right slot label (Yes/No, With/Without) */
+.booking-modal .form-item ion-label[slot="end"] {
+  color: #2b2b2b;
+  font-weight: 850;
+  font-size: clamp(12px, 1.2vw, 13px);
+}
+
+/* Input/select text */
 .booking-modal .form-item ion-input,
 .booking-modal .form-item ion-select {
   width: 100%;
   border: none;
   background: transparent;
-
   font-size: clamp(14px, 1.4vw, 15px);
   font-weight: 750;
   color: #1f2937;
 }
 
-/* Placeholder */
-.booking-modal .form-item ion-input::part(native)::placeholder {
-  color: rgba(31, 41, 55, 0.45);
+/* input/select/toggle bg */
+.booking-modal ion-input,
+.booking-modal ion-select,
+.booking-modal ion-toggle {
+  --background: transparent !important;
+}
+
+/* placeholder */
+.booking-modal ion-input::part(native)::placeholder {
+  color: rgba(0, 0, 0, 0.45);
   font-weight: 650;
 }
 
-/* Focus ring */
+/* focus */
 .booking-modal .form-item.ion-focused,
 .booking-modal .form-item:focus-within {
-  border-color: rgba(47, 158, 99, 0.55);
-  box-shadow:
-    0 0 0 4px rgba(47, 158, 99, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.45);
-}
-
-/* Right slot labels (Yes/No, With/Without) */
-.booking-modal .form-item ion-label[slot="end"] {
-  color: rgba(31, 41, 55, 0.88);
-  font-weight: 850;
-  font-size: clamp(12px, 1.2vw, 13px);
+  background: rgba(248, 238, 220, 1);
+  border-color: rgba(47, 158, 99, 0.85);
+  box-shadow: 0 0 0 3px rgba(47, 158, 99, 0.18);
 }
 
 /* -------------------------
-   Summary texts
+   Seat panel + summary (same bg)
 -------------------------- */
+.booking-modal .seat-wrap,
 .booking-modal .summary-section {
-  margin-top: 10px;
+  background: rgba(248, 238, 220, 0.92);
   border-radius: 14px;
   padding: 12px;
-  background: rgba(255, 255, 255, 0.52);
-  border: 1px solid rgba(31, 41, 55, 0.10);
+  border: 1px solid rgba(160, 130, 80, 0.35);
 }
 
+/* Summary text */
 .booking-modal .summary-text {
   margin: 6px 0;
   font-size: clamp(12px, 1.2vw, 13px);
@@ -1482,32 +1659,31 @@ ion-modal.booking-modal {
 }
 
 /* -------------------------
-   Seat section layout
+   Seat buttons layout
 -------------------------- */
 .booking-modal .seat-wrap {
   width: 100%;
   margin-top: 4px;
 }
 
-/* Make seat buttons auto-fit like grid */
+/* grid auto-fit */
 .booking-modal .seat-wrap > div > div {
   display: grid !important;
   grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
   gap: 8px !important;
 }
 
-/* Seat buttons responsive size */
+/* seat button sizing */
 .booking-modal .seat-wrap ion-button {
   height: clamp(30px, 4.6vw, 36px);
   font-size: clamp(12px, 1.1vw, 13px);
   font-weight: 900;
-
   --border-radius: 12px;
   --padding-start: 10px;
   --padding-end: 10px;
 }
 
-/* Seat buttons hover (desktop) */
+/* hover micro */
 @media (hover: hover) and (pointer: fine) {
   .booking-modal .seat-wrap ion-button {
     transition: transform 160ms ease, filter 160ms ease;
@@ -1519,9 +1695,8 @@ ion-modal.booking-modal {
 }
 
 /* -------------------------
-   Primary button style
+   Save button
 -------------------------- */
-/* Save Record button */
 .booking-modal .bookadd-card > ion-button {
   height: clamp(42px, 6vw, 48px);
   font-size: clamp(13px, 1.2vw, 14px);
@@ -1540,25 +1715,19 @@ ion-modal.booking-modal {
 /* -------------------------
    Device tuning
 -------------------------- */
-
-/* Tablet: slightly wider */
 @media (min-width: 600px) and (max-width: 1024px) {
-  .booking-modal .bookadd-card {
-    max-width: 620px;
-  }
+  .booking-modal .bookadd-card { max-width: 620px; }
 }
 
-/* Desktop: comfy width */
 @media (min-width: 1025px) {
-  .booking-modal .bookadd-card {
-    max-width: 640px;
-  }
+  .booking-modal .bookadd-card { max-width: 640px; }
 }
 
-/* Small height (landscape phones): compact */
 @media (max-height: 720px) {
-  .booking-modal::part(content) {
-    padding: 10px;
+  .booking-modal::part(content) { max-height: 92vh; }
+  .booking-modal ion-content {
+    --padding-top: 10px;
+    --padding-bottom: 10px;
   }
   .booking-modal .bookadd-card {
     margin: 8px auto;
@@ -1568,16 +1737,11 @@ ion-modal.booking-modal {
     margin-bottom: 8px;
     padding: 9px 10px;
   }
-  .booking-modal .bookadd-card > ion-button {
-    height: 42px;
-  }
+  .booking-modal .bookadd-card > ion-button { height: 42px; }
 }
 
-/* Very small phones */
 @media (max-width: 420px) {
-  .booking-modal .bookadd-card {
-    max-width: 100%;
-  }
+  .booking-modal .bookadd-card { max-width: 100%; }
   .booking-modal .seat-wrap > div > div {
     grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
   }
@@ -1588,71 +1752,132 @@ ion-modal.booking-modal {
   }
 }
 
-/* =====================================================
-   REMOVE ALL WHITE AREAS OF IONMODAL
-   MAKE EVERYTHING SAME COLOR
-===================================================== */
-
-/* entire modal container */
-ion-modal.booking-modal {
-  --background: transparent !important;
-}
-
-/* shadow dom background */
-.booking-modal::part(backdrop) {
-  background: rgba(0, 0, 0, 0.45);
-}
-
-/* MAIN modal wrapper (this is the white part) */
-.booking-modal::part(content) {
-  background: linear-gradient(
-    180deg,
-    rgba(246, 232, 206, 0.98),
-    rgba(228, 193, 130, 0.98)
-  ) !important;
-
-  padding: 0 !important;
-  border-radius: 22px;
-
-  max-width: min(720px, 96vw);
-  margin: auto;
-}
-
-/* remove Ionic default safe-area */
-.booking-modal ion-content {
-  --background: transparent;
-  --padding-start: 0;
-  --padding-end: 0;
-  --padding-top: 12px;
-  --padding-bottom: 14px;
-}
-
-/* header same color */
-.booking-modal ion-header,
-.booking-modal ion-toolbar {
-  background: transparent !important;
-  --background: transparent !important;
+/* Promo card match seat background */
+.booking-modal .promo-card,
+.booking-modal ion-card {
+  background: rgba(248, 238, 220, 0.92) !important;
+  border: 1px solid rgba(160, 130, 80, 0.35) !important;
+  border-radius: 14px !important;
   box-shadow: none !important;
 }
 
-/* remove white divider line */
-.booking-modal ion-header::after {
-  display: none !important;
+.booking-modal ion-card-content {
+  color: rgba(31, 41, 55, 0.92);
+  font-weight: 700;
 }
 
-/* title color */
-.booking-modal ion-title {
+/* =====================================================
+   PROMO MODAL EXTRAS (uses same booking-modal theme)
+===================================================== */
+
+/* Promo card match seat background */
+.booking-modal .promo-card,
+.booking-modal ion-card {
+  background: rgba(248, 238, 220, 0.92) !important;
+  border: 1px solid rgba(160, 130, 80, 0.35) !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+}
+
+/* Card content text */
+.booking-modal ion-card-content {
+  color: rgba(31, 41, 55, 0.92);
+  font-weight: 700;
+}
+
+/* Amenities list */
+.booking-modal ion-card-content ul,
+.booking-modal ion-card-content li {
+  color: rgba(31, 41, 55, 0.9);
+  font-weight: 650;
+}
+
+/* Save button same style as booking */
+.booking-modal .promo-save-btn,
+.booking-modal .bookadd-card > ion-button {
+  --background: #2f9e63;
+  --background-hover: #278a57;
+  --background-activated: #278a57;
+  --color: #fff;
+  --border-radius: 14px;
+  --box-shadow: 0 14px 22px rgba(0, 0, 0, 0.16);
+  font-weight: 900;
+  letter-spacing: 0.3px;
+}
+
+/* =====================================================
+   ION-DATETIME — TIME PICKER THEME
+   (hour / minute / am-pm)
+===================================================== */
+
+/* whole picker panel */
+.booking-modal ion-datetime::part(time-body) {
+  background: rgba(248, 238, 220, 0.96);
+  border-radius: 14px;
+  border: 1px solid rgba(160, 130, 80, 0.35);
+}
+
+/* column containers */
+.booking-modal ion-datetime::part(time-column) {
+  background: transparent;
+}
+
+/* time numbers */
+.booking-modal ion-datetime::part(time-item) {
+  color: #2b2b2b;
+  font-weight: 700;
+  font-size: 15px;
+  border-radius: 10px;
+}
+
+/* selected time */
+.booking-modal ion-datetime::part(time-item-active) {
+  background: #2f9e63;
+  color: #fff;
+  font-weight: 900;
+  border-radius: 12px;
+}
+
+/* hover (desktop) */
+.booking-modal ion-datetime::part(time-item):hover {
+  background: rgba(47, 158, 99, 0.18);
+}
+
+/* AM / PM column */
+.booking-modal ion-datetime::part(time-period) {
+  color: #2b2b2b;
+  font-weight: 800;
+}
+
+/* active AM/PM */
+.booking-modal ion-datetime::part(time-period-active) {
+  background: #2f9e63;
+  color: #fff;
+  border-radius: 12px;
+  font-weight: 900;
+}
+
+/* divider lines */
+.booking-modal ion-datetime::part(time-divider) {
+  background: rgba(160, 130, 80, 0.35);
+}
+
+/* footer (Clear / Today) */
+.booking-modal ion-datetime::part(footer) {
+  background: rgba(248, 238, 220, 0.96);
+  border-top: 1px solid rgba(160, 130, 80, 0.35);
+}
+
+/* footer buttons */
+.booking-modal ion-datetime::part(button) {
   color: #2f9e63;
   font-weight: 900;
-  text-align: center;
 }
 
-/* close icon */
-.booking-modal ion-toolbar ion-button,
-.booking-modal ion-toolbar ion-icon {
-  color: #2f9e63;
+/* remove remaining white */
+.booking-modal ion-datetime::part(content) {
+  background: transparent !important;
 }
-
 
 
 .seatmap-wrap {
