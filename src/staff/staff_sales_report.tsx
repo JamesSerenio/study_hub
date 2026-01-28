@@ -95,8 +95,8 @@ interface SalesTotalsRow {
    CONSTANTS
 ========================= */
 
-const CASH_DENOMS: number[] = [1000, 500, 200, 100, 50, 20];
-const COIN_DENOMS: number[] = [10, 5, 1];
+const CASH_DENOMS: number[] = [1000, 500, 200, 100, 50];
+const COIN_DENOMS: number[] = [20, 10, 5, 1];
 
 const toNumber = (v: string | number | null | undefined): number => {
   if (v === null || v === undefined) return 0;

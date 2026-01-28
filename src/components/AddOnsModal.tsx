@@ -28,7 +28,7 @@ interface AddOn {
   restocked: number;
   sold: number;
   expenses: number;
-  stocks: number;
+  stocks: number; // generated
   overall_sales: number;
   expected_sales: number;
   image_url: string | null;
@@ -47,13 +47,18 @@ type SeatGroup = { title: string; seats: string[] };
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void; // ✅ parent will show alert + close on OK
+  onSaved: () => void; // parent will show alert + close on OK
   seatGroups: SeatGroup[];
 };
 
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
 
-export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
+export default function AddOnsModal({
+  isOpen,
+  onClose,
+  onSaved,
+  seatGroups,
+}: Props) {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
 
   const [addOnsFullName, setAddOnsFullName] = useState("");
@@ -61,7 +66,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   // Each block just stores chosen category (duplicates allowed)
   const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
-
   const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
 
   useEffect(() => {
@@ -74,16 +78,20 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
   }, [isOpen]);
 
   const fetchAddOns = async (): Promise<void> => {
+    // ✅ Customer: show only in-stock items
     const { data, error } = await supabase
       .from("add_ons")
       .select("*")
-      .order("category", { ascending: true });
+      .gt("stocks", 0)
+      .order("category", { ascending: true })
+      .order("name", { ascending: true });
 
     if (error) {
       console.error(error);
       alert("Error loading add-ons.");
       return;
     }
+
     setAddOns((data as AddOn[]) || []);
   };
 
@@ -160,11 +168,24 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     if (!addOnsSeat) return alert("Seat Number is required.");
     if (selectedAddOns.length === 0) return alert("Please select at least one add-on.");
 
-    // stock check
+    // ✅ Re-check stock before insert
     for (const selected of selectedAddOns) {
-      const addOn = addOns.find((a) => a.id === selected.id);
-      if (!addOn || addOn.stocks < selected.quantity) {
-        alert(`Insufficient stock for ${selected.name}. Available: ${addOn?.stocks ?? 0}`);
+      const { data, error } = await supabase
+        .from("add_ons")
+        .select("stocks,name")
+        .eq("id", selected.id)
+        .single();
+
+      if (error) {
+        alert(`Stock check error for ${selected.name}: ${error.message}`);
+        return;
+      }
+
+      const stocksNow = Number((data as { stocks: number }).stocks ?? 0);
+      const nameNow = (data as { name: string }).name ?? selected.name;
+
+      if (stocksNow < selected.quantity) {
+        alert(`Insufficient stock for ${nameNow}. Available: ${stocksNow}`);
         return;
       }
     }
@@ -186,10 +207,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
     void fetchAddOns();
 
-    // ✅ DO NOT close here. Parent will close AFTER OK on alert.
+    // parent will show alert then close
     onSaved();
 
-    // ✅ reset now (so next open is clean)
     resetAddOnsForm();
   };
 
@@ -245,7 +265,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
           {/* CATEGORY BLOCKS */}
           {selectedCategories.map((category, index) => {
-            const categoryItems = addOns.filter((a) => a.category === category);
+            const categoryItems = addOns.filter((a) => a.category === category && a.stocks > 0);
 
             return (
               <div key={index} className="addon-block">
@@ -274,7 +294,8 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   <IonItem className="form-item">
                     <IonLabel position="stacked">Select {category} Item</IonLabel>
                     <IonSelect
-                      placeholder="Choose an item"
+                      placeholder={categoryItems.length > 0 ? "Choose an item" : "No available items"}
+                      disabled={categoryItems.length === 0}
                       onIonChange={(e) => {
                         const selectedId = asString(e.detail.value);
                         if (!selectedId) return;
@@ -300,7 +321,8 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     >
                       {categoryItems.map((a) => (
                         <IonSelectOption key={a.id} value={a.id}>
-                          {a.name} - ₱{a.price} (Stock: {a.stocks})
+                          {/* ✅ NO stock shown */}
+                          {a.name} - ₱{a.price}
                         </IonSelectOption>
                       ))}
                     </IonSelect>

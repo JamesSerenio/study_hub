@@ -96,8 +96,8 @@ interface SalesTotalsRow {
    CONSTANTS
 ========================= */
 
-const CASH_DENOMS: number[] = [1000, 500, 200, 100, 50, 20];
-const COIN_DENOMS: number[] = [20, 10, 5, 1]; // ✅ matches your sheet style (20/10/5/1)
+const CASH_DENOMS: number[] = [1000, 500, 200, 100, 50];
+const COIN_DENOMS: number[] = [20, 10, 5, 1];
 
 const toNumber = (v: string | number | null | undefined): number => {
   if (v === null || v === undefined) return 0;
@@ -115,7 +115,6 @@ const todayYMD = (): string => {
 };
 
 const isYMD = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
-
 
 const peso = (n: number): string =>
   `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -191,32 +190,6 @@ const buildZeroLines = (reportId: string): CashLine[] => {
 };
 
 /* =========================
-   CSV HELPERS (Export to Excel)
-   ✅ UTF-8 BOM
-========================= */
-
-const csvEscape = (s: string): string => {
-  // Wrap in quotes if needed
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-};
-
-const downloadCSV = (filename: string, rows: string[][]): void => {
-  const bom = "\uFEFF"; // ✅ Excel-friendly UTF-8 BOM
-  const csv = rows.map((r) => r.map((c) => csvEscape(c)).join(",")).join("\n");
-  const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-};
-
-/* =========================
    PAGE
 ========================= */
 
@@ -241,7 +214,6 @@ const AdminSalesReport: React.FC = () => {
 
   /* =========================
      LOAD / ENSURE REPORT
-     ✅ ensure row exists WITHOUT overwriting existing data
   ========================= */
 
   const ensureReportRow = async (dateYMD: string): Promise<void> => {
@@ -297,7 +269,6 @@ const AdminSalesReport: React.FC = () => {
 
     if (res.error) {
       console.error("daily_cash_count_lines select error:", res.error.message);
-      // still show zeros so UI is usable
       setLines(buildZeroLines(reportId));
       return;
     }
@@ -382,8 +353,7 @@ const AdminSalesReport: React.FC = () => {
   };
 
   /* =========================
-     ADMIN: DONE / UPDATE (always saves + marks submitted)
-     ✅ Admin can revisit previous dates and SEE values and EDIT them
+     ADMIN: SAVE / UPDATE
   ========================= */
 
   const onSubmitDone = async (): Promise<void> => {
@@ -396,7 +366,6 @@ const AdminSalesReport: React.FC = () => {
 
     setSubmitting(true);
 
-    // Save header fields (overwrite)
     const r1 = await supabase
       .from("daily_sales_reports")
       .update({
@@ -412,7 +381,6 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
-    // Save cash lines (overwrite via upsert)
     const payload = lines.map((l) => ({
       report_id: l.report_id,
       money_kind: l.money_kind,
@@ -432,7 +400,6 @@ const AdminSalesReport: React.FC = () => {
       }
     }
 
-    // Mark submitted (admin: always keep values visible)
     const res = await supabase
       .from("daily_sales_reports")
       .update({ is_submitted: true, submitted_at: new Date().toISOString() })
@@ -453,7 +420,6 @@ const AdminSalesReport: React.FC = () => {
 
   /* =========================
      ADMIN: DELETE BY DATE
-     ✅ deletes only that date
   ========================= */
 
   const deleteByDate = async (): Promise<void> => {
@@ -464,7 +430,6 @@ const AdminSalesReport: React.FC = () => {
 
     setSubmitting(true);
 
-    // Find report row first (if none, nothing to delete)
     const find = await supabase
       .from("daily_sales_reports")
       .select("id")
@@ -484,7 +449,6 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
-    // Delete lines first (safe even if none)
     const d1 = await supabase.from("daily_cash_count_lines").delete().eq("report_id", reportId);
     if (d1.error) {
       setToast({ open: true, msg: `Delete lines failed: ${d1.error.message}`, color: "danger" });
@@ -492,7 +456,6 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
-    // Delete report
     const d2 = await supabase.from("daily_sales_reports").delete().eq("id", reportId);
     if (d2.error) {
       setToast({ open: true, msg: `Delete report failed: ${d2.error.message}`, color: "danger" });
@@ -502,17 +465,16 @@ const AdminSalesReport: React.FC = () => {
 
     setToast({ open: true, msg: `Deleted report for ${selectedDate}.`, color: "success" });
 
-    // Reload this date -> ensureReportRow recreates a fresh blank row
     await loadReport(selectedDate);
     setSubmitting(false);
   };
 
   /* =========================
-     EXPORT TO EXCEL (CSV)
-     ✅ "formal" layout style like your sheet (Category + Cash Count)
+     EXPORT TO PDF (Print)
+     ✅ better layout than CSV
   ========================= */
 
-  const exportToExcel = (): void => {
+  const exportToPDF = (): void => {
     if (!report || !isYMD(selectedDate)) {
       setToast({ open: true, msg: "Pick a valid date first.", color: "danger" });
       return;
@@ -526,7 +488,7 @@ const AdminSalesReport: React.FC = () => {
 
     const coh = totals ? toNumber(totals.coh_total) : 0;
     const salesCollected = totals ? toNumber(totals.sales_collected) : coh;
-    const bilin = report ? toNumber(report.bilin_amount) : 0;
+    const bilin = toNumber(report.bilin_amount);
     const netCollected = totals ? toNumber(totals.net_collected) : salesCollected - bilin;
 
     const expenses = totals ? toNumber(totals.expenses_amount) : 0;
@@ -546,71 +508,146 @@ const AdminSalesReport: React.FC = () => {
     const walkCash = totals ? toNumber(totals.walkin_cash) : 0;
     const walkGcash = totals ? toNumber(totals.walkin_gcash) : 0;
 
-    // Make a grid-like CSV (with empty columns as spacing)
-    // Columns: A..M style: [Category, Cash, GCash, (blank), (blank), (blank), CashDenom, Qty, Amount, (blank), CoinDenom, Qty, Amount]
-    const rows: string[][] = [];
-
-    // Title + Date (force as text with leading apostrophe)
-    rows.push(["DAILY SALES REPORT", "", "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Report Date", `'${selectedDate}`, "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Status", report.is_submitted ? "SUBMITTED" : "DRAFT", "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Submitted At", report.submitted_at ? new Date(report.submitted_at).toLocaleString() : "", "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["", "", "", "", "", "", "", "", "", "", "", "", ""]);
-
-    // Headers
-    rows.push(["CATEGORY", "CASH", "GCASH", "", "", "", "CASH COUNT", "", "", "", "COINS", "", ""]);
-    rows.push(["", "", "", "", "", "", "CASH", "QTY", "AMOUNT", "", "COINS", "QTY", "AMOUNT"]);
-
-    // Left table (like your sheet)
-    rows.push(["Starting Balance", String(toNumber(report.starting_cash)), String(toNumber(report.starting_gcash)), "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["COH / Total of the Day", peso(cashTotal + coinTotal), "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Expenses", String(expenses), "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Paid reservations for today", String(paidResCash), String(paidResGcash), "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["New Advance Payments", String(advCash), String(advGcash), "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Down payments within this day only", String(walkCash), String(walkGcash), "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Sales System", String(systemSale), "", "", "", "", "", "", "", "", "", "", ""]);
-
-    // Cash count rows (align cash + coins side by side like the sheet)
     const maxLen = Math.max(cashLines.length, coinLines.length);
-    for (let i = 0; i < maxLen; i++) {
+    const rowsHtml = Array.from({ length: maxLen }).map((_, i) => {
       const c = cashLines[i];
       const k = coinLines[i];
 
-      const cashDen = c ? String(c.denomination) : "";
-      const cashQty = c ? String(c.qty) : "";
+      const cashDen = c ? c.denomination : "";
+      const cashQty = c ? c.qty : "";
       const cashAmt = c ? peso(c.denomination * c.qty) : "";
 
-      const coinDen = k ? String(k.denomination) : "";
-      const coinQty = k ? String(k.qty) : "";
+      const coinDen = k ? k.denomination : "";
+      const coinQty = k ? k.qty : "";
       const coinAmt = k ? peso(k.denomination * k.qty) : "";
 
-      rows.push(["", "", "", "", "", "", cashDen, cashQty, cashAmt, "", coinDen, coinQty, coinAmt]);
+      return `
+        <tr>
+          <td class="t-center">${cashDen}</td>
+          <td class="t-center">${cashQty}</td>
+          <td class="t-right">${cashAmt}</td>
+          <td class="gap"></td>
+          <td class="t-center">${coinDen}</td>
+          <td class="t-center">${coinQty}</td>
+          <td class="t-right">${coinAmt}</td>
+        </tr>
+      `;
+    }).join("");
+
+    const html = `
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Daily Sales Report ${selectedDate}</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { font-family: Arial, sans-serif; color:#111; }
+  .title { font-size:18px; font-weight:800; margin:0 0 8px; }
+  .meta { font-size:12px; margin:0 0 10px; }
+  .grid { display:flex; gap:14px; }
+  .box { border:1px solid #222; border-radius:10px; padding:10px; flex:1; }
+  .box h3 { margin:0 0 8px; font-size:12px; letter-spacing:.5px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { border:1px solid #222; padding:6px 8px; }
+  th { background:#f2d0a7; }
+  .t-right { text-align:right; }
+  .t-center { text-align:center; }
+  .gap { border:none; width:10px; }
+  .muted { color:#555; }
+  .summary { display:flex; gap:14px; margin-top:10px; }
+  .chip { border:1px solid #222; border-radius:10px; padding:10px; flex:1; }
+  .row { display:flex; justify-content:space-between; padding:4px 0; font-size:12px; }
+  .row b { font-weight:800; }
+</style>
+</head>
+<body>
+  <div class="title">DAILY SALES REPORT (Metyme)</div>
+  <div class="meta">
+    <div><b>Report Date:</b> ${selectedDate}</div>
+    <div><b>Status:</b> ${report.is_submitted ? "SUBMITTED" : "DRAFT"}</div>
+    <div><b>Submitted At:</b> ${report.submitted_at ? new Date(report.submitted_at).toLocaleString() : "-"}</div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <h3>CATEGORY</h3>
+      <table>
+        <thead>
+          <tr><th>CATEGORY</th><th>CASH</th><th>GCASH</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Starting Balance</td><td class="t-right">${peso(toNumber(report.starting_cash))}</td><td class="t-right">${peso(toNumber(report.starting_gcash))}</td></tr>
+          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cashTotal + coinTotal)}</td><td class="t-right">—</td></tr>
+          <tr><td>Expenses</td><td class="t-right">${peso(expenses)}</td><td class="t-right">—</td></tr>
+          <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCash)}</td><td class="t-right">${peso(paidResGcash)}</td></tr>
+          <tr><td>New Advance Payments</td><td class="t-right">${peso(advCash)}</td><td class="t-right">${peso(advGcash)}</td></tr>
+          <tr><td>Down payments within this day only</td><td class="t-right">${peso(walkCash)}</td><td class="t-right">${peso(walkGcash)}</td></tr>
+          <tr><td><b>Sales System</b></td><td class="t-right" colspan="2"><b>${peso(systemSale)}</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box">
+      <h3>CASH COUNT</h3>
+      <table>
+        <thead>
+          <tr>
+            <th colspan="3">CASH</th>
+            <th class="gap"></th>
+            <th colspan="3">COINS</th>
+          </tr>
+          <tr>
+            <th>DENOM</th><th>QTY</th><th>AMOUNT</th>
+            <th class="gap"></th>
+            <th>DENOM</th><th>QTY</th><th>AMOUNT</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+          <tr>
+            <td colspan="2"><b>TOTAL CASH</b></td><td class="t-right"><b>${peso(cashTotal)}</b></td>
+            <td class="gap"></td>
+            <td colspan="2"><b>TOTAL COINS</b></td><td class="t-right"><b>${peso(coinTotal)}</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="summary">
+        <div class="chip">
+          <div class="row"><span>Cash Sales</span><b>${peso(cashSales)}</b></div>
+          <div class="row"><span>GCash Sales</span><b>${peso(gcashSales)}</b></div>
+          <div class="row"><span>Sales Collected</span><b>${peso(salesCollected)}</b></div>
+          <div class="row"><span>Bilin</span><b>${peso(Math.max(0, bilin))}</b></div>
+          <div class="row"><span>Net</span><b>${peso(netCollected)}</b></div>
+        </div>
+        <div class="chip">
+          <div class="row"><span>Total Time</span><b>${fmtHoursSmart(totalTimeHours)}</b></div>
+          <div class="row"><span>Add-ons</span><b>${peso(addons)}</b></div>
+          <div class="row"><span>Discounts</span><b>${peso(discount)}</b></div>
+          <div class="row"><span class="muted">Tip</span><span class="muted">Print → Save as PDF</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  window.onload = () => { window.print(); };
+</script>
+</body>
+</html>
+`;
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      setToast({ open: true, msg: "Popup blocked. Allow popups then try again.", color: "danger" });
+      return;
     }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
 
-    // Totals bars like the sheet bottom
-    rows.push(["", "", "", "", "", "", "TOTAL CASH", "", peso(cashTotal), "", "TOTAL COINS", "", peso(coinTotal)]);
-    rows.push(["", "", "", "", "", "", "", "", "", "", "", "", ""]);
-
-    // Sales boxes area
-    rows.push(["Cash Sales", peso(cashSales), "", "", "", "", "Sales Collected", peso(salesCollected), "", "", "", "", ""]);
-    rows.push(["Gcash Sales", peso(gcashSales), "", "", "", "", "Bilin", String(Math.max(0, bilin)), "", "", "", "", ""]);
-    rows.push(["", "", "", "", "", "", "Net", peso(netCollected), "", "", "", "", ""]);
-    rows.push(["", "", "", "", "", "", "", "", "", "", "", "", ""]);
-
-    // Checking block
-    rows.push(["CHECKING", "", "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Sales System", String(systemSale), "", "", "", "", "Actual", peso(cashSales + gcashSales), "", "", "", "", ""]);
-    rows.push(["", "", "", "", "", "", "", "", "", "", "", "", ""]);
-
-    // Other totals
-    rows.push(["Time", fmtHoursSmart(totalTimeHours), "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Add-ons", peso(addons), "", "", "", "", "", "", "", "", "", "", ""]);
-    rows.push(["Discounts", peso(discount), "", "", "", "", "", "", "", "", "", "", ""]);
-
-    const filename = `Daily_Sales_Report_${selectedDate}.csv`;
-    downloadCSV(filename, rows);
-
-    setToast({ open: true, msg: "Exported CSV (Excel-ready).", color: "success" });
+    setToast({ open: true, msg: "Opened print view. Save as PDF.", color: "success" });
   };
 
   /* =========================
@@ -656,7 +693,6 @@ const AdminSalesReport: React.FC = () => {
   const addons = totals ? toNumber(totals.addons_total) : 0;
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const systemSale = totals ? toNumber(totals.system_sale) : 0;
-
   const totalTimeHours = totals ? toNumber(totals.total_time) : 0;
 
   if (loading) {
@@ -752,10 +788,10 @@ const AdminSalesReport: React.FC = () => {
                   color="medium"
                   fill="outline"
                   disabled={submitting || !report}
-                  onClick={() => exportToExcel()}
+                  onClick={() => exportToPDF()}
                 >
                   <IonIcon slot="start" icon={downloadOutline} />
-                  Export
+                  Export PDF
                 </IonButton>
 
                 <IonButton
@@ -910,11 +946,6 @@ const AdminSalesReport: React.FC = () => {
                       <span className="ssr-sales-box-value">{peso(gcashSales)}</span>
                     </div>
                   </div>
-
-                  <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-                    Total Time: <b>{fmtHoursSmart(totalTimeHours)}</b> | Add-ons: <b>{peso(addons)}</b> | Discount:{" "}
-                    <b>{peso(discount)}</b>
-                  </div>
                 </IonCardContent>
               </IonCard>
             </IonCol>
@@ -1028,6 +1059,28 @@ const AdminSalesReport: React.FC = () => {
                     <div className="ssr-collected-box ssr-collected-box--net">
                       <div className="ssr-collected-label">Net</div>
                       <div className="ssr-collected-value">{peso(netCollected)}</div>
+                    </div>
+                  </div>
+                </IonCardContent>
+              </IonCard>
+
+              {/* ✅ RESTORED: OTHER TOTALS */}
+              <IonCard className="ssr-card">
+                <IonCardContent className="ssr-card-body">
+                  <IonText className="ssr-card-title">Other Totals</IonText>
+
+                  <div className="ssr-mini">
+                    <div className="ssr-mini-row">
+                      <span>Add-ons</span>
+                      <b>{peso(addons)}</b>
+                    </div>
+                    <div className="ssr-mini-row">
+                      <span>Discount (amount)</span>
+                      <b>{peso(discount)}</b>
+                    </div>
+                    <div className="ssr-mini-row">
+                      <span>Total Time</span>
+                      <b>{fmtHoursSmart(totalTimeHours)}</b>
                     </div>
                   </div>
                 </IonCardContent>
