@@ -2171,8 +2171,11 @@ ion-content,
   }
 }
 
-/* ===== Restock Records (compact + clean) ===== */
+/* ===========================
+   RESTOCK RECORDS (UPDATED)
+=========================== */
 
+/* Filters layout: Search (left) + Mode/Date (right) */
 .admin-restock__filtersRow {
   display: grid;
   grid-template-columns: 1fr;
@@ -2182,11 +2185,25 @@ ion-content,
 
 @media (min-width: 900px) {
   .admin-restock__filtersRow {
-    grid-template-columns: 1fr 360px;
+    grid-template-columns: 1fr 420px; /* mas malapad dahil may Mode + Date card */
     align-items: start;
   }
 }
 
+/* Right side: Mode dropdown + Date card */
+.admin-restock__rightFilters {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-restock__modeItem {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+}
+
+/* Date card same style */
 .admin-restock__dateCard {
   border-radius: 16px;
   background: #fff;
@@ -2234,6 +2251,47 @@ ion-content,
   opacity: 0.7;
 }
 
+/* Top buttons row (Export / Delete / Refresh) */
+.admin-restock__topBtns {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Table look (optional but clean) */
+.admin-restock__grid {
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.admin-restock__headRow {
+  background: rgba(0, 0, 0, 0.04);
+  font-weight: 900;
+}
+
+.admin-restock__headCell,
+.admin-restock__cell {
+  padding: 10px 10px;
+  font-size: 13px;
+}
+
+.admin-restock__row {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.admin-restock__item {
+  font-weight: 900;
+}
+
+/* Actions buttons */
+.admin-restock__actionBtns {
+  display: inline-flex;
+  gap: 6px;
+}
+
 /* Table image */
 .admin-restock__img {
   width: 52px;
@@ -2265,4 +2323,18 @@ ion-content,
 
 .admin-restock__doneBtn {
   margin-top: 12px;
+}
+
+/* Edit modal */
+.admin-restock__editInfo {
+  padding: 12px;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 14px;
+  margin-bottom: 12px;
+}
+
+.admin-restock__editBtns {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
 }
