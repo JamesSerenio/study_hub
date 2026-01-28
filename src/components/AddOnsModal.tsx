@@ -1,4 +1,9 @@
 // src/components/AddOnsModal.tsx
+// ✅ STRICT TS
+// ✅ NO any
+// ✅ THEMED (same as Booking): IonModal className="booking-modal"
+// ✅ Uses: .bookadd-card, .form-item, .summary-section, .summary-text
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonModal,
@@ -53,18 +58,13 @@ type Props = {
 
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
 
-export default function AddOnsModal({
-  isOpen,
-  onClose,
-  onSaved,
-  seatGroups,
-}: Props) {
+export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
 
-  const [addOnsFullName, setAddOnsFullName] = useState("");
-  const [addOnsSeat, setAddOnsSeat] = useState("");
+  const [addOnsFullName, setAddOnsFullName] = useState<string>("");
+  const [addOnsSeat, setAddOnsSeat] = useState<string>("");
 
-  // Each block just stores chosen category (duplicates allowed)
+  // Each block stores chosen category (duplicates allowed)
   const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
   const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
 
@@ -87,6 +87,7 @@ export default function AddOnsModal({
       .order("name", { ascending: true });
 
     if (error) {
+      // parent handles alert? keep simple
       console.error(error);
       alert("Error loading add-ons.");
       return;
@@ -97,7 +98,7 @@ export default function AddOnsModal({
 
   const categories = useMemo(() => [...new Set(addOns.map((a) => a.category))], [addOns]);
 
-  const addOnsTotal = useMemo(
+  const addOnsTotal = useMemo<number>(
     () => selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0),
     [selectedAddOns]
   );
@@ -124,10 +125,7 @@ export default function AddOnsModal({
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
         const addOn = addOns.find((a) => a.id === id);
         if (!addOn) return prev;
-        return [
-          ...prev,
-          { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity: q },
-        ];
+        return [...prev, { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity: q }];
       }
 
       return prev.filter((s) => s.id !== id);
@@ -181,8 +179,9 @@ export default function AddOnsModal({
         return;
       }
 
-      const stocksNow = Number((data as { stocks: number }).stocks ?? 0);
-      const nameNow = (data as { name: string }).name ?? selected.name;
+      const row = data as { stocks: number; name: string };
+      const stocksNow = Number(row.stocks ?? 0);
+      const nameNow = row.name ?? selected.name;
 
       if (stocksNow < selected.quantity) {
         alert(`Insufficient stock for ${nameNow}. Available: ${stocksNow}`);
@@ -190,6 +189,7 @@ export default function AddOnsModal({
       }
     }
 
+    // insert each selected item row
     for (const selected of selectedAddOns) {
       const { error } = await supabase.from("customer_session_add_ons").insert({
         add_on_id: selected.id,
@@ -214,7 +214,7 @@ export default function AddOnsModal({
   };
 
   return (
-    <IonModal isOpen={isOpen} onDidDismiss={onClose}>
+    <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
       <IonHeader>
         <IonToolbar>
           <IonTitle>Add-Ons</IonTitle>
@@ -268,7 +268,7 @@ export default function AddOnsModal({
             const categoryItems = addOns.filter((a) => a.category === category && a.stocks > 0);
 
             return (
-              <div key={index} className="addon-block">
+              <div key={`cat-${index}`} className="addon-block">
                 <div className="addon-row">
                   <IonItem className="form-item addon-flex">
                     <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
@@ -290,7 +290,7 @@ export default function AddOnsModal({
                   </IonButton>
                 </div>
 
-                {category && (
+                {category ? (
                   <IonItem className="form-item">
                     <IonLabel position="stacked">Select {category} Item</IonLabel>
                     <IonSelect
@@ -321,19 +321,18 @@ export default function AddOnsModal({
                     >
                       {categoryItems.map((a) => (
                         <IonSelectOption key={a.id} value={a.id}>
-                          {/* ✅ NO stock shown */}
                           {a.name} - ₱{a.price}
                         </IonSelectOption>
                       ))}
                     </IonSelect>
                   </IonItem>
-                )}
+                ) : null}
               </div>
             );
           })}
 
           {/* SELECTED ITEMS LIST */}
-          {selectedAddOns.length > 0 && (
+          {selectedAddOns.length > 0 ? (
             <IonList style={{ marginTop: 12 }}>
               <IonListHeader>
                 <IonLabel>Selected Items</IonLabel>
@@ -373,9 +372,7 @@ export default function AddOnsModal({
 
                         <IonButton
                           color="danger"
-                          onClick={() =>
-                            setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))
-                          }
+                          onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}
                         >
                           Remove
                         </IonButton>
@@ -385,7 +382,7 @@ export default function AddOnsModal({
                 </React.Fragment>
               ))}
             </IonList>
-          )}
+          ) : null}
 
           <div className="summary-section" style={{ marginTop: 12 }}>
             <p className="summary-text">

@@ -21,7 +21,7 @@ ion-item {
   overflow: hidden;
 }
 
-/* ✅ prevent horizontal overflow anywhere */
+/* ✅ prevent horizontal overflow */
 html,
 body,
 ion-app,
@@ -31,139 +31,161 @@ ion-content,
   overflow-x: hidden;
 }
 
-.login-content ion-content {
-  --overflow: hidden;
-}
-
-/* Hide scrollbar specifically for login page */
+/* Hide scrollbar for login */
 .login-content ::-webkit-scrollbar {
   display: none;
 }
 .login-content {
-  scrollbar-width: none; /* Firefox */
+  scrollbar-width: none;
 }
 
 /* =========================
-   LEAVES (responsive)
+   LEAVES (correct angle + floating without flipping)
 ========================= */
 .leaf {
   position: absolute;
-  width: clamp(90px, 22vw, 250px); /* ✅ auto scale */
-  opacity: 0.9;
+  width: clamp(90px, 22vw, 260px);
+  opacity: 0.92;
   pointer-events: none;
   z-index: 0;
+  filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.12));
 }
 
-/* TOP LEFT */
+/* ✅ animation is on inner img only */
+.leaf-img {
+  width: 100%;
+  height: auto;
+  display: block;
+  will-change: transform;
+  animation: leafFloat 5.5s ease-in-out infinite;
+}
+
+/* stagger delays */
+.leaf-top-left  .leaf-img { animation-delay: 0s; }
+.leaf-top-right .leaf-img { animation-delay: .7s; }
+.leaf-bottom-left .leaf-img { animation-delay: 1.3s; }
+.leaf-bottom-right .leaf-img { animation-delay: 2s; }
+
+/* ✅ CORNER POSITIONS + ORIGINAL ANGLES (sakto style mo dati) */
 .leaf-top-left {
-  top: -10px;
-  left: -10px;
+  top: -12px;
+  left: -12px;
   transform: scaleY(-1);
 }
 
-/* TOP RIGHT */
 .leaf-top-right {
-  top: -10px;
-  right: -10px;
+  top: -12px;
+  right: -12px;
   transform: rotate(180deg);
 }
 
-/* BOTTOM LEFT */
 .leaf-bottom-left {
-  bottom: -10px;
-  left: -10px;
+  bottom: -12px;
+  left: -12px;
   transform: scaleY(1);
 }
 
-/* BOTTOM RIGHT */
 .leaf-bottom-right {
-  bottom: -10px;
-  right: -10px;
+  bottom: -12px;
+  right: -12px;
   transform: rotate(-90deg);
 }
 
+/* ✅ FLOATING: translate only (NO ROTATE) para di masira angle */
+@keyframes leafFloat {
+  0%   { transform: translate3d(0, 0, 0); }
+  50%  { transform: translate3d(6px, 10px, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+
+
 /* =========================
-   CENTER
+   CENTER (responsive)
 ========================= */
 .login-wrapper {
   display: flex;
   justify-content: center;
   align-items: center;
 
-  min-height: 100vh;          /* ✅ better than height:100% */
-  padding: clamp(12px, 3vw, 20px); /* ✅ breathing space */
+  min-height: 100vh;
+  padding: clamp(12px, 3vw, 20px);
 
   position: relative;
   z-index: 2;
 }
 
 /* =========================
-   CARD (responsive)
+   CARD (smooth fade + responsive)
 ========================= */
 .login-box {
-  width: min(92vw, 360px); /* ✅ fit on small screens */
+  width: min(92vw, 380px);
   padding: clamp(18px, 4vw, 28px) clamp(16px, 4vw, 24px);
   border-radius: 16px;
 
-  background: rgba(230, 222, 222, 0.586);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(230, 222, 222, 0.60);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 
-  border: 1px solid rgba(0, 0, 0, 0.3);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.14);
 
-  animation: fadeUp 0.6s ease;
+  animation: fadeUp 0.65s ease;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* =========================
-   TITLE + LOGO (responsive)
+   HEADER
 ========================= */
 .login-header {
   display: flex;
   align-items: center;
-  justify-content: center; /* ✅ center for any device */
+  justify-content: center;
   gap: 10px;
-  margin-bottom: clamp(18px, 4vw, 35px);
 
-  padding-left: 0; /* ✅ remove fixed padding that breaks mobile */
+  margin-bottom: clamp(18px, 4vw, 30px);
   flex-wrap: wrap;
   text-align: center;
 }
 
 .login-header h2 {
   margin: 0;
-  font-weight: 700;
-  font-size: clamp(20px, 5vw, 30px); /* ✅ auto scale */
+  font-weight: 800;
+  font-size: clamp(20px, 5vw, 30px);
   color: #000;
 }
 
 .login-logo {
-  width: clamp(32px, 8vw, 40px);
-  height: clamp(32px, 8vw, 40px);
+  width: clamp(32px, 8vw, 44px);
+  height: clamp(32px, 8vw, 44px);
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
 /* =========================
-   INPUT (touch-friendly)
+   INPUTS
 ========================= */
 .input-item {
   --background: transparent;
-  margin-bottom: 18px;
-  border-radius: 10px;
+  margin-bottom: 16px;
+  border-radius: 12px;
 
-  border: 1.6px solid rgba(0, 0, 0, 0.4);
+  border: 1.6px solid rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: center;
 
   padding-left: 10px;
-  min-height: 48px; /* ✅ easier tap */
+  min-height: 48px;
 
-  transition: border-color 0.25s ease;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
 .input-item.item-has-focus {
   border-color: #000;
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.08);
 }
 
 .input-icon {
@@ -179,7 +201,7 @@ ion-content,
   --padding-start: 10px;
   --padding-end: 12px;
   font-size: clamp(14px, 3.5vw, 15px);
-  font-weight: 500;
+  font-weight: 600;
   color: #000;
 }
 
@@ -188,34 +210,22 @@ ion-content,
 }
 
 /* =========================
-   BUTTON (full width)
+   BUTTON
 ========================= */
 .login-btn {
-  margin-top: 18px;
+  margin-top: 16px;
   height: 46px;
   width: 100%;
+
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.6px;
 
-  --border-radius: 10px;
+  --border-radius: 12px;
   --background: #000;
-  --box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  --box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
 }
 
-/* =========================
-   ANIMATION
-========================= */
-@keyframes fadeUp {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
 
 /*== staff ==*/
@@ -919,43 +929,6 @@ ion-content,
   scrollbar-width: none;
 }
 
-/* =========================
-   LEAVES
-========================= */
-.bookadd-content .leaf {
-  position: absolute;
-  width: 250px;
-  opacity: 0.9;
-  pointer-events: none;
-  z-index: 0;
-}
-
-@media (max-width: 768px) {
-  .bookadd-content .leaf {
-    width: 180px;
-  }
-}
-
-.bookadd-content .leaf-top-left {
-  top: -10px;
-  left: -10px;
-  transform: scaleY(-1);
-}
-.bookadd-content .leaf-top-right {
-  top: -10px;
-  right: -10px;
-  transform: rotate(180deg);
-}
-.bookadd-content .leaf-bottom-left {
-  bottom: -10px;
-  left: -10px;
-  transform: scaleY(1);
-}
-.bookadd-content .leaf-bottom-right {
-  bottom: -10px;
-  right: -10px;
-  transform: rotate(-90deg);
-}
 
 /* =========================
    CENTER WRAPPER
@@ -1879,6 +1852,252 @@ ion-modal.booking-modal {
   background: transparent !important;
 }
 
+/* =====================================================
+   ADD-ONS MODAL — FULL THEME CSS
+   NO WHITE • RESPONSIVE • SAME AS BOOKING
+===================================================== */
+
+
+/* =====================================================
+   MODAL BASE
+===================================================== */
+
+ion-modal.booking-modal {
+  --background: transparent !important;
+}
+
+/* dark overlay */
+.booking-modal::part(backdrop) {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+/* modal body */
+.booking-modal::part(content) {
+  background: linear-gradient(
+    180deg,
+    rgba(246, 232, 206, 0.98),
+    rgba(228, 193, 130, 0.98)
+  ) !important;
+
+  border-radius: 22px;
+  padding: 0 !important;
+
+  width: min(640px, 94vw);
+  max-height: 90vh;
+
+  margin: auto;
+}
+
+
+/* =====================================================
+   HEADER
+===================================================== */
+
+.booking-modal ion-header,
+.booking-modal ion-toolbar {
+  --background: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.booking-modal ion-header::after {
+  display: none !important;
+}
+
+.booking-modal ion-title {
+  text-align: center;
+  font-weight: 900;
+  color: #2f9e63;
+}
+
+.booking-modal ion-toolbar ion-icon {
+  color: #2f9e63;
+}
+
+
+/* =====================================================
+   CONTENT SCROLL
+===================================================== */
+
+.booking-modal ion-content {
+  --background: transparent !important;
+  --padding-start: 14px;
+  --padding-end: 14px;
+  --padding-top: 14px;
+  --padding-bottom: 18px;
+
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+}
+
+
+/* =====================================================
+   MAIN CARD
+===================================================== */
+
+.booking-modal .bookadd-card {
+  width: 100%;
+  max-width: 640px;
+  margin: 12px auto;
+
+  background: rgba(248, 238, 220, 0.96);
+  border-radius: 18px;
+
+  padding: 16px;
+
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18);
+}
+
+
+/* =====================================================
+   ION ITEM — REMOVE WHITE COMPLETELY
+===================================================== */
+
+.booking-modal ion-item {
+  --background: rgba(248, 238, 220, 0.96) !important;
+  background: rgba(248, 238, 220, 0.96) !important;
+
+  border-radius: 14px;
+  margin-bottom: 10px;
+}
+
+/* native inner wrapper */
+.booking-modal ion-item::part(native) {
+  background: rgba(248, 238, 220, 0.96) !important;
+  border-radius: 14px;
+
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+/* remove Ionic divider lines */
+.booking-modal ion-item::after,
+.booking-modal ion-item::before {
+  display: none !important;
+}
+
+
+/* =====================================================
+   INPUTS & SELECTS
+===================================================== */
+
+.booking-modal ion-select,
+.booking-modal ion-input {
+  --background: rgba(248, 238, 220, 0.96) !important;
+  background: rgba(248, 238, 220, 0.96) !important;
+
+  border-radius: 12px;
+}
+
+/* text */
+.booking-modal ion-label {
+  color: rgba(31, 41, 55, 0.95) !important;
+  font-weight: 600;
+}
+
+.booking-modal ion-select::part(text),
+.booking-modal ion-input input {
+  color: rgba(31, 41, 55, 0.95) !important;
+  font-weight: 600;
+}
+
+/* placeholder */
+.booking-modal ion-select::part(placeholder),
+.booking-modal ion-input::part(placeholder) {
+  color: rgba(31, 41, 55, 0.55) !important;
+}
+
+/* focused */
+.booking-modal ion-item.ion-focused {
+  box-shadow: 0 0 0 2px rgba(47, 158, 99, 0.35);
+}
+
+
+/* =====================================================
+   SELECTED ITEMS LIST
+===================================================== */
+
+.booking-modal ion-list {
+  --background: rgba(248, 238, 220, 0.96) !important;
+  background: rgba(248, 238, 220, 0.96) !important;
+
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.booking-modal ion-list-header {
+  --background: rgba(248, 238, 220, 0.96) !important;
+  background: rgba(248, 238, 220, 0.96) !important;
+
+  font-weight: 800;
+}
+
+.booking-modal ion-list ion-item {
+  --background: rgba(248, 238, 220, 0.96) !important;
+  background: rgba(248, 238, 220, 0.96) !important;
+}
+
+
+/* =====================================================
+   BUTTONS
+===================================================== */
+
+.booking-modal ion-button {
+  --border-radius: 14px;
+  font-weight: 900;
+}
+
+.booking-modal ion-button[color="danger"] {
+  --background: #c92a2a;
+  --background-hover: #a51111;
+}
+
+
+/* =====================================================
+   RESPONSIVE FIXES
+===================================================== */
+
+/* phones */
+@media (max-width: 420px) {
+  .booking-modal::part(content) {
+    width: 96vw;
+    max-height: 92vh;
+    border-radius: 18px;
+  }
+
+  .booking-modal .bookadd-card {
+    padding: 14px;
+  }
+
+  .booking-modal ion-title {
+    font-size: 16px;
+  }
+}
+
+/* tablets */
+@media (min-width: 600px) and (max-width: 1024px) {
+  .booking-modal::part(content) {
+    width: 92vw;
+    max-height: 88vh;
+  }
+}
+
+/* short laptops */
+@media (max-height: 720px) {
+  .booking-modal::part(content) {
+    max-height: 94vh;
+  }
+}
+
+/* =========================
+   STAFF DASHBOARD BACKGROUND
+========================= */
+.staff-content {
+  background: #b2c197 !important;
+}
+
+
+
 
 .seatmap-wrap {
   display: flex;
@@ -1890,7 +2109,7 @@ ion-modal.booking-modal {
   width: 100%;
   max-width: 540px;
   border-radius: 18px;
-  background: #fff;
+  background: rgb(245, 239, 230) !important;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
   padding: 14px;
 }
@@ -2673,12 +2892,25 @@ ion-modal.booking-modal {
    SALES COLLECTED / BILIN / NET
 ========================= */
 
+/* =========================
+   SALES COLLECTED / BILIN / NET
+   ✅ auto-fit para walang “butas” kahit 2 boxes lang
+========================= */
+
 .ssr-collected-wrap {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 10px;
   margin-top: 12px;
 }
+
+/* optional: make it look tighter on small widths */
+@media (max-width: 480px) {
+  .ssr-collected-wrap {
+    grid-template-columns: 1fr;
+  }
+}
+
 
 .ssr-collected-box {
   border: 1px solid rgba(0, 0, 0, 0.1);

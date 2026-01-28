@@ -34,16 +34,18 @@ const Book_Add: React.FC = () => {
   const history = useHistory();
 
   // MAIN MODALS
-  const [isBookingOpen, setIsBookingOpen] = useState(false);
-  const [isAddOnsOpen, setIsAddOnsOpen] = useState(false);
-  const [isPromoOpen, setIsPromoOpen] = useState(false);
+  const [isBookingOpen, setIsBookingOpen] = useState<boolean>(false);
+  const [isAddOnsOpen, setIsAddOnsOpen] = useState<boolean>(false);
+  const [isPromoOpen, setIsPromoOpen] = useState<boolean>(false);
 
   // BOOKING SAVED ALERT
-  const [bookingSavedOpen, setBookingSavedOpen] = useState(false);
-  const [bookingSavedMessage, setBookingSavedMessage] = useState("Booking saved successfully.");
+  const [bookingSavedOpen, setBookingSavedOpen] = useState<boolean>(false);
+  const [bookingSavedMessage, setBookingSavedMessage] = useState<string>(
+    "Booking saved successfully."
+  );
 
   // ADD-ONS SENT ALERT
-  const [addOnsSentOpen, setAddOnsSentOpen] = useState(false);
+  const [addOnsSentOpen, setAddOnsSentOpen] = useState<boolean>(false);
 
   const handlePromoSaved = (): void => {
     // optional refresh-only
@@ -54,10 +56,22 @@ const Book_Add: React.FC = () => {
       <IonHeader />
 
       <IonContent fullscreen className="bookadd-content" scrollY={false}>
-        <img src={leaves} className="leaf leaf-top-left" alt="leaf" />
-        <img src={leaves} className="leaf leaf-top-right" alt="leaf" />
-        <img src={leaves} className="leaf leaf-bottom-left" alt="leaf" />
-        <img src={leaves} className="leaf leaf-bottom-right" alt="leaf" />
+        {/* ✅ SAME LEAF STRUCTURE AS LOGIN (wrapper angle + inner img float) */}
+        <div className="leaf leaf-top-left">
+          <img src={leaves} className="leaf-img" alt="leaf" />
+        </div>
+
+        <div className="leaf leaf-top-right">
+          <img src={leaves} className="leaf-img" alt="leaf" />
+        </div>
+
+        <div className="leaf leaf-bottom-left">
+          <img src={leaves} className="leaf-img" alt="leaf" />
+        </div>
+
+        <div className="leaf leaf-bottom-right">
+          <img src={leaves} className="leaf-img" alt="leaf" />
+        </div>
 
         <div className="bookadd-wrapper">
           <div className="bookadd-hero-card">
@@ -179,7 +193,7 @@ const Book_Add: React.FC = () => {
               text: "OK",
               handler: () => {
                 setAddOnsSentOpen(false);
-                setIsAddOnsOpen(false); // ✅ close AddOns form AFTER OK
+                setIsAddOnsOpen(false);
               },
             },
           ]}

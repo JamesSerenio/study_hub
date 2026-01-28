@@ -1,3 +1,4 @@
+// src/pages/Staff_Dashboard.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonPage, IonContent } from "@ionic/react";
 import seatsImage from "../assets/seats.png";
@@ -163,7 +164,6 @@ const Staff_Dashboard: React.FC = () => {
   const [selectedPinId, setSelectedPinId] = useState<string>("");
   const stageRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ seats only (exclude room)
   const seatIdsOnly = useMemo<string[]>(
     () => pins.filter((p) => p.kind === "seat").map((p) => p.id),
     [pins]
@@ -173,7 +173,6 @@ const Staff_Dashboard: React.FC = () => {
     const startIso = new Date().toISOString();
     const endIso = new Date("2999-12-31T23:59:59.000Z").toISOString();
 
-    // 1) Seats via seat_blocked_times
     const seatsReq = supabase
       .from("seat_blocked_times")
       .select("seat_number, start_at, end_at, source")
@@ -181,7 +180,6 @@ const Staff_Dashboard: React.FC = () => {
       .lt("start_at", endIso)
       .gt("end_at", startIso);
 
-    // 2) Conference room via promo_bookings (because seat_number is NULL for conference_room)
     const confReq = supabase
       .from("promo_bookings")
       .select("id, start_at, end_at, status, area")
@@ -189,38 +187,27 @@ const Staff_Dashboard: React.FC = () => {
       .lt("start_at", endIso)
       .gt("end_at", startIso);
 
-    const [{ data: seatData, error: seatErr }, { data: confData, error: confErr }] = await Promise.all([
-      seatsReq,
-      confReq,
-    ]);
+    const [{ data: seatData, error: seatErr }, { data: confData, error: confErr }] =
+      await Promise.all([seatsReq, confReq]);
 
     const next: Record<string, SeatStatus> = {};
-
-    // default everything to available
     for (const p of pins) next[p.id] = "temp_available";
 
-    // seat statuses
     if (seatErr) {
       console.error("Seat status error:", seatErr.message);
     } else {
       const rows = (seatData ?? []) as SeatBlockedRow[];
       const blocked = new Set(rows.map((r) => normalizeSeatId(r.seat_number)));
       for (const id of seatIdsOnly) {
-        if (blocked.has(id)) next[id] = "occupied"; // orange
+        if (blocked.has(id)) next[id] = "occupied";
       }
     }
 
-    // conference status
     if (confErr) {
       console.error("Conference status error:", confErr.message);
     } else {
       const rows = (confData ?? []) as PromoConferenceRow[];
-
-      // If ANY active booking overlaps now -> mark as occupied (orange)
-      // (You can change this to reserved/purple based on status if you want)
-      if (rows.length > 0) {
-        next[CONFERENCE_ID] = "occupied";
-      }
+      if (rows.length > 0) next[CONFERENCE_ID] = "occupied";
     }
 
     setStatusBySeat(next);
@@ -255,7 +242,7 @@ const Staff_Dashboard: React.FC = () => {
 
     const next: StoredMap = { ...stored, [selectedPinId]: { x, y } };
     setStored(next);
-    saveStored(next);
+    saveStored(next); // ✅ removed duplicate save
   };
 
   const onStageClick = (e: React.MouseEvent<HTMLDivElement>): void => {
@@ -272,7 +259,8 @@ const Staff_Dashboard: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent fullscreen className="staff-content">
+      {/* ✅ NO LEAVES + BACKGROUND COLOR #FFFF99 */}
+      <IonContent fullscreen className="staff-content" scrollY={true}>
         <div className="seatmap-wrap">
           <div className="seatmap-card">
             <div className="seatmap-topbar">

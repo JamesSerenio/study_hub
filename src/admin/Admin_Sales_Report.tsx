@@ -659,7 +659,11 @@ const AdminSalesReport: React.FC = () => {
         </thead>
         <tbody>
           <tr><td>Starting Balance</td><td class="t-right">${peso(toNumber(report.starting_cash))}</td><td class="t-right">${peso(toNumber(report.starting_gcash))}</td></tr>
-          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cashTotalLocal + coinTotalLocal)}</td><td class="t-right">—</td></tr>
+          <tr>
+              <td>COH / Total of the Day</td>
+              <td class="t-right">${peso(cashTotalLocal + coinTotalLocal)}</td>
+              <td class="t-right">${peso(gcashSales)}</td>
+            </tr>
           <tr><td>Expenses</td><td class="t-right">${peso(expenses)}</td><td class="t-right">—</td></tr>
           <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCash)}</td><td class="t-right">${peso(paidResGcash)}</td></tr>
           <tr><td>New Advance Payments</td><td class="t-right">${peso(advCash)}</td><td class="t-right">${peso(advGcash)}</td></tr>
@@ -966,10 +970,10 @@ const AdminSalesReport: React.FC = () => {
                   </div>
 
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">COH / Total of the Day</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(cashTotal + coinTotal)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">—</div>
-                  </div>
+                  <div className="ssr-left-label">COH / Total of the Day</div>
+                  <div className="ssr-left-value ssr-left-value--cash">{peso(cashTotal + coinTotal)}</div>
+                  <div className="ssr-left-value ssr-left-value--gcash">{peso(gcashSales)}</div>
+                </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Expenses</div>
