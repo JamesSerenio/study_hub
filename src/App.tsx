@@ -40,15 +40,39 @@ type CustomerSessionRow = {
   time_ended: string;
 };
 
+const getRole = (): string => (localStorage.getItem("role") || "").toLowerCase();
+
 const App: React.FC = () => {
   const [showAlert, setShowAlert] = useState<boolean>(false);
   const [alertMessage, setAlertMessage] = useState<string>("");
 
+  // ✅ staff guard
+  const [role, setRole] = useState<string>(getRole());
+
   /* avoid duplicate alerts */
   const triggeredRef = useRef<Set<string>>(new Set());
 
-  /* ⏰ GLOBAL SESSION CHECKER */
+  // ✅ keep role updated if login changes localStorage role
   useEffect(() => {
+    const id = window.setInterval(() => {
+      const r = getRole();
+      setRole(r);
+    }, 1000);
+
+    return () => window.clearInterval(id);
+  }, []);
+
+  const isStaff = role === "staff";
+
+  /* ⏰ SESSION CHECKER (STAFF ONLY) */
+  useEffect(() => {
+    // ✅ if not staff: make sure modal is closed and clear triggers
+    if (!isStaff) {
+      setShowAlert(false);
+      triggeredRef.current.clear();
+      return;
+    }
+
     const intervalId = window.setInterval(async () => {
       const now = new Date();
 
@@ -63,9 +87,7 @@ const App: React.FC = () => {
 
       sessions.forEach((session) => {
         const end = new Date(session.time_ended);
-        const diffMinutes = Math.floor(
-          (end.getTime() - now.getTime()) / 60000
-        );
+        const diffMinutes = Math.floor((end.getTime() - now.getTime()) / 60000);
 
         if (!ALERT_MINUTES.includes(diffMinutes)) return;
 
@@ -91,15 +113,16 @@ const App: React.FC = () => {
     }, 30000);
 
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [isStaff]);
 
   return (
     <IonApp>
-      {/* 🔔 GLOBAL ALERT MODAL */}
+      {/* 🔔 ALERT MODAL (STAFF ONLY) */}
       <TimeAlertModal
         isOpen={showAlert}
         message={alertMessage}
         onClose={() => setShowAlert(false)}
+        role={role} // ✅ modal itself also guards staff-only
       />
 
       <IonReactRouter>
@@ -110,7 +133,6 @@ const App: React.FC = () => {
           <Route exact path="/admin-menu" component={Admin_menu} />
           <Route exact path="/home" component={Home} />
 
-          {/* ✅ DEFAULT PAGE */}
           <Route exact path="/">
             <Redirect to="/book-add" />
           </Route>

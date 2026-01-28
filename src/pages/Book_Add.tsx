@@ -50,7 +50,7 @@ const Book_Add: React.FC = () => {
   };
 
   return (
-    <IonPage className="bookadd-page">
+    <IonPage className="bookadd-page bookadd-animate">
       <IonHeader />
 
       <IonContent fullscreen className="bookadd-content" scrollY={false}>

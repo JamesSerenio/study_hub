@@ -507,7 +507,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   };
 
   return (
-    <IonModal isOpen={isOpen} onDidDismiss={onClose}>
+    <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
       <IonHeader>
         <IonToolbar>
           <IonTitle>Booking</IonTitle>
