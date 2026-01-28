@@ -702,9 +702,8 @@ const AdminSalesReport: React.FC = () => {
         <div class="chip">
           <div class="row"><span>Cash Sales</span><b>${peso(cashSales)}</b></div>
           <div class="row"><span>GCash Sales</span><b>${peso(gcashSales)}</b></div>
-          <div class="row"><span>Sales Collected</span><b>${peso(salesCollected)}</b></div>
           <div class="row"><span>Bilin</span><b>${peso(Math.max(0, bilin))}</b></div>
-          <div class="row"><span>Net</span><b>${peso(netCollected)}</b></div>
+          <div class="row"><span>Sales Collected</span><b>${peso(netCollected)}</b></div>
         </div>
 
         <div class="chip">
@@ -1125,11 +1124,6 @@ const AdminSalesReport: React.FC = () => {
                   </div>
 
                   <div className="ssr-collected-wrap">
-                    <div className="ssr-collected-box">
-                      <div className="ssr-collected-label">Sales Collected</div>
-                      <div className="ssr-collected-value">{peso(salesCollected)}</div>
-                    </div>
-
                     <div className="ssr-collected-box ssr-collected-box--bilin">
                       <div className="ssr-collected-label">Bilin</div>
                       <IonInput
@@ -1142,11 +1136,13 @@ const AdminSalesReport: React.FC = () => {
                       />
                     </div>
 
+                    {/* ✅ Renamed: Net -> Sales Collected (and old Sales Collected removed) */}
                     <div className="ssr-collected-box ssr-collected-box--net">
-                      <div className="ssr-collected-label">Net</div>
+                      <div className="ssr-collected-label">Sales Collected</div>
                       <div className="ssr-collected-value">{peso(netCollected)}</div>
                     </div>
                   </div>
+
                 </IonCardContent>
               </IonCard>
 
