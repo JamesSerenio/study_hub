@@ -1,5 +1,5 @@
 // Admin_Add_Ons.tsx
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   IonPage,
   IonHeader,
@@ -11,12 +11,17 @@ import {
   IonInput,
   IonButton,
   IonToast,
+  IonPopover,
+  IonList,
+  IonText,
 } from "@ionic/react";
+import type { IonInputCustomEvent, InputChangeEventDetail } from "@ionic/core";
 import { supabase } from "../utils/supabaseClient";
 
-type Profile = {
-  role: string;
-};
+type Profile = { role: string };
+
+const normalizeCategory = (v: string): string =>
+  v.trim().replace(/\s+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 const Admin_Add_Ons: React.FC = () => {
   const [category, setCategory] = useState<string>("");
@@ -29,6 +34,65 @@ const Admin_Add_Ons: React.FC = () => {
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
 
+  // ✅ Category suggestions (ONLY show when category is EMPTY)
+  const [allCategories, setAllCategories] = useState<string[]>([]);
+  const [catOpen, setCatOpen] = useState<boolean>(false);
+  const CAT_TRIGGER_ID = "category-trigger";
+  const pickingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    const loadCategories = async (): Promise<void> => {
+      const { data, error } = await supabase
+        .from("add_ons")
+        .select("category")
+        .not("category", "is", null);
+
+      if (error) {
+        console.error("Load categories error:", error);
+        return;
+      }
+
+      const unique: string[] = Array.from(
+        new Set(
+          (data ?? [])
+            .map((r: { category?: string | null }) => (r.category ?? "").trim())
+            .filter((c) => c.length > 0)
+        )
+      ).sort((a, b) => a.localeCompare(b));
+
+      setAllCategories(unique);
+    };
+
+    void loadCategories();
+  }, []);
+
+  // ✅ HARD GUARANTEE: if category becomes NON-empty, close the popover
+  useEffect(() => {
+    if (category.trim() !== "" && catOpen) {
+      setCatOpen(false);
+      pickingRef.current = false;
+    }
+  }, [category, catOpen]);
+
+  const openIfEmpty = (): void => {
+    // ✅ only open when empty
+    if (category.trim() === "") {
+      setCatOpen(true);
+    } else {
+      setCatOpen(false);
+    }
+  };
+
+  const closePopover = (): void => {
+    pickingRef.current = false;
+    setCatOpen(false);
+  };
+
+  const handlePickCategory = (picked: string): void => {
+    setCategory(picked); // useEffect will also close, but we close immediately too
+    closePopover();
+  };
+
   const handleAddOnSubmit = async (): Promise<void> => {
     if (!category || !name || restocked === undefined || price === undefined) {
       setToastMessage("Please fill in all required fields!");
@@ -37,14 +101,12 @@ const Admin_Add_Ons: React.FC = () => {
     }
 
     try {
-      // 1) Must be logged in
       const { data: userRes, error: userErr } = await supabase.auth.getUser();
       if (userErr) throw userErr;
       if (!userRes?.user) throw new Error("Not logged in");
 
       const userId: string = userRes.user.id;
 
-      // 2) Must be admin (profiles.role = 'admin')
       const { data: profile, error: profErr } = await supabase
         .from("profiles")
         .select("role")
@@ -52,19 +114,14 @@ const Admin_Add_Ons: React.FC = () => {
         .single<Profile>();
 
       if (profErr) throw profErr;
-      if (!profile || profile.role !== "admin") {
-        throw new Error("Admin only");
-      }
+      if (!profile || profile.role !== "admin") throw new Error("Admin only");
 
-      // 3) Upload image (admin-only storage policy)
       let imageUrl: string | null = null;
 
       if (imageFile) {
         const extRaw: string | undefined = imageFile.name.split(".").pop();
         const fileExt: string = (extRaw ? extRaw.toLowerCase() : "jpg").trim();
         const fileName: string = `${Date.now()}.${fileExt}`;
-
-        // Recommended path: per-user folder
         const filePath: string = `${userId}/${fileName}`;
 
         const { error: uploadError } = await supabase.storage
@@ -83,12 +140,13 @@ const Admin_Add_Ons: React.FC = () => {
         imageUrl = urlData.publicUrl;
       }
 
-      // 4) Insert row to add_ons (include admin_id to satisfy RLS)
+      const categoryFinal = normalizeCategory(category);
+
       const { error: insertErr } = await supabase.from("add_ons").insert([
         {
           admin_id: userId,
-          category,
-          name,
+          category: categoryFinal,
+          name: name.trim(),
           restocked,
           price,
           expenses,
@@ -98,19 +156,29 @@ const Admin_Add_Ons: React.FC = () => {
 
       if (insertErr) throw insertErr;
 
-      // Reset form
+      // ✅ update local category list if new
+      setAllCategories((prev) => {
+        if (prev.some((c) => c.toLowerCase() === categoryFinal.toLowerCase()))
+          return prev;
+        return [...prev, categoryFinal].sort((a, b) => a.localeCompare(b));
+      });
+
+      // reset
       setCategory("");
       setName("");
       setRestocked(undefined);
       setPrice(undefined);
       setExpenses(0);
       setImageFile(null);
+      closePopover();
 
       setToastMessage("Add-on added successfully!");
       setShowToast(true);
     } catch (err: unknown) {
       console.error(err);
-      setToastMessage(err instanceof Error ? err.message : "Unexpected error occurred");
+      setToastMessage(
+        err instanceof Error ? err.message : "Unexpected error occurred"
+      );
       setShowToast(true);
     }
   };
@@ -124,13 +192,57 @@ const Admin_Add_Ons: React.FC = () => {
       </IonHeader>
 
       <IonContent className="ion-padding">
-        <IonItem>
+        {/* ✅ CATEGORY: suggestions ONLY when EMPTY */}
+        <IonItem id={CAT_TRIGGER_ID}>
           <IonLabel position="stacked">Category</IonLabel>
           <IonInput
             value={category}
-            onIonChange={(e) => setCategory((e.detail.value ?? "").toString())}
+            placeholder="Tap to choose category"
+            onIonFocus={openIfEmpty}
+            onClick={openIfEmpty}
+            onIonInput={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
+              const v = (e.detail.value ?? "").toString();
+              setCategory(v);
+
+              // ✅ if user typed anything -> close and never show unless cleared
+              if (v.trim() !== "") closePopover();
+            }}
           />
         </IonItem>
+
+        <IonPopover
+          trigger={CAT_TRIGGER_ID}
+          // ✅ SUPER IMPORTANT: open only if BOTH (catOpen) AND (category is EMPTY)
+          isOpen={catOpen && category.trim() === ""}
+          keepContentsMounted
+          side="bottom"
+          alignment="start"
+          onDidDismiss={() => {
+            if (pickingRef.current) return;
+            closePopover();
+          }}
+        >
+          <IonContent className="ion-padding">
+            <IonText style={{ fontSize: 13, opacity: 0.8 }}>
+              Suggestions (tap to select)
+            </IonText>
+
+            <IonList>
+              {allCategories.slice(0, 8).map((c) => (
+                <IonItem
+                  key={c}
+                  button
+                  onPointerDown={() => {
+                    pickingRef.current = true;
+                  }}
+                  onClick={() => handlePickCategory(c)}
+                >
+                  <IonLabel>{c}</IonLabel>
+                </IonItem>
+              ))}
+            </IonList>
+          </IonContent>
+        </IonPopover>
 
         <IonItem>
           <IonLabel position="stacked">Item Name</IonLabel>
@@ -188,7 +300,11 @@ const Admin_Add_Ons: React.FC = () => {
           />
         </IonItem>
 
-        <IonButton expand="block" className="ion-margin-top" onClick={handleAddOnSubmit}>
+        <IonButton
+          expand="block"
+          className="ion-margin-top"
+          onClick={handleAddOnSubmit}
+        >
           Add Add-On
         </IonButton>
 

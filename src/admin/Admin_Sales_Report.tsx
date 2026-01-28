@@ -92,6 +92,12 @@ interface SalesTotalsRow {
   net_collected: number | string;
 }
 
+type ConsignmentState = {
+  gross: number; // total sales for CONSIGNMENT category
+  fee15: number; // 15% fee
+  net: number; // gross - fee15
+};
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -155,23 +161,6 @@ const valueToNonNegMoney = (v: unknown): number => {
 };
 
 /* =========================
-   TIME DISPLAY (hours -> hr/min)
-========================= */
-
-const fmtHoursSmart = (hoursRaw: number): string => {
-  const hours = Number.isFinite(hoursRaw) ? Math.max(0, hoursRaw) : 0;
-
-  const totalMins = Math.round(hours * 60);
-  const h = Math.floor(totalMins / 60);
-  const m = totalMins % 60;
-
-  if (h === 0 && m === 0) return "0 min";
-  if (h === 0) return `${m} min`;
-  if (m === 0) return `${h} hr${h === 1 ? "" : "s"}`;
-  return `${h} hr${h === 1 ? "" : "s"} ${m} min`;
-};
-
-/* =========================
    DATE HELPERS
 ========================= */
 
@@ -202,6 +191,12 @@ const AdminSalesReport: React.FC = () => {
   const [report, setReport] = useState<DailyReportRow | null>(null);
   const [lines, setLines] = useState<CashLine[]>([]);
   const [totals, setTotals] = useState<SalesTotalsRow | null>(null);
+
+  // ✅ CONSIGNMENT SUMMARY
+  const [consignment, setConsignment] = useState<ConsignmentState>({ gross: 0, fee15: 0, net: 0 });
+
+  // ✅ ADD-ONS (PAID ONLY) for "Other Totals" + PDF
+  const [addonsPaid, setAddonsPaid] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>({
@@ -236,6 +231,8 @@ const AdminSalesReport: React.FC = () => {
       setReport(null);
       setLines([]);
       setTotals(null);
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      setAddonsPaid(0);
       setLoading(false);
       return;
     }
@@ -253,6 +250,8 @@ const AdminSalesReport: React.FC = () => {
       setReport(null);
       setLines([]);
       setTotals(null);
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      setAddonsPaid(0);
       setLoading(false);
       return;
     }
@@ -308,6 +307,75 @@ const AdminSalesReport: React.FC = () => {
     }
 
     setTotals(res.data);
+  };
+
+  /**
+   * ✅ CONSIGNMENT: PAID ONLY
+   * IMPORTANT: use paid_at date (NOT created_at),
+   * so unpaid rows never count, and paid rows count on the day they were paid.
+   */
+  const loadConsignment = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      return;
+    }
+
+    const startISO = `${dateYMD}T00:00:00.000`;
+    const endISO = `${dateYMD}T23:59:59.999`;
+
+    const res = await supabase
+      .from("customer_session_add_ons")
+      .select("total, paid_at, add_ons!inner(category)")
+      .eq("is_paid", true)
+      .not("paid_at", "is", null)
+      .eq("add_ons.category", "CONSIGNMENT")
+      .gte("paid_at", startISO)
+      .lte("paid_at", endISO);
+
+    if (res.error) {
+      console.error("consignment query error:", res.error.message);
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      return;
+    }
+
+    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
+    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
+    const fee15 = gross * 0.15;
+    const net = gross - fee15;
+
+    setConsignment({ gross, fee15, net });
+  };
+
+  /**
+   * ✅ ADD-ONS: PAID ONLY (for "Other Totals" and PDF)
+   * uses paid_at date so it records on the day paid.
+   */
+  const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setAddonsPaid(0);
+      return;
+    }
+
+    const startISO = `${dateYMD}T00:00:00.000`;
+    const endISO = `${dateYMD}T23:59:59.999`;
+
+    const res = await supabase
+      .from("customer_session_add_ons")
+      .select("total, paid_at")
+      .eq("is_paid", true)
+      .not("paid_at", "is", null)
+      .gte("paid_at", startISO)
+      .lte("paid_at", endISO);
+
+    if (res.error) {
+      console.error("addonsPaid query error:", res.error.message);
+      setAddonsPaid(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
+    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
+    setAddonsPaid(gross);
   };
 
   const upsertQty = async (line: CashLine, qty: number): Promise<void> => {
@@ -413,6 +481,8 @@ const AdminSalesReport: React.FC = () => {
 
     await loadReport(selectedDate);
     await loadTotals(selectedDate);
+    await loadConsignment(selectedDate);
+    await loadAddonsPaid(selectedDate); // ✅ keep paid add-ons fresh
 
     setToast({ open: true, msg: `Saved for ${selectedDate}.`, color: "success" });
     setSubmitting(false);
@@ -466,12 +536,13 @@ const AdminSalesReport: React.FC = () => {
     setToast({ open: true, msg: `Deleted report for ${selectedDate}.`, color: "success" });
 
     await loadReport(selectedDate);
+    await loadConsignment(selectedDate);
+    await loadAddonsPaid(selectedDate);
     setSubmitting(false);
   };
 
   /* =========================
      EXPORT TO PDF (Print)
-     ✅ better layout than CSV
   ========================= */
 
   const exportToPDF = (): void => {
@@ -483,8 +554,8 @@ const AdminSalesReport: React.FC = () => {
     const cashLines = lines.filter((x) => x.money_kind === "cash");
     const coinLines = lines.filter((x) => x.money_kind === "coin");
 
-    const cashTotal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
-    const coinTotal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
+    const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
+    const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
     const coh = totals ? toNumber(totals.coh_total) : 0;
     const salesCollected = totals ? toNumber(totals.sales_collected) : coh;
@@ -494,10 +565,15 @@ const AdminSalesReport: React.FC = () => {
     const expenses = totals ? toNumber(totals.expenses_amount) : 0;
     const cashSales = totals ? toNumber(totals.cash_sales) : 0;
     const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
-    const addons = totals ? toNumber(totals.addons_total) : 0;
+
+    // ✅ PAID ONLY add-ons for PDF too
+    const addons = addonsPaid;
+
     const discount = totals ? toNumber(totals.discount_total) : 0;
     const systemSale = totals ? toNumber(totals.system_sale) : 0;
-    const totalTimeHours = totals ? toNumber(totals.total_time) : 0;
+
+    const totalTimeAmount =
+      (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
 
     const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
     const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
@@ -508,20 +584,25 @@ const AdminSalesReport: React.FC = () => {
     const walkCash = totals ? toNumber(totals.walkin_cash) : 0;
     const walkGcash = totals ? toNumber(totals.walkin_gcash) : 0;
 
+    const consGross = consignment.gross;
+    const consFee = consignment.fee15;
+    const consNet = consignment.net;
+
     const maxLen = Math.max(cashLines.length, coinLines.length);
-    const rowsHtml = Array.from({ length: maxLen }).map((_, i) => {
-      const c = cashLines[i];
-      const k = coinLines[i];
+    const rowsHtml = Array.from({ length: maxLen })
+      .map((_, i) => {
+        const c = cashLines[i];
+        const k = coinLines[i];
 
-      const cashDen = c ? c.denomination : "";
-      const cashQty = c ? c.qty : "";
-      const cashAmt = c ? peso(c.denomination * c.qty) : "";
+        const cashDen = c ? c.denomination : "";
+        const cashQty = c ? c.qty : "";
+        const cashAmt = c ? peso(c.denomination * c.qty) : "";
 
-      const coinDen = k ? k.denomination : "";
-      const coinQty = k ? k.qty : "";
-      const coinAmt = k ? peso(k.denomination * k.qty) : "";
+        const coinDen = k ? k.denomination : "";
+        const coinQty = k ? k.qty : "";
+        const coinAmt = k ? peso(k.denomination * k.qty) : "";
 
-      return `
+        return `
         <tr>
           <td class="t-center">${cashDen}</td>
           <td class="t-center">${cashQty}</td>
@@ -532,7 +613,8 @@ const AdminSalesReport: React.FC = () => {
           <td class="t-right">${coinAmt}</td>
         </tr>
       `;
-    }).join("");
+      })
+      .join("");
 
     const html = `
 <!doctype html>
@@ -554,7 +636,6 @@ const AdminSalesReport: React.FC = () => {
   .t-right { text-align:right; }
   .t-center { text-align:center; }
   .gap { border:none; width:10px; }
-  .muted { color:#555; }
   .summary { display:flex; gap:14px; margin-top:10px; }
   .chip { border:1px solid #222; border-radius:10px; padding:10px; flex:1; }
   .row { display:flex; justify-content:space-between; padding:4px 0; font-size:12px; }
@@ -578,7 +659,7 @@ const AdminSalesReport: React.FC = () => {
         </thead>
         <tbody>
           <tr><td>Starting Balance</td><td class="t-right">${peso(toNumber(report.starting_cash))}</td><td class="t-right">${peso(toNumber(report.starting_gcash))}</td></tr>
-          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cashTotal + coinTotal)}</td><td class="t-right">—</td></tr>
+          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cashTotalLocal + coinTotalLocal)}</td><td class="t-right">—</td></tr>
           <tr><td>Expenses</td><td class="t-right">${peso(expenses)}</td><td class="t-right">—</td></tr>
           <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCash)}</td><td class="t-right">${peso(paidResGcash)}</td></tr>
           <tr><td>New Advance Payments</td><td class="t-right">${peso(advCash)}</td><td class="t-right">${peso(advGcash)}</td></tr>
@@ -606,9 +687,9 @@ const AdminSalesReport: React.FC = () => {
         <tbody>
           ${rowsHtml}
           <tr>
-            <td colspan="2"><b>TOTAL CASH</b></td><td class="t-right"><b>${peso(cashTotal)}</b></td>
+            <td colspan="2"><b>TOTAL CASH</b></td><td class="t-right"><b>${peso(cashTotalLocal)}</b></td>
             <td class="gap"></td>
-            <td colspan="2"><b>TOTAL COINS</b></td><td class="t-right"><b>${peso(coinTotal)}</b></td>
+            <td colspan="2"><b>TOTAL COINS</b></td><td class="t-right"><b>${peso(coinTotalLocal)}</b></td>
           </tr>
         </tbody>
       </table>
@@ -621,11 +702,14 @@ const AdminSalesReport: React.FC = () => {
           <div class="row"><span>Bilin</span><b>${peso(Math.max(0, bilin))}</b></div>
           <div class="row"><span>Net</span><b>${peso(netCollected)}</b></div>
         </div>
+
         <div class="chip">
-          <div class="row"><span>Total Time</span><b>${fmtHoursSmart(totalTimeHours)}</b></div>
-          <div class="row"><span>Add-ons</span><b>${peso(addons)}</b></div>
+          <div class="row"><span>Total Time</span><b>${peso(totalTimeAmount)}</b></div>
+          <div class="row"><span>Add-ons (Paid)</span><b>${peso(addons)}</b></div>
           <div class="row"><span>Discounts</span><b>${peso(discount)}</b></div>
-          <div class="row"><span class="muted">Tip</span><span class="muted">Print → Save as PDF</span></div>
+          <div class="row"><span>Consignment Sales</span><b>${peso(consGross)}</b></div>
+          <div class="row"><span>Consignment 15%</span><b>${peso(consFee)}</b></div>
+          <div class="row"><span>Consignment Net</span><b>${peso(consNet)}</b></div>
         </div>
       </div>
     </div>
@@ -656,6 +740,8 @@ const AdminSalesReport: React.FC = () => {
 
   useEffect(() => {
     void loadReport(selectedDate);
+    void loadConsignment(selectedDate);
+    void loadAddonsPaid(selectedDate); // ✅ PAID ONLY add-ons
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
@@ -690,10 +776,15 @@ const AdminSalesReport: React.FC = () => {
   const expenses = totals ? toNumber(totals.expenses_amount) : 0;
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
-  const addons = totals ? toNumber(totals.addons_total) : 0;
+
+  // ✅ IMPORTANT: Other Totals Add-ons uses PAID ONLY
+  const addons = addonsPaid;
+
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const systemSale = totals ? toNumber(totals.system_sale) : 0;
-  const totalTimeHours = totals ? toNumber(totals.total_time) : 0;
+
+  const totalTimeAmount =
+    (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
 
   if (loading) {
     return (
@@ -734,11 +825,7 @@ const AdminSalesReport: React.FC = () => {
           message={`Delete sales report for ${selectedDate}? This will remove the report + cash lines for that date only.`}
           buttons={[
             { text: "Cancel", role: "cancel" },
-            {
-              text: "Delete",
-              role: "destructive",
-              handler: () => void deleteByDate(),
-            },
+            { text: "Delete", role: "destructive", handler: () => void deleteByDate() },
           ]}
         />
 
@@ -776,20 +863,13 @@ const AdminSalesReport: React.FC = () => {
                 <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
                   Status: <b>{report?.is_submitted ? "SUBMITTED" : "DRAFT"}</b>
                   {report?.submitted_at ? (
-                    <span style={{ marginLeft: 8 }}>
-                      (last submit: {new Date(report.submitted_at).toLocaleString()})
-                    </span>
+                    <span style={{ marginLeft: 8 }}>(last submit: {new Date(report.submitted_at).toLocaleString()})</span>
                   ) : null}
                 </div>
               </div>
 
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <IonButton
-                  color="medium"
-                  fill="outline"
-                  disabled={submitting || !report}
-                  onClick={() => exportToPDF()}
-                >
+                <IonButton color="medium" fill="outline" disabled={submitting || !report} onClick={() => exportToPDF()}>
                   <IonIcon slot="start" icon={downloadOutline} />
                   Export PDF
                 </IonButton>
@@ -865,9 +945,7 @@ const AdminSalesReport: React.FC = () => {
                           inputmode="decimal"
                           disabled={submitting}
                           value={report ? String(toNumber(report.starting_cash)) : "0"}
-                          onIonChange={(ev) =>
-                            updateReportField("starting_cash", valueToNonNegMoney(getDetailValue(ev)))
-                          }
+                          onIonChange={(ev) => updateReportField("starting_cash", valueToNonNegMoney(getDetailValue(ev)))}
                         />
                       </IonItem>
                     </div>
@@ -881,9 +959,7 @@ const AdminSalesReport: React.FC = () => {
                           inputmode="decimal"
                           disabled={submitting}
                           value={report ? String(toNumber(report.starting_gcash)) : "0"}
-                          onIonChange={(ev) =>
-                            updateReportField("starting_gcash", valueToNonNegMoney(getDetailValue(ev)))
-                          }
+                          onIonChange={(ev) => updateReportField("starting_gcash", valueToNonNegMoney(getDetailValue(ev)))}
                         />
                       </IonItem>
                     </div>
@@ -913,22 +989,14 @@ const AdminSalesReport: React.FC = () => {
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">New Advance Payments</div>
-                    <div className="ssr-left-value ssr-left-value--cash">
-                      {peso(totals ? toNumber(totals.advance_cash) : 0)}
-                    </div>
-                    <div className="ssr-left-value ssr-left-value--gcash">
-                      {peso(totals ? toNumber(totals.advance_gcash) : 0)}
-                    </div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.advance_cash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.advance_gcash) : 0)}</div>
                   </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Down payments within this day only</div>
-                    <div className="ssr-left-value ssr-left-value--cash">
-                      {peso(totals ? toNumber(totals.walkin_cash) : 0)}
-                    </div>
-                    <div className="ssr-left-value ssr-left-value--gcash">
-                      {peso(totals ? toNumber(totals.walkin_gcash) : 0)}
-                    </div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.walkin_cash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.walkin_gcash) : 0)}</div>
                   </div>
 
                   <div className="ssr-left-row ssr-left-row--system">
@@ -944,6 +1012,22 @@ const AdminSalesReport: React.FC = () => {
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">GCash Sales</span>
                       <span className="ssr-sales-box-value">{peso(gcashSales)}</span>
+                    </div>
+                  </div>
+
+                  {/* CONSIGNMENT */}
+                  <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
+                    <div className="ssr-sales-box">
+                      <span className="ssr-sales-box-label">Consignment Sales</span>
+                      <span className="ssr-sales-box-value">{peso(consignment.gross)}</span>
+                    </div>
+                    <div className="ssr-sales-box">
+                      <span className="ssr-sales-box-label">Consignment 15%</span>
+                      <span className="ssr-sales-box-value">{peso(consignment.fee15)}</span>
+                    </div>
+                    <div className="ssr-sales-box">
+                      <span className="ssr-sales-box-label">Consignment Net</span>
+                      <span className="ssr-sales-box-value">{peso(consignment.net)}</span>
                     </div>
                   </div>
                 </IonCardContent>
@@ -1050,9 +1134,7 @@ const AdminSalesReport: React.FC = () => {
                         inputmode="decimal"
                         disabled={submitting}
                         value={report ? String(toNumber(report.bilin_amount)) : "0"}
-                        onIonChange={(ev) =>
-                          updateReportField("bilin_amount", valueToNonNegMoney(getDetailValue(ev)))
-                        }
+                        onIonChange={(ev) => updateReportField("bilin_amount", valueToNonNegMoney(getDetailValue(ev)))}
                       />
                     </div>
 
@@ -1064,14 +1146,13 @@ const AdminSalesReport: React.FC = () => {
                 </IonCardContent>
               </IonCard>
 
-              {/* ✅ RESTORED: OTHER TOTALS */}
               <IonCard className="ssr-card">
                 <IonCardContent className="ssr-card-body">
                   <IonText className="ssr-card-title">Other Totals</IonText>
 
                   <div className="ssr-mini">
                     <div className="ssr-mini-row">
-                      <span>Add-ons</span>
+                      <span>Add-ons (Paid)</span>
                       <b>{peso(addons)}</b>
                     </div>
                     <div className="ssr-mini-row">
@@ -1080,7 +1161,7 @@ const AdminSalesReport: React.FC = () => {
                     </div>
                     <div className="ssr-mini-row">
                       <span>Total Time</span>
-                      <b>{fmtHoursSmart(totalTimeHours)}</b>
+                      <b>{peso(totalTimeAmount)}</b>
                     </div>
                   </div>
                 </IonCardContent>

@@ -4,20 +4,22 @@
 // ✅ VOID (single row): reverses by decrementing add_ons.sold then deletes record
 // ✅ DELETE (single row): deletes record ONLY (no reversal)
 // ✅ DELETE BY DATE: deletes records on selected date ONLY (no reversal)
+// ✅ + SAME UI/Grouping/Receipt/Payment/Paid Toggle style as Customer_Add_ons (customer-lists-container, customer-table, receipt-overlay, etc.)
+// ✅ Payment modal: GCash/Cash auto updates to match Due
+// ✅ Save Payment auto sets PAID/UNPAID (paid >= due) + paid_at
+// ✅ Manual PAID/UNPAID toggle works (can return to UNPAID even if fully paid)
+// ✅ Receipt status follows manual is_paid
 // ✅ No "any"
-
+//
+// ✅ CHANGE REQUEST (YOU): Void + Delete moved to ACTION (per order/group), removed from ITEMS
+//
 // NOTE: add_ons.stocks and add_ons.overall_sales are GENERATED ALWAYS,
 // so we must update add_ons.sold to "return stock / reverse sales".
 
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  IonPage,
-  IonContent,
-  IonSpinner,
-  IonText,
-  IonButton,
-} from "@ionic/react";
+import { IonPage, IonContent, IonSpinner, IonText, IonButton } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
+import logo from "../assets/study_hub.png";
 
 type NumericLike = number | string;
 
@@ -35,6 +37,17 @@ interface CustomerSessionAddOnRow {
   total: NumericLike;
   full_name: string;
   seat_number: string;
+
+  gcash_amount: NumericLike;
+  cash_amount: NumericLike;
+  is_paid: boolean | number | string | null;
+  paid_at: string | null;
+}
+
+interface AddOnLookup {
+  id: string;
+  name: string;
+  category: string;
 }
 
 interface CustomerAddOnMerged {
@@ -48,7 +61,41 @@ interface CustomerAddOnMerged {
   seat_number: string;
   item_name: string;
   category: string;
+
+  gcash_amount: number;
+  cash_amount: number;
+  is_paid: boolean;
+  paid_at: string | null;
 }
+
+type OrderItem = {
+  id: string; // customer_session_add_ons.id
+  add_on_id: string;
+  category: string;
+  item_name: string;
+  quantity: number;
+  price: number;
+  total: number;
+};
+
+type OrderGroup = {
+  key: string;
+  created_at: string;
+  full_name: string;
+  seat_number: string;
+
+  items: OrderItem[];
+  grand_total: number;
+
+  gcash_amount: number;
+  cash_amount: number;
+
+  // ✅ manual from DB
+  is_paid: boolean;
+  paid_at: string | null;
+};
+
+/* ---------------- helpers ---------------- */
 
 const toNumber = (v: NumericLike | null | undefined): number => {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
@@ -57,6 +104,18 @@ const toNumber = (v: NumericLike | null | undefined): number => {
     return Number.isFinite(n) ? n : 0;
   }
   return 0;
+};
+
+const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
+
+const toBool = (v: unknown): boolean => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    return s === "true" || s === "1" || s === "yes" || s === "paid";
+  }
+  return false;
 };
 
 const yyyyMmDdLocal = (d: Date): string => {
@@ -72,7 +131,14 @@ const extractLocalDate = (iso: string): string => {
   return yyyyMmDdLocal(d);
 };
 
-const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+const ms = (iso: string): number => {
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+
+const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+
+const moneyText = (n: number): string => `₱${round2(n).toFixed(2)}`;
 
 const formatDateTime = (iso: string): string => {
   const d = new Date(iso);
@@ -86,6 +152,8 @@ const formatTimeText = (iso: string): string => {
   return d.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
 };
 
+const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+
 // local-day range [start,end] for timestamptz filtering
 const localDayRangeIso = (yyyyMmDd: string): { startIso: string; endIso: string } => {
   const [y, m, d] = yyyyMmDd.split("-").map((x) => Number(x));
@@ -94,14 +162,46 @@ const localDayRangeIso = (yyyyMmDd: string): { startIso: string; endIso: string 
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 };
 
+// keep gcash (clamp to due), cash = remaining
+const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
+  const d = round2(Math.max(0, due));
+  if (d <= 0) return { gcash: 0, cash: 0 };
+
+  const g = round2(Math.min(d, Math.max(0, gcash)));
+  const c = round2(Math.max(0, d - g));
+  return { gcash: g, cash: c };
+};
+
+// group window: rows created within 10s = one order
+const GROUP_WINDOW_MS = 10_000;
+
+const samePersonSeat = (a: CustomerAddOnMerged, b: CustomerAddOnMerged): boolean =>
+  norm(a.full_name) === norm(b.full_name) && norm(a.seat_number) === norm(b.seat_number);
+
+/* ---------------- component ---------------- */
+
 const Admin_Customer_Add_ons: React.FC = () => {
   const [records, setRecords] = useState<CustomerAddOnMerged[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
-  const [voidingId, setVoidingId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // keep old features
+  const [voidingId, setVoidingId] = useState<string | null>(null); // used for ORDER key now
+  const [deletingId, setDeletingId] = useState<string | null>(null); // used for ORDER key now
   const [deletingDate, setDeletingDate] = useState<string | null>(null);
+
+  // receipt modal
+  const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
+
+  // payment modal
+  const [paymentTarget, setPaymentTarget] = useState<OrderGroup | null>(null);
+  const [gcashInput, setGcashInput] = useState<string>("0");
+  const [cashInput, setCashInput] = useState<string>("0");
+  const [savingPayment, setSavingPayment] = useState<boolean>(false);
+
+  // paid toggle busy
+  const [togglingPaidKey, setTogglingPaidKey] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchAddOns();
@@ -115,17 +215,22 @@ const Admin_Customer_Add_ons: React.FC = () => {
       .from("customer_session_add_ons")
       .select(
         `
-          id,
-          created_at,
-          add_on_id,
-          quantity,
-          price,
-          total,
-          full_name,
-          seat_number
-        `
+        id,
+        created_at,
+        add_on_id,
+        quantity,
+        price,
+        total,
+        full_name,
+        seat_number,
+        gcash_amount,
+        cash_amount,
+        is_paid,
+        paid_at
+      `
       )
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .returns<CustomerSessionAddOnRow[]>();
 
     if (error) {
       console.error("Error fetching customer_session_add_ons:", error);
@@ -134,7 +239,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       return;
     }
 
-    const sessionRows = (rows ?? []) as CustomerSessionAddOnRow[];
+    const sessionRows = rows ?? [];
     if (sessionRows.length === 0) {
       setRecords([]);
       setLoading(false);
@@ -146,17 +251,17 @@ const Admin_Customer_Add_ons: React.FC = () => {
     const { data: addOnRows, error: addOnErr } = await supabase
       .from("add_ons")
       .select("id, name, category")
-      .in("id", addOnIds);
+      .in("id", addOnIds)
+      .returns<AddOnLookup[]>();
 
     if (addOnErr) console.error("Error fetching add_ons:", addOnErr);
 
-    const addOnMap = new Map<string, { id: string; name: string; category: string }>();
-    (addOnRows ?? []).forEach((a: { id: string; name: string; category: string }) =>
-      addOnMap.set(a.id, a)
-    );
+    const addOnMap = new Map<string, AddOnLookup>();
+    (addOnRows ?? []).forEach((a) => addOnMap.set(a.id, a));
 
     const merged: CustomerAddOnMerged[] = sessionRows.map((r) => {
       const addOn = addOnMap.get(r.add_on_id);
+
       return {
         id: r.id,
         created_at: r.created_at,
@@ -168,6 +273,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
         seat_number: r.seat_number,
         item_name: addOn?.name ?? "-",
         category: addOn?.category ?? "-",
+
+        gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
+        cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
+        is_paid: toBool(r.is_paid),
+        paid_at: r.paid_at ?? null,
       };
     });
 
@@ -176,92 +286,156 @@ const Admin_Customer_Add_ons: React.FC = () => {
   };
 
   const filteredRecords = useMemo(() => {
-    return records.filter((r) => extractLocalDate(r.created_at) === selectedDate);
+    return records
+      .filter((r) => extractLocalDate(r.created_at) === selectedDate)
+      .sort((a, b) => ms(a.created_at) - ms(b.created_at)); // ascending for grouping window
   }, [records, selectedDate]);
 
-  // ✅ VOID (single): reverse by decrementing add_ons.sold, then delete record
-  const voidOneRecord = async (row: CustomerAddOnMerged): Promise<void> => {
+  const groupedOrders = useMemo<OrderGroup[]>(() => {
+    if (filteredRecords.length === 0) return [];
+
+    const groups: OrderGroup[] = [];
+    let current: OrderGroup | null = null;
+    let lastRow: CustomerAddOnMerged | null = null;
+
+    for (const row of filteredRecords) {
+      const startNew =
+        current === null ||
+        lastRow === null ||
+        !samePersonSeat(row, lastRow) ||
+        Math.abs(ms(row.created_at) - ms(lastRow.created_at)) > GROUP_WINDOW_MS;
+
+      if (startNew) {
+        const key = `${norm(row.full_name)}|${norm(row.seat_number)}|${ms(row.created_at)}`;
+        current = {
+          key,
+          created_at: row.created_at,
+          full_name: row.full_name,
+          seat_number: row.seat_number,
+          items: [],
+          grand_total: 0,
+          gcash_amount: 0,
+          cash_amount: 0,
+          is_paid: false,
+          paid_at: null,
+        };
+        groups.push(current);
+      }
+
+      if (!current) continue;
+
+      current.items.push({
+        id: row.id,
+        add_on_id: row.add_on_id,
+        category: row.category,
+        item_name: row.item_name,
+        quantity: Number(row.quantity) || 0,
+        price: row.price,
+        total: row.total,
+      });
+
+      current.grand_total = round2(current.grand_total + row.total);
+
+      // aggregate payment
+      current.gcash_amount = round2(current.gcash_amount + row.gcash_amount);
+      current.cash_amount = round2(current.cash_amount + row.cash_amount);
+
+      // manual status from DB (if any row paid => show paid)
+      current.is_paid = current.is_paid || row.is_paid;
+      current.paid_at = current.paid_at ?? row.paid_at;
+
+      lastRow = row;
+    }
+
+    return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
+  }, [filteredRecords]);
+
+  // ✅ VOID ORDER (all items): reverse sold per item then delete rows
+  const voidOrder = async (o: OrderGroup): Promise<void> => {
     const ok = window.confirm(
-      `VOID this add-on record?\n\n${row.full_name}\nSeat: ${row.seat_number}\nItem: ${row.item_name}\nQty: ${row.quantity}\nTotal: ₱${row.total.toFixed(2)}\nDate: ${formatDateTime(row.created_at)}\n\nThis will RETURN stock and REVERSE sales.`
+      `VOID this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
+        o.grand_total
+      )}\nDate: ${formatDateTime(o.created_at)}\n\nThis will RETURN stock and REVERSE sales for ALL items, then delete ALL rows.`
     );
     if (!ok) return;
 
     try {
-      setVoidingId(row.id);
+      setVoidingId(o.key);
 
-      const qty = Number.isFinite(row.quantity) ? row.quantity : 0;
+      for (const it of o.items) {
+        const mergedRow = records.find((r) => r.id === it.id);
+        if (!mergedRow) continue;
 
-      // 1) read current sold
-      const { data: addOn, error: addOnErr } = await supabase
-        .from("add_ons")
-        .select("id, sold")
-        .eq("id", row.add_on_id)
-        .single();
+        const qty = Number.isFinite(mergedRow.quantity) ? mergedRow.quantity : 0;
 
-      if (addOnErr || !addOn) {
-        alert(`VOID error: cannot read add_ons. ${addOnErr?.message ?? ""}`.trim());
-        return;
+        // 1) read current sold
+        const { data: addOn, error: addOnErr } = await supabase
+          .from("add_ons")
+          .select("id, sold")
+          .eq("id", mergedRow.add_on_id)
+          .single<AddOnInfo>();
+
+        if (addOnErr || !addOn) {
+          alert(`VOID error: cannot read add_ons. ${addOnErr?.message ?? ""}`.trim());
+          return;
+        }
+
+        const currentSold = toNumber(addOn.sold);
+        const nextSold = Math.max(0, currentSold - qty);
+
+        // 2) update sold ONLY (stocks + overall_sales are generated)
+        const { error: updErr } = await supabase
+          .from("add_ons")
+          .update({ sold: nextSold })
+          .eq("id", mergedRow.add_on_id);
+
+        if (updErr) {
+          alert(`VOID error: failed to reverse sold. ${updErr.message}`);
+          return;
+        }
+
+        // 3) delete record row
+        const { error: delErr } = await supabase.from("customer_session_add_ons").delete().eq("id", mergedRow.id);
+
+        if (delErr) {
+          alert(`VOID error: reversed sold but failed to delete record. ${delErr.message}`);
+          return;
+        }
       }
 
-      const currentSold = toNumber((addOn as AddOnInfo).sold);
-      const nextSold = Math.max(0, currentSold - qty);
-
-      // 2) update sold ONLY (stocks + overall_sales are generated)
-      const { error: updErr } = await supabase
-        .from("add_ons")
-        .update({ sold: nextSold })
-        .eq("id", row.add_on_id);
-
-      if (updErr) {
-        alert(`VOID error: failed to reverse sold. ${updErr.message}`);
-        return;
-      }
-
-      // 3) delete the record row
-      const { error: delErr } = await supabase
-        .from("customer_session_add_ons")
-        .delete()
-        .eq("id", row.id);
-
-      if (delErr) {
-        alert(`VOID error: reversed sold but failed to delete record. ${delErr.message}`);
-        return;
-      }
-
-      // update UI
-      setRecords((prev) => prev.filter((r) => r.id !== row.id));
+      await fetchAddOns();
     } catch (e) {
       console.error(e);
-      alert("VOID failed.");
+      alert("VOID order failed.");
     } finally {
       setVoidingId(null);
     }
   };
 
-  // ✅ DELETE (single): delete record ONLY (no reversal)
-  const deleteOneRecord = async (row: CustomerAddOnMerged): Promise<void> => {
+  // ✅ DELETE ORDER (all items): delete rows only (no reversal)
+  const deleteOrder = async (o: OrderGroup): Promise<void> => {
     const ok = window.confirm(
-      `DELETE this add-on record?\n\n${row.full_name}\nSeat: ${row.seat_number}\nItem: ${row.item_name}\nQty: ${row.quantity}\nTotal: ₱${row.total.toFixed(2)}\nDate: ${formatDateTime(row.created_at)}\n\nThis will NOT return stock and NOT reverse sales.`
+      `DELETE this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
+        o.grand_total
+      )}\nDate: ${formatDateTime(o.created_at)}\n\nThis will NOT return stock and NOT reverse sales.`
     );
     if (!ok) return;
 
     try {
-      setDeletingId(row.id);
+      setDeletingId(o.key);
 
-      const { error: delErr } = await supabase
-        .from("customer_session_add_ons")
-        .delete()
-        .eq("id", row.id);
+      const ids = o.items.map((x) => x.id);
+      const { error } = await supabase.from("customer_session_add_ons").delete().in("id", ids);
 
-      if (delErr) {
-        alert(`DELETE error: ${delErr.message}`);
+      if (error) {
+        alert(`DELETE order error: ${error.message}`);
         return;
       }
 
-      setRecords((prev) => prev.filter((r) => r.id !== row.id));
+      await fetchAddOns();
     } catch (e) {
       console.error(e);
-      alert("DELETE failed.");
+      alert("DELETE order failed.");
     } finally {
       setDeletingId(null);
     }
@@ -292,8 +466,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         return;
       }
 
-      // remove from UI
-      setRecords((prev) => prev.filter((r) => extractLocalDate(r.created_at) !== selectedDate));
+      await fetchAddOns();
     } catch (e) {
       console.error(e);
       alert("DELETE by date failed.");
@@ -313,17 +486,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       return;
     }
 
-    const headers = [
-      "Date",
-      "Time",
-      "Full Name",
-      "Seat",
-      "Category",
-      "Item",
-      "Qty",
-      "Price",
-      "Total",
-    ];
+    const headers = ["Date", "Time", "Full Name", "Seat", "Category", "Item", "Qty", "Price", "Total"];
 
     const rows = filteredRecords.map((r) => {
       const d = extractLocalDate(r.created_at);
@@ -358,118 +521,471 @@ const Admin_Customer_Add_ons: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  // -----------------------
+  // PAYMENT MODAL (ADMIN)
+  // -----------------------
+  const openPaymentModal = (o: OrderGroup): void => {
+    const due = round2(Math.max(0, o.grand_total));
+
+    const existingTotalPaid = round2(o.gcash_amount + o.cash_amount);
+    const existingGcash = existingTotalPaid > 0 ? o.gcash_amount : 0;
+
+    const adj = recalcPaymentsToDue(due, existingGcash);
+
+    setPaymentTarget(o);
+    setGcashInput(String(adj.gcash));
+    setCashInput(String(adj.cash));
+  };
+
+  const setGcashAndAutoCash = (o: OrderGroup, gcashStr: string): void => {
+    const due = round2(Math.max(0, o.grand_total));
+    const gc = round2(Math.max(0, Number(gcashStr) || 0));
+    const adj = recalcPaymentsToDue(due, gc);
+    setGcashInput(String(adj.gcash));
+    setCashInput(String(adj.cash));
+  };
+
+  const setCashAndAutoGcash = (o: OrderGroup, cashStr: string): void => {
+    const due = round2(Math.max(0, o.grand_total));
+    const ca = round2(Math.max(0, Number(cashStr) || 0));
+
+    const cash = round2(Math.min(due, ca));
+    const gcash = round2(Math.max(0, due - cash));
+
+    setCashInput(String(cash));
+    setGcashInput(String(gcash));
+  };
+
+  // ✅ Save payment updates ALL rows in the order
+  // ✅ Auto set is_paid based on payment vs due
+  const savePayment = async (): Promise<void> => {
+    if (!paymentTarget) return;
+
+    const due = round2(Math.max(0, paymentTarget.grand_total));
+    const gcIn = round2(Math.max(0, Number(gcashInput) || 0));
+    const adj = recalcPaymentsToDue(due, gcIn);
+
+    const totalPaid = round2(adj.gcash + adj.cash);
+    const isPaidAuto = due > 0 && totalPaid >= due;
+
+    const itemIds = paymentTarget.items.map((x) => x.id);
+
+    try {
+      setSavingPayment(true);
+
+      const { error } = await supabase
+        .from("customer_session_add_ons")
+        .update({
+          gcash_amount: adj.gcash,
+          cash_amount: adj.cash,
+          is_paid: isPaidAuto,
+          paid_at: isPaidAuto ? new Date().toISOString() : null,
+        })
+        .in("id", itemIds);
+
+      if (error) {
+        alert(`Save payment error: ${error.message}`);
+        return;
+      }
+
+      setPaymentTarget(null);
+      await fetchAddOns();
+    } catch (e) {
+      console.error(e);
+      alert("Save payment failed.");
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
+  // -----------------------
+  // PAID / UNPAID TOGGLE (manual) — updates ALL rows
+  // -----------------------
+  const togglePaid = async (o: OrderGroup): Promise<void> => {
+    const itemIds = o.items.map((x) => x.id);
+
+    try {
+      setTogglingPaidKey(o.key);
+
+      const nextPaid = !toBool(o.is_paid);
+
+      const { error } = await supabase
+        .from("customer_session_add_ons")
+        .update({
+          is_paid: nextPaid,
+          paid_at: nextPaid ? new Date().toISOString() : null,
+        })
+        .in("id", itemIds);
+
+      if (error) {
+        alert(`Toggle paid error: ${error.message}`);
+        return;
+      }
+
+      await fetchAddOns();
+    } catch (e) {
+      console.error(e);
+      alert("Toggle paid failed.");
+    } finally {
+      setTogglingPaidKey(null);
+    }
+  };
+
   return (
     <IonPage>
       <IonContent className="ion-padding">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 12,
-            flexWrap: "wrap",
-            alignItems: "center",
-            marginBottom: 10,
-          }}
-        >
-          <h2 style={{ fontWeight: 900, margin: 0 }}>Admin Add-Ons Records</h2>
+        <div className="customer-lists-container">
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <h2 className="customer-lists-title" style={{ margin: 0 }}>
+              Admin Add-Ons Records
+            </h2>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.currentTarget.value)}
-            />
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
 
-            <IonButton onClick={exportToExcelByDate} style={{ height: 36 }}>
-              Export Excel (Date)
-            </IonButton>
+              <IonButton size="small" onClick={() => void fetchAddOns()}>
+                Refresh
+              </IonButton>
 
-            <IonButton
-              color="danger"
-              onClick={deleteByDate}
-              disabled={deletingDate === selectedDate}
-              style={{ height: 36 }}
-            >
-              {deletingDate === selectedDate ? "Deleting..." : "Delete by Date"}
-            </IonButton>
+              <IonButton size="small" onClick={exportToExcelByDate}>
+                Export Excel (Date)
+              </IonButton>
+
+              <IonButton size="small" color="danger" onClick={deleteByDate} disabled={deletingDate === selectedDate}>
+                {deletingDate === selectedDate ? "Deleting..." : "Delete by Date"}
+              </IonButton>
+            </div>
           </div>
-        </div>
 
-        <div style={{ marginBottom: 10, opacity: 0.85 }}>
-          Showing records for: <strong>{selectedDate}</strong>
-        </div>
-
-        {loading && (
-          <div style={{ textAlign: "center", marginTop: 30 }}>
-            <IonSpinner name="crescent" />
+          <div style={{ marginTop: 10, opacity: 0.85 }}>
+            Showing records for: <strong>{selectedDate}</strong>
           </div>
-        )}
 
-        {!loading && filteredRecords.length === 0 && (
-          <IonText>No add-ons found for this date.</IonText>
-        )}
-
-        {!loading && filteredRecords.length > 0 && (
-          <div className="customer-addons-container">
-            <table className="customer-addons-table">
+          {loading ? (
+            <div style={{ textAlign: "center", marginTop: 30 }}>
+              <IonSpinner name="crescent" />
+            </div>
+          ) : groupedOrders.length === 0 ? (
+            <p>No add-ons found for this date</p>
+          ) : (
+            <table className="customer-table">
               <thead>
                 <tr>
-                  <th>Date/Time</th>
+                  <th>Date</th>
                   <th>Full Name</th>
                   <th>Seat</th>
-                  <th>Category</th>
-                  <th>Item</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Total</th>
-                  <th style={{ minWidth: 170 }}>Action</th>
+                  <th>Items</th>
+                  <th>Grand Total</th>
+                  <th>Payment</th>
+                  <th>Paid?</th>
+                  <th>Action</th>
                 </tr>
               </thead>
 
               <tbody>
-                {filteredRecords.map((row) => (
-                  <tr key={row.id}>
-                    <td>{formatDateTime(row.created_at)}</td>
-                    <td>{row.full_name || "-"}</td>
-                    <td>{row.seat_number || "-"}</td>
-                    <td>{row.category}</td>
-                    <td>{row.item_name}</td>
-                    <td>{row.quantity}</td>
-                    <td>₱{row.price.toFixed(2)}</td>
-                    <td style={{ fontWeight: 900 }}>₱{row.total.toFixed(2)}</td>
+                {groupedOrders.map((o) => {
+                  const due = round2(o.grand_total);
+                  const totalPaid = round2(o.gcash_amount + o.cash_amount);
+                  const remaining = round2(Math.max(0, due - totalPaid));
 
-                    <td style={{ display: "flex", gap: 8 }}>
-                      <button
-                        className="receipt-btn"
-                        disabled={voidingId === row.id || deletingId === row.id}
-                        onClick={() => void voidOneRecord(row)}
-                      >
-                        {voidingId === row.id ? "Voiding..." : "Void"}
-                      </button>
+                  const paid = toBool(o.is_paid);
 
-                      <button
-                        className="receipt-btn"
-                        style={{ opacity: 0.9 }}
-                        disabled={voidingId === row.id || deletingId === row.id}
-                        onClick={() => void deleteOneRecord(row)}
-                      >
-                        {deletingId === row.id ? "Deleting..." : "Delete"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                  const busyOrder = voidingId === o.key || deletingId === o.key;
+
+                  return (
+                    <tr key={o.key}>
+                      <td>{new Date(o.created_at).toLocaleString("en-PH")}</td>
+                      <td>{o.full_name || "-"}</td>
+                      <td>{o.seat_number || "-"}</td>
+
+                      {/* ITEMS (display only) */}
+                      <td>
+                        <div style={{ display: "grid", gap: 10, minWidth: 340 }}>
+                          {o.items.map((it) => (
+                            <div
+                              key={it.id}
+                              style={{
+                                display: "grid",
+                                gap: 6,
+                                borderBottom: "1px solid rgba(0,0,0,0.08)",
+                                paddingBottom: 10,
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontWeight: 900 }}>
+                                    {it.item_name}{" "}
+                                    <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                                  </div>
+                                  <div style={{ opacity: 0.85, fontSize: 13 }}>
+                                    Qty: {it.quantity} • {moneyText(it.price)}
+                                  </div>
+                                </div>
+                                <div style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+
+                      <td style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(due)}</td>
+
+                      <td>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          <span style={{ fontWeight: 800 }}>
+                            GCash {moneyText(o.gcash_amount)} / Cash {moneyText(o.cash_amount)}
+                          </span>
+                          <button
+                            className="receipt-btn"
+                            onClick={() => openPaymentModal(o)}
+                            disabled={due <= 0}
+                            title={due <= 0 ? "No amount due" : "Set GCash/Cash payment"}
+                          >
+                            Payment
+                          </button>
+                        </div>
+                      </td>
+
+                      <td>
+                        <button
+                          className="receipt-btn"
+                          onClick={() => void togglePaid(o)}
+                          disabled={togglingPaidKey === o.key}
+                          style={{ background: paid ? "#1b5e20" : "#b00020" }}
+                          title={paid ? "Tap to set UNPAID" : "Tap to set PAID"}
+                        >
+                          {togglingPaidKey === o.key ? "Updating..." : paid ? "PAID" : "UNPAID"}
+                        </button>
+
+                        {remaining > 0 && (
+                          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+                            Remaining: <strong>{moneyText(remaining)}</strong>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* ACTION (View Receipt + Void + Delete) */}
+                      <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button className="receipt-btn" onClick={() => setSelectedOrder(o)}>
+                          View Receipt
+                        </button>
+
+                        <button className="receipt-btn" disabled={busyOrder} onClick={() => void voidOrder(o)}>
+                          {voidingId === o.key ? "Voiding..." : "Void"}
+                        </button>
+
+                        <button
+                          className="receipt-btn"
+                          style={{ opacity: 0.9 }}
+                          disabled={busyOrder}
+                          onClick={() => void deleteOrder(o)}
+                        >
+                          {deletingId === o.key ? "Deleting..." : "Delete"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
-          </div>
-        )}
+          )}
 
-        {!loading && filteredRecords.length > 0 && (
-          <div className="customer-addons-container">
-            <table className="customer-addons-table">
-              {/* ...table... */}
-            </table>
-          </div>
-        )}
+          {/* PAYMENT MODAL */}
+          {paymentTarget && (
+            <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">PAYMENT</h3>
+                <p className="receipt-subtitle">{paymentTarget.full_name}</p>
+
+                <hr />
+
+                {(() => {
+                  const due = round2(Math.max(0, paymentTarget.grand_total));
+                  const gcIn = round2(Math.max(0, Number(gcashInput) || 0));
+                  const adj = recalcPaymentsToDue(due, gcIn);
+
+                  const totalPaid = round2(adj.gcash + adj.cash);
+                  const remaining = round2(Math.max(0, due - totalPaid));
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>Total Balance (Due)</span>
+                        <span>{moneyText(due)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashInput}
+                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                          style={{ width: 160 }}
+                        />
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={cashInput}
+                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                          style={{ width: 160 }}
+                        />
+                      </div>
+
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>{moneyText(totalPaid)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining</span>
+                        <span>{moneyText(remaining)}</span>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} style={{ flex: 1 }}>
+                          Cancel
+                        </button>
+                        <button
+                          className="receipt-btn"
+                          onClick={() => void savePayment()}
+                          disabled={savingPayment}
+                          style={{ flex: 1 }}
+                        >
+                          {savingPayment ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* RECEIPT MODAL */}
+          {selectedOrder && (
+            <div className="receipt-overlay" onClick={() => setSelectedOrder(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+
+                <h3 className="receipt-title">ME TYME LOUNGE</h3>
+                <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Date</span>
+                  <span>{new Date(selectedOrder.created_at).toLocaleString("en-PH")}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Customer</span>
+                  <span>{selectedOrder.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{selectedOrder.seat_number}</span>
+                </div>
+
+                <hr />
+
+                {selectedOrder.items.map((it) => (
+                  <div key={it.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 900 }}>
+                        {it.item_name} <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                      </div>
+                      <div style={{ opacity: 0.8, fontSize: 13 }}>
+                        {it.quantity} × {moneyText(it.price)}
+                      </div>
+                    </div>
+                    <div style={{ fontWeight: 1000, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
+                  </div>
+                ))}
+
+                <hr />
+
+                {(() => {
+                  const due = round2(Math.max(0, selectedOrder.grand_total));
+                  const gcash = round2(Math.max(0, selectedOrder.gcash_amount));
+                  const cash = round2(Math.max(0, selectedOrder.cash_amount));
+                  const totalPaid = round2(gcash + cash);
+                  const remaining = round2(Math.max(0, due - totalPaid));
+
+                  const paid = toBool(selectedOrder.is_paid);
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>Total</span>
+                        <span>{moneyText(due)}</span>
+                      </div>
+
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <span>{moneyText(gcash)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <span>{moneyText(cash)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>{moneyText(totalPaid)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining Balance</span>
+                        <span>{moneyText(remaining)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Status</span>
+                        <span style={{ fontWeight: 900 }}>{paid ? "PAID" : "UNPAID"}</span>
+                      </div>
+
+                      {paid && (
+                        <div className="receipt-row">
+                          <span>Paid at</span>
+                          <span>{selectedOrder.paid_at ? new Date(selectedOrder.paid_at).toLocaleString("en-PH") : "-"}</span>
+                        </div>
+                      )}
+
+                      <div className="receipt-total">
+                        <span>TOTAL</span>
+                        <span>{moneyText(due)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                <p className="receipt-footer">
+                  Thank you for choosing <br />
+                  <strong>Me Tyme Lounge</strong>
+                </p>
+
+                <button className="close-btn" onClick={() => setSelectedOrder(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!loading && groupedOrders.length === 0 && <IonText />}
+        </div>
       </IonContent>
     </IonPage>
   );
