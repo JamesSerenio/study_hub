@@ -1,8 +1,9 @@
 // Admin_Item_Lists.tsx
-// ✅ When replacing image: upload new -> update DB -> delete old file from Storage (auto delete old)
+// ✅ Add Stocks button + Restock history via RPC
+// ✅ Restocked is NOT edited in Edit modal anymore
 // ✅ No "any"
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
   IonHeader,
@@ -24,8 +25,9 @@ import {
   IonInput,
   IonItem,
   IonImg,
+  IonText,
 } from "@ionic/react";
-import { trash, create, arrowUp, arrowDown } from "ionicons/icons";
+import { trash, create, arrowUp, arrowDown, addCircle } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
 interface AddOn {
@@ -59,6 +61,12 @@ const Admin_Item_Lists: React.FC = () => {
 
   const [newImageFile, setNewImageFile] = useState<File | null>(null);
 
+  // ✅ Restock modal state
+  const [showRestockModal, setShowRestockModal] = useState<boolean>(false);
+  const [restockingAddOn, setRestockingAddOn] = useState<AddOn | null>(null);
+  const [restockQty, setRestockQty] = useState<string>("");
+  const [restockNote, setRestockNote] = useState<string>("");
+
   const fetchAddOns = async (): Promise<void> => {
     try {
       const { data, error } = await supabase
@@ -86,11 +94,13 @@ const Admin_Item_Lists: React.FC = () => {
     void fetchAddOns().then(() => event.detail.complete());
   };
 
-  const sortedAddOns = [...addOns].sort((a, b) => {
-    const aCat = a.category ?? "";
-    const bCat = b.category ?? "";
-    return sortOrder === "asc" ? aCat.localeCompare(bCat) : bCat.localeCompare(aCat);
-  });
+  const sortedAddOns = useMemo(() => {
+    return [...addOns].sort((a, b) => {
+      const aCat = a.category ?? "";
+      const bCat = b.category ?? "";
+      return sortOrder === "asc" ? aCat.localeCompare(bCat) : bCat.localeCompare(aCat);
+    });
+  }, [addOns, sortOrder]);
 
   const toggleSort = (): void => {
     setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
@@ -104,9 +114,17 @@ const Admin_Item_Lists: React.FC = () => {
     setShowEditModal(true);
   };
 
+  // ✅ open restock modal
+  const openRestock = (id: string): void => {
+    const a = addOns.find((x) => x.id === id);
+    if (!a) return;
+    setRestockingAddOn(a);
+    setRestockQty("");
+    setRestockNote("");
+    setShowRestockModal(true);
+  };
+
   // ✅ Extract bucket path from public URL
-  // Works for URLs like:
-  // https://xxxxx.supabase.co/storage/v1/object/public/add-ons/<path>
   const getStoragePathFromPublicUrl = (publicUrl: string, bucket: string): string | null => {
     try {
       const marker = `/storage/v1/object/public/${bucket}/`;
@@ -146,7 +164,6 @@ const Admin_Item_Lists: React.FC = () => {
     if (uploadErr) throw uploadErr;
 
     const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(newPath);
-
     return { publicUrl: urlData.publicUrl, newPath };
   };
 
@@ -156,33 +173,26 @@ const Admin_Item_Lists: React.FC = () => {
     const oldPath = getStoragePathFromPublicUrl(oldImageUrl, BUCKET);
     if (!oldPath) return;
 
-    // needs Storage delete policy (remove)
     const { error } = await supabase.storage.from(BUCKET).remove([oldPath]);
-    if (error) {
-      // don't block saving if delete fails
-      console.warn("Failed to delete old image:", error.message);
-    }
+    if (error) console.warn("Failed to delete old image:", error.message);
   };
 
   const handleSaveEdit = async (): Promise<void> => {
     if (!editingAddOn) return;
 
-    // Validation
-    if (!editingAddOn.name.trim()) return setToastMessage("Name is required."), setShowToast(true);
-    if (!editingAddOn.category.trim()) return setToastMessage("Category is required."), setShowToast(true);
+    if (!editingAddOn.name.trim()) return (setToastMessage("Name is required."), setShowToast(true));
+    if (!editingAddOn.category.trim())
+      return (setToastMessage("Category is required."), setShowToast(true));
     if (Number.isNaN(editingAddOn.price) || editingAddOn.price < 0)
-      return setToastMessage("Price must be a valid positive number."), setShowToast(true);
-    if (Number.isNaN(editingAddOn.restocked) || editingAddOn.restocked < 0)
-      return setToastMessage("Restocked must be a valid non-negative number."), setShowToast(true);
+      return (setToastMessage("Price must be a valid positive number."), setShowToast(true));
     if (Number.isNaN(editingAddOn.sold) || editingAddOn.sold < 0)
-      return setToastMessage("Sold must be a valid non-negative number."), setShowToast(true);
+      return (setToastMessage("Sold must be a valid non-negative number."), setShowToast(true));
     if (Number.isNaN(editingAddOn.expenses) || editingAddOn.expenses < 0)
-      return setToastMessage("Expenses must be a valid non-negative number."), setShowToast(true);
+      return (setToastMessage("Expenses must be a valid non-negative number."), setShowToast(true));
 
     const oldImageUrl: string | null = editingAddOn.image_url ?? null;
 
     try {
-      // ✅ if user chose new image: upload first
       let finalImageUrl: string | null = oldImageUrl;
 
       if (newImageFile) {
@@ -190,14 +200,13 @@ const Admin_Item_Lists: React.FC = () => {
         finalImageUrl = uploaded.publicUrl;
       }
 
-      // ✅ update DB
+      // ✅ restocked REMOVED from edit update
       const { error } = await supabase
         .from("add_ons")
         .update({
           category: editingAddOn.category,
           name: editingAddOn.name,
           price: editingAddOn.price,
-          restocked: editingAddOn.restocked,
           sold: editingAddOn.sold,
           expenses: editingAddOn.expenses,
           image_url: finalImageUrl,
@@ -206,7 +215,6 @@ const Admin_Item_Lists: React.FC = () => {
 
       if (error) throw error;
 
-      // ✅ after successful DB update: delete old image (only if replaced)
       if (newImageFile && finalImageUrl && finalImageUrl !== oldImageUrl) {
         await deleteOldImageIfAny(oldImageUrl);
       }
@@ -225,6 +233,45 @@ const Admin_Item_Lists: React.FC = () => {
       console.error("Error updating add-on:", error);
       setToastMessage(
         `Error updating add-on: ${error instanceof Error ? error.message : "Please try again."}`
+      );
+      setShowToast(true);
+    }
+  };
+
+  // ✅ RESTOCK SUBMIT (RPC)
+  const submitRestock = async (): Promise<void> => {
+    if (!restockingAddOn) return;
+
+    const qty = parseInt(restockQty.trim(), 10);
+    if (Number.isNaN(qty) || qty <= 0) {
+      setToastMessage("Restock quantity must be a positive number.");
+      setShowToast(true);
+      return;
+    }
+
+    try {
+      const { error } = await supabase.rpc("restock_add_on", {
+        p_add_on_id: restockingAddOn.id,
+        p_qty: qty,
+        p_note: restockNote.trim() || null,
+      });
+
+      if (error) throw error;
+
+      setToastMessage("Stocks added successfully.");
+      setShowToast(true);
+
+      setShowRestockModal(false);
+      setRestockingAddOn(null);
+      setRestockQty("");
+      setRestockNote("");
+
+      // refresh list to reflect updated restocked/stocks
+      void fetchAddOns();
+    } catch (error: unknown) {
+      console.error("Error restocking:", error);
+      setToastMessage(
+        `Error restocking: ${error instanceof Error ? error.message : "Please try again."}`
       );
       setShowToast(true);
     }
@@ -311,19 +358,29 @@ const Admin_Item_Lists: React.FC = () => {
                         <IonLabel>No Image</IonLabel>
                       )}
                     </IonCol>
+
                     <IonCol>{addOn.name}</IonCol>
                     <IonCol>{addOn.category}</IonCol>
-                    <IonCol>₱{addOn.price.toFixed(2)}</IonCol>
+                    <IonCol>₱{Number(addOn.price).toFixed(2)}</IonCol>
                     <IonCol>{addOn.restocked}</IonCol>
                     <IonCol>{addOn.sold}</IonCol>
                     <IonCol>{addOn.stocks}</IonCol>
                     <IonCol>{addOn.expenses}</IonCol>
-                    <IonCol>₱{addOn.overall_sales.toFixed(2)}</IonCol>
-                    <IonCol>₱{addOn.expected_sales.toFixed(2)}</IonCol>
+                    <IonCol>₱{Number(addOn.overall_sales).toFixed(2)}</IonCol>
+                    <IonCol>₱{Number(addOn.expected_sales).toFixed(2)}</IonCol>
+
                     <IonCol>
+                      {/* ✅ Add Stocks */}
+                      <IonButton fill="clear" onClick={() => openRestock(addOn.id)}>
+                        <IonIcon icon={addCircle} />
+                      </IonButton>
+
+                      {/* Edit */}
                       <IonButton fill="clear" onClick={() => handleEdit(addOn.id)}>
                         <IonIcon icon={create} />
                       </IonButton>
+
+                      {/* Delete */}
                       <IonButton fill="clear" color="danger" onClick={() => handleDelete(addOn.id)}>
                         <IonIcon icon={trash} />
                       </IonButton>
@@ -357,6 +414,63 @@ const Admin_Item_Lists: React.FC = () => {
           ]}
         />
 
+        {/* ✅ RESTOCK MODAL */}
+        <IonModal isOpen={showRestockModal} onDidDismiss={() => setShowRestockModal(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>Add Stocks</IonTitle>
+            </IonToolbar>
+          </IonHeader>
+
+          <IonContent className="ion-padding">
+            {restockingAddOn && (
+              <>
+                <IonText>
+                  <h2 style={{ marginTop: 0 }}>{restockingAddOn.name}</h2>
+                </IonText>
+
+                <IonItem>
+                  <IonLabel position="stacked">Quantity to add *</IonLabel>
+                  <IonInput
+                    type="number"
+                    inputmode="numeric"
+                    value={restockQty}
+                    placeholder="e.g. 10"
+                    onIonChange={(e) => setRestockQty((e.detail.value ?? "").toString())}
+                  />
+                </IonItem>
+
+                <IonItem>
+                  <IonLabel position="stacked">Note (optional)</IonLabel>
+                  <IonInput
+                    value={restockNote}
+                    placeholder="e.g. supplier restock / new batch"
+                    onIonChange={(e) => setRestockNote((e.detail.value ?? "").toString())}
+                  />
+                </IonItem>
+
+                <IonButton expand="full" onClick={() => void submitRestock()}>
+                  Confirm Restock
+                </IonButton>
+
+                <IonButton
+                  expand="full"
+                  fill="clear"
+                  onClick={() => {
+                    setShowRestockModal(false);
+                    setRestockingAddOn(null);
+                    setRestockQty("");
+                    setRestockNote("");
+                  }}
+                >
+                  Cancel
+                </IonButton>
+              </>
+            )}
+          </IonContent>
+        </IonModal>
+
+        {/* EDIT MODAL */}
         <IonModal isOpen={showEditModal} onDidDismiss={() => setShowEditModal(false)}>
           <IonHeader>
             <IonToolbar>
@@ -431,17 +545,7 @@ const Admin_Item_Lists: React.FC = () => {
                   />
                 </IonItem>
 
-                <IonItem>
-                  <IonLabel position="stacked">Restocked</IonLabel>
-                  <IonInput
-                    type="number"
-                    value={editingAddOn.restocked}
-                    onIonChange={(e) => {
-                      const v = parseInt((e.detail.value ?? "0").toString(), 10);
-                      setEditingAddOn({ ...editingAddOn, restocked: Number.isNaN(v) ? 0 : v });
-                    }}
-                  />
-                </IonItem>
+                {/* ✅ Restocked removed from edit */}
 
                 <IonItem>
                   <IonLabel position="stacked">Sold</IonLabel>

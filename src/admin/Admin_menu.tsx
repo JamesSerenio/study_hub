@@ -1,4 +1,6 @@
 // src/pages/Admin_menu.tsx
+// ✅ Added: Admin_Restock_Record page + Restock Records menu item
+// ✅ Icon: src/assets/restock.png
 
 import React, { useState } from "react";
 import {
@@ -29,8 +31,9 @@ import Admin_Packages from "./Admin_Packages";
 import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List";
 import Admin_Seat_Table from "./Admin_Seat_Table";
 import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses&Expired";
-import Admin_Customer_Add_ons from "./Admin_Customer_Add_ons"; // ✅ NEW
-import Admin_Sales_Report from "./Admin_Sales_Report"; // ✅ NEW
+import Admin_Customer_Add_ons from "./Admin_Customer_Add_ons";
+import Admin_Sales_Report from "./Admin_Sales_Report";
+import Admin_Restock_Record from "./Admin_Restock_Record"; // ✅ NEW
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -43,15 +46,17 @@ import discountIcon from "../assets/discount.png";
 import seatIcon from "../assets/seat.png";
 import expenseIcon from "../assets/expense.png";
 import hamburgerIcon from "../assets/hamburger.png";
-import salesIcon from "../assets/sales.png"; // ✅ NEW
+import salesIcon from "../assets/sales.png";
+import restockIcon from "../assets/restock.png"; // ✅ NEW
 import studyHubLogo from "../assets/study_hub.png";
 
 type MenuKey =
   | "dashboard"
   | "add_ons"
   | "item_lists"
+  | "restock_records" // ✅ NEW
   | "staff_expenses"
-  | "sales_report" // ✅ NEW
+  | "sales_report"
   | "customer_add_ons"
   | "customer_list"
   | "customer_reservation"
@@ -74,12 +79,13 @@ const Admin_menu: React.FC = () => {
     { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
     { name: "Item Lists", key: "item_lists", icon: itemIcon },
 
+    // ✅ NEW: RESTOCK RECORDS
+    { name: "Restock Records", key: "restock_records", icon: restockIcon },
+
     { name: "Staff Expenses", key: "staff_expenses", icon: expenseIcon },
 
-    // ✅ NEW: SALES REPORT
     { name: "Sales Report", key: "sales_report", icon: salesIcon },
 
-    // ✅ CUSTOMER ADD-ONS HISTORY
     { name: "Customer Add-Ons", key: "customer_add_ons", icon: hamburgerIcon },
 
     { name: "Customer List", key: "customer_list", icon: customerListIcon },
@@ -100,6 +106,9 @@ const Admin_menu: React.FC = () => {
 
       case "item_lists":
         return <Admin_Item_Lists />;
+
+      case "restock_records":
+        return <Admin_Restock_Record />;
 
       case "staff_expenses":
         return <Admin_Staff_Expenses_Expired />;
