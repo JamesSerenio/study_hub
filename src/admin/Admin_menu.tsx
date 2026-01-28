@@ -30,6 +30,7 @@ import Admin_Customer_Discount_List from "./Admin_Customer_Discount_List";
 import Admin_Seat_Table from "./Admin_Seat_Table";
 import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses&Expired";
 import Admin_Customer_Add_ons from "./Admin_Customer_Add_ons"; // ✅ NEW
+import Admin_Sales_Report from "./Admin_Sales_Report"; // ✅ NEW
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -41,7 +42,8 @@ import promotionIcon from "../assets/promotion.png";
 import discountIcon from "../assets/discount.png";
 import seatIcon from "../assets/seat.png";
 import expenseIcon from "../assets/expense.png";
-import hamburgerIcon from "../assets/hamburger.png"; // ✅ ADD
+import hamburgerIcon from "../assets/hamburger.png";
+import salesIcon from "../assets/sales.png"; // ✅ NEW
 import studyHubLogo from "../assets/study_hub.png";
 
 type MenuKey =
@@ -49,7 +51,8 @@ type MenuKey =
   | "add_ons"
   | "item_lists"
   | "staff_expenses"
-  | "customer_add_ons"     // ✅ NEW
+  | "sales_report" // ✅ NEW
+  | "customer_add_ons"
   | "customer_list"
   | "customer_reservation"
   | "seat_table"
@@ -71,23 +74,19 @@ const Admin_menu: React.FC = () => {
     { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
     { name: "Item Lists", key: "item_lists", icon: itemIcon },
 
-    // ✅ STAFF EXPENSES / EXPIRED
     { name: "Staff Expenses", key: "staff_expenses", icon: expenseIcon },
 
+    // ✅ NEW: SALES REPORT
+    { name: "Sales Report", key: "sales_report", icon: salesIcon },
+
     // ✅ CUSTOMER ADD-ONS HISTORY
-    {
-      name: "Customer Add-Ons",
-      key: "customer_add_ons",
-      icon: hamburgerIcon,
-    },
+    { name: "Customer Add-Ons", key: "customer_add_ons", icon: hamburgerIcon },
 
     { name: "Customer List", key: "customer_list", icon: customerListIcon },
     { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
 
     { name: "Seat Table", key: "seat_table", icon: seatIcon },
-
     { name: "Promotions", key: "packages", icon: promotionIcon },
-
     { name: "Discount Records", key: "discount_records", icon: discountIcon },
   ];
 
@@ -104,6 +103,9 @@ const Admin_menu: React.FC = () => {
 
       case "staff_expenses":
         return <Admin_Staff_Expenses_Expired />;
+
+      case "sales_report":
+        return <Admin_Sales_Report />;
 
       case "customer_add_ons":
         return <Admin_Customer_Add_ons />;
@@ -143,9 +145,7 @@ const Admin_menu: React.FC = () => {
             <IonToolbar>
               <div className="menu-brand">
                 <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
-                <span className="menu-title-text figma-title">
-                  Me Tyme Lounge
-                </span>
+                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
               </div>
             </IonToolbar>
           </IonHeader>
