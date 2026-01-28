@@ -17,7 +17,7 @@ import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 
-/* Pages */
+/* ===================== PAGES ===================== */
 import Staff_Dashboard from "./Staff_Dashboard";
 import Customer_Lists from "./Customer_Lists";
 import Customer_Reservations from "./Customer_Reservations";
@@ -25,8 +25,9 @@ import Customer_Calendar from "./Customer_Calendar";
 import Product_Item_Lists from "./Product_Item_lists";
 import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Discount_List";
+import Staff_Sales_Report from "./Staff_Sales_Report";
 
-/* Assets */
+/* ===================== ASSETS ===================== */
 import dashboardIcon from "../assets/add_user.png";
 import studyHubLogo from "../assets/study_hub.png";
 import listIcon from "../assets/list.png";
@@ -35,11 +36,15 @@ import calendarIcon from "../assets/calendar.png";
 import foodIcon from "../assets/food.png";
 import onsIcon from "../assets/hamburger.png";
 import discountIcon from "../assets/discount.png";
+import salesIcon from "../assets/sales.png";
+
+/* ================================================= */
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
-  const [activePage, setActivePage] = useState("dashboard");
+  const [activePage, setActivePage] = useState<string>("dashboard");
 
+  /* ===================== MENU ITEMS ===================== */
   const menuItems = [
     { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
     { name: "Customer Lists", key: "customer_lists", icon: listIcon },
@@ -47,36 +52,53 @@ const Staff_menu: React.FC = () => {
     { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
     { name: "Customer Add-Ons", key: "customer_add_ons", icon: onsIcon },
     { name: "Customer Discount List", key: "customer_discount_list", icon: discountIcon },
+
+    /* ✅ SALES REPORT */
+    { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
+
     { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
   ];
 
+  /* ===================== RENDER CONTENT ===================== */
   const renderContent = () => {
     switch (activePage) {
       case "dashboard":
         return <Staff_Dashboard />;
+
       case "customer_lists":
         return <Customer_Lists />;
+
       case "customer_reservations":
         return <Customer_Reservations />;
+
       case "customer_calendar":
         return <Customer_Calendar />;
+
       case "customer_add_ons":
         return <Customer_Add_ons />;
+
       case "customer_discount_list":
         return <Customer_Discount_List />;
+
+      case "staff_sales_report":
+        return <Staff_Sales_Report />;
+
       case "product_item_lists":
         return <Product_Item_Lists />;
+
       default:
         return <h2>Welcome Staff</h2>;
     }
   };
 
+  /* ===================== LOGOUT ===================== */
   const handleLogout = () => {
     localStorage.clear();
     sessionStorage.clear();
     history.push("/login");
   };
 
+  /* ===================== UI ===================== */
   return (
     <IonPage>
       <IonSplitPane contentId="main" when="(min-width: 768px)">
@@ -86,22 +108,34 @@ const Staff_menu: React.FC = () => {
             <IonToolbar>
               <div className="menu-brand">
                 <img src={studyHubLogo} alt="Study Hub" className="menu-logo" />
-                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+                <span className="menu-title-text figma-title">
+                  Me Tyme Lounge
+                </span>
               </div>
             </IonToolbar>
           </IonHeader>
 
           <IonContent>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4 }}
+            >
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
                   <IonItem
                     button
                     lines="none"
-                    className={`menu-item ${activePage === item.key ? "active" : ""}`}
+                    className={`menu-item ${
+                      activePage === item.key ? "active" : ""
+                    }`}
                     onClick={() => setActivePage(item.key)}
                   >
-                    <img src={item.icon} alt={item.name} className="menu-icon" />
+                    <img
+                      src={item.icon}
+                      alt={item.name}
+                      className="menu-icon"
+                    />
                     <span className="menu-text">{item.name}</span>
                   </IonItem>
                 </IonMenuToggle>

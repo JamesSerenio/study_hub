@@ -1,6 +1,8 @@
 // src/pages/Product_Item_Lists.tsx
 // ✅ STRICT TS, NO any
 // ✅ Add Expenses modal (logs to add_on_expenses)
+// ✅ Expense Amount AUTO = qty * add_ons.expenses_cost (UNIT COST)
+// ✅ If expenses_cost is 0 => fallback to price
 // ✅ Sort by Category OR Stock (asc/desc)
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -55,10 +57,16 @@ interface AddOn {
   id: string;
   category: string;
   name: string;
+
   price: number | string;
   restocked: number | string;
   sold: number | string;
+
+  // ✅ expenses_cost = UNIT COST (money)
+  // ✅ expenses = count/qty logged (not money)
+  expenses_cost: number | string;
   expenses: number | string;
+
   stocks: number | string;
   overall_sales: number | string;
   expected_sales: number | string;
@@ -66,8 +74,6 @@ interface AddOn {
 
   expired: number | string;
   staff_consumed: number | string;
-
-  expenses_cost?: number | string;
 }
 
 interface AddOnExpenseInsert {
@@ -77,9 +83,13 @@ interface AddOnExpenseInsert {
   product_name: string;
   quantity: number;
   expense_type: ExpenseType;
-  expense_amount: number;
+  expense_amount: number; // ✅ AUTO money
   description: string;
 }
+
+/* =========================
+   SAFE PARSE HELPERS
+========================= */
 
 const toNumber = (v: unknown): number => {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
@@ -91,14 +101,44 @@ const toNumber = (v: unknown): number => {
 };
 
 const clampInt = (raw: string, fallback = 0): number => {
-  const n = Math.floor(Number(raw));
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  const n = Math.floor(Number(trimmed));
   return Number.isFinite(n) ? n : fallback;
 };
 
-const clampMoney = (raw: string, fallback = 0): number => {
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
+const money2 = (n: number): string => `₱${n.toFixed(2)}`;
+
+/* =========================
+   AUTO COMPUTE
+========================= */
+
+type UnitSource = "cost" | "price" | "none";
+
+const getUnitCost = (addOn: AddOn | null): { unit: number; source: UnitSource } => {
+  if (!addOn) return { unit: 0, source: "none" };
+
+  const cost = toNumber(addOn.expenses_cost);
+  if (cost > 0) return { unit: cost, source: "cost" };
+
+  // ✅ fallback to price if cost is not set
+  const price = toNumber(addOn.price);
+  if (price > 0) return { unit: price, source: "price" };
+
+  return { unit: 0, source: "none" };
 };
+
+const computeExpenseAmount = (addOn: AddOn | null, qtyStr: string): number => {
+  if (!addOn) return 0;
+  const q = clampInt(qtyStr, 0);
+  const { unit } = getUnitCost(addOn);
+  const total = q * unit;
+  return Number.isFinite(total) ? total : 0;
+};
+
+/* =========================
+   PAGE
+========================= */
 
 const Product_Item_Lists: React.FC = () => {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
@@ -107,7 +147,7 @@ const Product_Item_Lists: React.FC = () => {
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
 
-  // ✅ sort controls
+  // sort controls
   const [sortKey, setSortKey] = useState<SortKey>("category");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
@@ -120,7 +160,7 @@ const Product_Item_Lists: React.FC = () => {
   const [selectedAddOnId, setSelectedAddOnId] = useState<string>("");
   const [expenseType, setExpenseType] = useState<ExpenseType>("expired");
   const [qty, setQty] = useState<string>("1");
-  const [expenseAmount, setExpenseAmount] = useState<string>("0");
+  const [expenseAmount, setExpenseAmount] = useState<string>("0"); // auto
   const [description, setDescription] = useState<string>("");
 
   const fetchAddOns = async (): Promise<void> => {
@@ -129,7 +169,7 @@ const Product_Item_Lists: React.FC = () => {
       const { data, error } = await supabase
         .from("add_ons")
         .select(
-          "id, created_at, category, name, price, restocked, sold, expenses, expenses_cost, stocks, overall_sales, expected_sales, image_url, expired, staff_consumed"
+          "id, created_at, category, name, price, restocked, sold, expenses_cost, expenses, stocks, overall_sales, expected_sales, image_url, expired, staff_consumed"
         )
         .order("created_at", { ascending: false });
 
@@ -161,8 +201,6 @@ const Product_Item_Lists: React.FC = () => {
         const bCat = (b.category ?? "").toString();
         return sortOrder === "asc" ? aCat.localeCompare(bCat) : bCat.localeCompare(aCat);
       }
-
-      // sortKey === "stocks"
       const aStock = toNumber(a.stocks);
       const bStock = toNumber(b.stocks);
       return sortOrder === "asc" ? aStock - bStock : bStock - aStock;
@@ -178,6 +216,12 @@ const Product_Item_Lists: React.FC = () => {
   const selectedAddOn = useMemo(() => {
     return addOns.find((a) => a.id === selectedAddOnId) ?? null;
   }, [addOns, selectedAddOnId]);
+
+  // ✅ AUTO recompute when product or qty changes
+  useEffect(() => {
+    const total = computeExpenseAmount(selectedAddOn, qty);
+    setExpenseAmount(String(total));
+  }, [selectedAddOn?.id, qty]);
 
   const openExpenseModal = (): void => {
     setFullName("");
@@ -202,15 +246,18 @@ const Product_Item_Lists: React.FC = () => {
     const q = clampInt(qty, -1);
     if (q <= 0) return "Quantity must be at least 1.";
 
-    const amt = clampMoney(expenseAmount, -1);
-    if (amt < 0) return "Expense amount must be 0 or higher.";
-
     const desc = description.trim();
     if (!desc) return "Description / reason is required.";
 
     if (selectedAddOn) {
       const stock = toNumber(selectedAddOn.stocks);
       if (q > stock) return `Not enough stock. Available: ${stock}`;
+    }
+
+    // ✅ prevent saving if both cost and price are 0 (no basis)
+    if (selectedAddOn) {
+      const { unit, source } = getUnitCost(selectedAddOn);
+      if (unit <= 0 || source === "none") return "Set expenses_cost (unit cost) or price first (cannot compute).";
     }
 
     return null;
@@ -229,14 +276,16 @@ const Product_Item_Lists: React.FC = () => {
       return;
     }
 
+    const q = clampInt(qty, 1);
+
     const payload: AddOnExpenseInsert = {
       add_on_id: selectedAddOn.id,
       full_name: fullName.trim(),
       category: selectedAddOn.category,
       product_name: selectedAddOn.name,
-      quantity: clampInt(qty, 1),
+      quantity: q,
       expense_type: expenseType,
-      expense_amount: clampMoney(expenseAmount, 0),
+      expense_amount: computeExpenseAmount(selectedAddOn, String(q)),
       description: description.trim(),
     };
 
@@ -259,6 +308,8 @@ const Product_Item_Lists: React.FC = () => {
     }
   };
 
+  const unitInfo = useMemo(() => getUnitCost(selectedAddOn), [selectedAddOn?.id]);
+
   return (
     <IonPage>
       <IonHeader>
@@ -279,7 +330,6 @@ const Product_Item_Lists: React.FC = () => {
             Add Expenses
           </IonButton>
 
-          {/* ✅ SORT KEY */}
           <IonItem lines="none" style={{ maxWidth: 260 }}>
             <IonLabel>Sort</IonLabel>
             <IonSelect
@@ -293,7 +343,6 @@ const Product_Item_Lists: React.FC = () => {
             </IonSelect>
           </IonItem>
 
-          {/* ✅ SORT ORDER */}
           <IonButton fill="clear" onClick={toggleSortOrder}>
             <IonIcon slot="start" icon={swapVerticalOutline} />
             {sortOrder === "asc" ? (
@@ -326,6 +375,7 @@ const Product_Item_Lists: React.FC = () => {
               <IonCol>Staff Used</IonCol>
               <IonCol>Stocks</IonCol>
               <IonCol>Expenses (count)</IonCol>
+              <IonCol>Unit Cost</IonCol>
               <IonCol>Overall Sales</IonCol>
               <IonCol>Expected Sales</IonCol>
             </IonRow>
@@ -347,15 +397,16 @@ const Product_Item_Lists: React.FC = () => {
 
                   <IonCol>{a.name}</IonCol>
                   <IonCol>{a.category}</IonCol>
-                  <IonCol>₱{toNumber(a.price).toFixed(2)}</IonCol>
+                  <IonCol>{money2(toNumber(a.price))}</IonCol>
                   <IonCol>{toNumber(a.restocked)}</IonCol>
                   <IonCol>{toNumber(a.sold)}</IonCol>
                   <IonCol>{toNumber(a.expired)}</IonCol>
                   <IonCol>{toNumber(a.staff_consumed)}</IonCol>
                   <IonCol>{toNumber(a.stocks)}</IonCol>
                   <IonCol>{toNumber(a.expenses)}</IonCol>
-                  <IonCol>₱{toNumber(a.overall_sales).toFixed(2)}</IonCol>
-                  <IonCol>₱{toNumber(a.expected_sales).toFixed(2)}</IonCol>
+                  <IonCol>{money2(toNumber(a.expenses_cost))}</IonCol>
+                  <IonCol>{money2(toNumber(a.overall_sales))}</IonCol>
+                  <IonCol>{money2(toNumber(a.expected_sales))}</IonCol>
                 </IonRow>
               ))
             ) : (
@@ -435,15 +486,8 @@ const Product_Item_Lists: React.FC = () => {
               </IonItem>
 
               <IonItem>
-                <IonLabel position="stacked">Expense Amount (optional)</IonLabel>
-                <IonInput
-                  inputMode="decimal"
-                  value={expenseAmount}
-                  placeholder="0"
-                  onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
-                    setExpenseAmount(String(e.detail.value ?? ""))
-                  }
-                />
+                <IonLabel position="stacked">Expense Amount (auto)</IonLabel>
+                <IonInput inputMode="decimal" value={expenseAmount} readonly />
               </IonItem>
 
               <IonItem>
@@ -472,6 +516,27 @@ const Product_Item_Lists: React.FC = () => {
                 <div>Name: {selectedAddOn.name}</div>
                 <div>Category: {selectedAddOn.category}</div>
                 <div>Current Stock: {toNumber(selectedAddOn.stocks)}</div>
+
+                <div style={{ marginTop: 8 }}>
+                  Unit Source:{" "}
+                  <b>
+                    {unitInfo.source === "cost"
+                      ? "expenses_cost"
+                      : unitInfo.source === "price"
+                      ? "price (fallback)"
+                      : "none"}
+                  </b>
+                </div>
+                <div>Unit Used: <b>{money2(unitInfo.unit)}</b></div>
+                <div>
+                  Total: <b>{money2(computeExpenseAmount(selectedAddOn, qty))}</b>
+                </div>
+
+                {unitInfo.source === "price" && (
+                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                    Note: expenses_cost is 0, so we used price as fallback. Set expenses_cost to match your real unit cost.
+                  </div>
+                )}
               </div>
             )}
 
