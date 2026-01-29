@@ -1,15 +1,16 @@
 // src/pages/Staff_Dashboard.tsx
 // ✅ STRICT TYPESCRIPT
 // ✅ NO any
-// ✅ SAME COLOR LOGIC AS ADMIN:
-//    - promo => YELLOW (occupied_temp)
-//    - regular => ORANGE (occupied)
-// ✅ Conference room => YELLOW when promo_bookings overlap NOW (seat_number IS NULL + status=active)
+// ✅ SAME COLOR LOGIC AS ADMIN
+// ✅ Conference room highlight
+// ✅ NO SCROLL (scrollY={false})
+// ✅ CONSISTENT design via fixed aspect-ratio stage
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonPage, IonContent } from "@ionic/react";
 import seatsImage from "../assets/seats.png";
 import bearImage from "../assets/bear.png";
+import grassImage from "../assets/grass.png";
 import { supabase } from "../utils/supabaseClient";
 
 type SeatStatus = "temp_available" | "occupied_temp" | "occupied" | "reserved";
@@ -174,7 +175,6 @@ const Staff_Dashboard: React.FC = () => {
     [pins]
   );
 
-  // ✅ SAME STATUS LOGIC AS ADMIN
   const loadSeatStatuses = async (): Promise<void> => {
     const startIso = new Date().toISOString();
     const endIso = farFutureIso();
@@ -201,7 +201,6 @@ const Staff_Dashboard: React.FC = () => {
     const next: Record<string, SeatStatus> = {};
     for (const p of pins) next[p.id] = "temp_available";
 
-    // seats: promo => yellow, regular => orange
     if (seatErr) {
       console.error("Seat status error:", seatErr.message);
     } else {
@@ -210,11 +209,11 @@ const Staff_Dashboard: React.FC = () => {
 
       for (const r of rows) {
         const id = normalizeSeatId(r.seat_number);
-        if (r.source === "regular") bySeat[id] = "occupied"; // orange
+        if (r.source === "regular") bySeat[id] = "occupied";
         else if (r.source === "promo") {
-          if (bySeat[id] !== "occupied") bySeat[id] = "occupied_temp"; // yellow
+          if (bySeat[id] !== "occupied") bySeat[id] = "occupied_temp";
         } else {
-          if (!bySeat[id]) bySeat[id] = "occupied"; // fallback
+          if (!bySeat[id]) bySeat[id] = "occupied";
         }
       }
 
@@ -223,12 +222,11 @@ const Staff_Dashboard: React.FC = () => {
       }
     }
 
-    // conference: promo booking => yellow
     if (confErr) {
       console.error("Conference status error:", confErr.message);
     } else {
       const rows = (confData ?? []) as PromoConferenceRow[];
-      if (rows.length > 0) next[CONFERENCE_ID] = "occupied_temp"; // ✅ yellow
+      if (rows.length > 0) next[CONFERENCE_ID] = "occupied_temp";
     }
 
     setStatusBySeat(next);
@@ -249,6 +247,7 @@ const Staff_Dashboard: React.FC = () => {
   const setPinPositionFromClick = (clientX: number, clientY: number): void => {
     if (!calibrate) return;
     if (!selectedPinId) return;
+
     const stage = stageRef.current;
     if (!stage) return;
 
@@ -281,7 +280,7 @@ const Staff_Dashboard: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent fullscreen className="staff-content" scrollY={true}>
+      <IonContent fullscreen className="staff-content" scrollY={false}>
         <div className="seatmap-wrap">
           <div className="seatmap-container">
             <div className="seatmap-card">
@@ -290,6 +289,7 @@ const Staff_Dashboard: React.FC = () => {
                 <span className="seatmap-date">{formatPHDate(now)}</span>
               </div>
 
+              {/* ✅ FIXED PROPORTIONS: stable design across devices */}
               <div className="seatmap-stage" ref={stageRef} onClick={onStageClick}>
                 <img src={seatsImage} alt="Seat Map" className="seatmap-img" />
 
@@ -334,7 +334,8 @@ const Staff_Dashboard: React.FC = () => {
 
               {calibrate ? (
                 <div className="seatmap-hint">
-                  Calibrate mode ON: click a pin to select, then click exact number on the image to place it.
+                  Calibrate mode ON: click a pin to select, then click exact number on the image to
+                  place it.
                   <br />
                   Selected: <strong>{selectedPinId || "NONE"}</strong>{" "}
                   <button type="button" onClick={clearSaved} style={{ marginLeft: 8 }}>
@@ -342,10 +343,11 @@ const Staff_Dashboard: React.FC = () => {
                   </button>
                 </div>
               ) : null}
-            </div>
 
-            {/* 🧸 Bear OUTSIDE card */}
-            <img src={bearImage} alt="Bear" className="seatmap-bear-outside" draggable={false} />
+              {/* ✅ Decorations anchored to card */}
+              <img src={bearImage} alt="Bear" className="seatmap-bear-outside" draggable={false} />
+              <img src={grassImage} alt="Grass" className="seatmap-grass-outside" draggable={false} />
+            </div>
           </div>
         </div>
       </IonContent>

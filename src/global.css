@@ -227,21 +227,48 @@ ion-content,
 }
 
 
-
-/*== staff ==*/
-
 /* =========================
-   STAFF MENU BACKGROUND
+   STAFF MENU (NO SCROLL)
 ========================= */
-
-.staff-menu {
-  --background: hsla(175, 5%, 98%, 1);
-}
 
 .staff-menu ion-content {
   --background: hsla(175, 5%, 98%, 1);
   max-width: 100%;
   overflow-x: hidden;
+}
+
+/* ✅ main container to prevent scroll caused by absolute elements */
+.staff-menu-content {
+  position: relative;
+  overflow: hidden; /* ✅ prevents scrollbars */
+}
+
+/* =========================
+   STATIC FLOWERS LAYER
+========================= */
+
+.menu-flowers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden; /* ✅ extra safety */
+}
+
+/* each flower */
+.menu-flower {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+
+  /* ✅ soft look like your sample */
+  filter: blur(0.2px);
+}
+
+/* ✅ ensure items are above flowers */
+.menu-items-layer {
+  position: relative;
+  z-index: 2;
 }
 
 /* =========================
@@ -252,7 +279,6 @@ ion-content,
   background: transparent;
 }
 
-/* logo + text wrapper */
 .menu-brand {
   display: flex;
   align-items: center;
@@ -261,7 +287,6 @@ ion-content,
   max-width: 100%;
 }
 
-/* logo responsive */
 .menu-logo {
   width: clamp(24px, 6vw, 28px);
   height: clamp(24px, 6vw, 28px);
@@ -269,17 +294,12 @@ ion-content,
   flex-shrink: 0;
 }
 
-/* =========================
-   FIGMA TEXT STYLE
-========================= */
-
 .menu-title-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* responsive figma title */
 .figma-title {
   font-family: "Porter Sans Block", sans-serif;
   font-weight: 400;
@@ -314,11 +334,10 @@ ion-content,
   display: flex;
   align-items: center;
 
-  min-height: 46px; /* ✅ touch-friendly */
+  min-height: 46px;
   max-width: 100%;
 }
 
-/* menu icon */
 .menu-icon {
   width: clamp(20px, 5vw, 22px);
   height: clamp(20px, 5vw, 22px);
@@ -326,7 +345,6 @@ ion-content,
   flex-shrink: 0;
 }
 
-/* text */
 .menu-text {
   position: relative;
   display: inline-block;
@@ -335,7 +353,6 @@ ion-content,
   white-space: nowrap;
 }
 
-/* underline animation */
 .menu-text::after {
   content: "";
   position: absolute;
@@ -352,15 +369,14 @@ ion-content,
   width: 100%;
 }
 
-/* active item */
 .menu-item.active {
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.55);
   backdrop-filter: blur(8px);
   color: #000;
 }
 
 /* =========================
-   LOGOUT BUTTON (SAFE)
+   LOGOUT BUTTON
 ========================= */
 
 .logout-btn {
@@ -383,20 +399,6 @@ ion-content,
   white-space: nowrap;
 
   z-index: 999;
-}
-
-/* =========================
-   SMALL PHONE FIX
-========================= */
-
-@media (max-width: 360px) {
-  .menu-text {
-    font-size: 13px;
-  }
-
-  .logout-btn {
-    padding: 7px 12px;
-  }
 }
 
 
@@ -2094,23 +2096,58 @@ ion-modal.booking-modal {
 ========================= */
 .staff-content {
   background: #b2c197 !important;
+
+  /* ✅ Ionic: totally disable scrolling inside IonContent */
+  --overflow: hidden;
+  overflow: hidden !important;
 }
 
+/* ✅ Make sure the seat card always fits the screen (no scroll) */
 .seatmap-wrap {
+  height: 100%;
+  min-height: 100%;
+
   display: flex;
   justify-content: center;
-  padding: clamp(10px, 2vw, 18px);
+  align-items: center;
+
+  padding: clamp(8px, 1.6vw, 16px);
   box-sizing: border-box;
+
+  /* ✅ allow bear/grass to show outside */
+  overflow: visible;
 }
 
+
+.seatmap-container {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  width: min(100%, 980px);
+
+  /* ✅ safer: give room but not too huge */
+  padding-left: clamp(56px, 10vw, 190px);
+  padding-right: clamp(56px, 10vw, 210px);
+}
+
+
+
+/* card */
 .seatmap-card {
-  width: 100%;
-  max-width: clamp(360px, 56vw, 540px);
+  position: relative;
+  z-index: 10;
+
+  width: min(92vw, 450px);
   border-radius: 18px;
   background: rgb(245, 239, 230) !important;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
-  padding: clamp(12px, 1.6vw, 14px);
+  padding: clamp(10px, 1.4vw, 14px);
   box-sizing: border-box;
+
+  /* ✅ ensure card never exceeds viewport height */
+  max-height: calc(100vh - 16px);
 }
 
 .seatmap-topbar {
@@ -2136,33 +2173,40 @@ ion-modal.booking-modal {
   white-space: nowrap;
 }
 
+/* stage */
 .seatmap-stage {
   position: relative;
   width: 100%;
   border-radius: 16px;
   overflow: hidden;
-  max-height: 600x;
 }
 
+/* ✅ important: seat image shrinks to fit screen height */
 .seatmap-img {
   width: 100%;
-  height: auto; 
-  max-height: 600px;
+  height: auto;
   display: block;
+
+  /* ✅ This prevents vertical scroll on small screens */
+  max-height: calc(100vh - 230px);
 }
 
+/* pins */
 .seat-pin {
   position: absolute;
   transform: translate(-50%, -50%);
   border: 0;
+
   width: 17px;
   height: 17px;
   padding: 0;
+
   border-radius: 999px;
   font-weight: 900;
   font-size: 9px;
   line-height: 20px;
   text-align: center;
+
   color: #141414;
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
   outline: 2px solid rgba(255, 255, 255, 0.95);
@@ -2180,17 +2224,20 @@ ion-modal.booking-modal {
 .seat-pin.selected {
   outline: 2px solid rgba(0, 0, 0, 0.65);
 }
+
+/* status colors */
 .seat-green { background: #00d75a; }
 .seat-yellow { background: #f4c542; }
 .seat-orange { background: red; }
 .seat-purple { background: #b55cff; }
 
+/* legend */
 .seatmap-legend {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 10px 14px;
-  margin-top: 12px;
+  margin-top: 10px;
   padding: 8px 6px 2px;
   opacity: 0.9;
 }
@@ -2210,10 +2257,45 @@ ion-modal.booking-modal {
   outline: 2px solid rgba(0, 0, 0, 0.06);
 }
 
-.seatmap-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  opacity: 0.75;
+/* =========================
+   OUTSIDE DECORATIONS (ALWAYS SHOW)
+   ✅ scale automatically on all devices
+========================= */
+
+/* 🧸 Bear - FRONT (tabon sa seat img / card edge) */
+.seatmap-bear-outside {
+  position: absolute;
+
+  /* ✅ move relative to screen size */
+  left: clamp(-265px, -22vw, -120px);
+  bottom: clamp(350px, 12vh, 170px);
+
+  /* ✅ auto scale */
+  width: clamp(110px, 18vw, 300px);
+  height: auto;
+
+  pointer-events: none;
+  user-select: none;
+
+  z-index: 999; /* ✅ ALWAYS FRONT */
+  opacity: 0.98;
+}
+
+/* 🌿 Grass - right side (behind bear, but visible) */
+.seatmap-grass-outside {
+  position: absolute;
+
+  right: clamp(-216px, -24vw, -130px);
+  top: clamp(-100px, -6vh, 10px);
+
+  width: clamp(320px, 20vw, 330px);
+  height: auto;
+
+  pointer-events: none;
+  user-select: none;
+
+  z-index: 5; /* behind card? still visible outside */
+  opacity: 0.95;
 }
 
 /* =========================
@@ -2221,103 +2303,83 @@ ion-modal.booking-modal {
 ========================= */
 
 /* phones */
-@media (max-width: 420px) {
+@media (max-width: 480px) {
   .seatmap-card {
-    max-width: 100%;
+    width: 94vw;
+    max-height: calc(100vh - 10px);
   }
 
+  .seatmap-img {
+    max-height: calc(100vh - 250px);
+  }
+
+  /* smaller pins */
   .seat-pin {
-    width: 15px;
-    height: 15px;
-    line-height: 18px;
+    width: 14px;
+    height: 14px;
     font-size: 8px;
+    line-height: 16px;
   }
 
   .seat-pin.room {
-    width: 120px;
+    width: 112px;
     height: 22px;
     line-height: 22px;
     font-size: 9px;
   }
 
-  .legend-item {
-    font-size: 11px;
+  /* bear + grass still visible (smaller) */
+  .seatmap-bear-outside {
+    left: -120px;
+    bottom: 110px;
+    width: 140px;
+  }
+
+  .seatmap-grass-outside {
+    right: -130px;
+    top: -10px;
+    width: 160px;
   }
 }
 
 /* tablets */
-@media (min-width: 421px) and (max-width: 1023px) {
+@media (min-width: 481px) and (max-width: 1023px) {
   .seatmap-card {
-    max-width: clamp(420px, 60vw, 540px);
+    width: min(88vw, 300px);
+  }
+
+  .seatmap-bear-outside {
+    left: clamp(-200px, -18vw, -120px);
+    width: clamp(136px, 18vw, 260px);
+  }
+
+  .seatmap-grass-outside {
+    right: clamp(-210px, -20vw, -130px);
+    width: clamp(199px, 20vw, 300px);
+  }
+
+    .seat-pin {
+    width: 12px;
+    height: 12px;
+    font-size: 6px;
+    line-height: 14px;
+  }
+
+  .seat-pin.room {
+    width: 80px;
+    height: 15px;
+    line-height: 16px;
+    font-size: 6px;
   }
 }
 
 /* desktop */
 @media (min-width: 1024px) {
-  .seatmap-card {
-    max-width: 560px;
-  }
-}
-
-@media (max-width: 480px) {
-  .seatmap-stage {
-    max-height: 440px;
-  }
-
   .seatmap-img {
-    max-height: 440px;
+    max-height: 650px;
   }
 }
 
-.seatmap-container {
-  position: relative;
-  display: flex;
-  justify-content: center;
-  
-}
-
-/* 🧸 RESPONSIVE BEAR */
-.seatmap-bear-outside {
-  position: absolute;
-
-  /* position relative sa card */
-  right: -26.5%;
-  bottom: 6%;
-
-  /* auto scaling */
-  width: clamp(70px, 14vw, 140px);
-  height: auto;
-
-  pointer-events: none;
-  user-select: none;
-  opacity: 0.95;
-}
-
-
-/* tablet */
-@media (max-width: 900px) {
-  .seatmap-bear-outside {
-    width: 110px;
-    margin-left: -30px;
-  }
-}
-
-/* phone: hide para hindi sikip */
-@media (max-width: 480px) {
-  .seatmap-bear-outside {
-    display: none;
-  }
-}
-
-
-/* phone */
-@media (max-width: 480px) {
-  .seatmap-bear {
-    width: 80px;
-    right: -25px;
-    bottom: 30px;
-  }
-}
 
 
 /* ---------- SUMMARY ---------- */

@@ -547,7 +547,7 @@ const Admin_Seat_Table: React.FC = () => {
           <div className="seatmap-container">
             <div className="seatmap-card">
               <div className="seatmap-topbar">
-                <p className="seatmap-title">Seat Map (Admin)</p>
+                <p className="seatmap-title">Seat Map</p>
                 <span className="seatmap-date">{formatPHDate(now)}</span>
               </div>
 
