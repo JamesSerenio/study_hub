@@ -2141,6 +2141,7 @@ ion-modal.booking-modal {
   width: 100%;
   border-radius: 16px;
   overflow: hidden;
+  max-height: 600px;
 }
 
 .seatmap-img {

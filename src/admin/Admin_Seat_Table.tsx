@@ -609,7 +609,7 @@ const Admin_Seat_Table: React.FC = () => {
                 <span className="legend-dot seat-green" /> Temporarily Available
               </div>
               <div className="legend-item">
-                <span className="legend-dot seat-yellow" /> Occupied Temporarily (Admin)
+                <span className="legend-dot seat-yellow" /> Occupied Temporarily
               </div>
               <div className="legend-item">
                 <span className="legend-dot seat-orange" /> Occupied
