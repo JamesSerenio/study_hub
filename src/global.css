@@ -2096,22 +2096,21 @@ ion-modal.booking-modal {
   background: #b2c197 !important;
 }
 
-
-
-
 .seatmap-wrap {
   display: flex;
   justify-content: center;
-  padding: 12px;
+  padding: clamp(10px, 2vw, 18px);
+  box-sizing: border-box;
 }
 
 .seatmap-card {
   width: 100%;
-  max-width: 540px;
+  max-width: clamp(360px, 56vw, 540px);
   border-radius: 18px;
   background: rgb(245, 239, 230) !important;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
-  padding: 14px;
+  padding: clamp(12px, 1.6vw, 14px);
+  box-sizing: border-box;
 }
 
 .seatmap-topbar {
@@ -2134,6 +2133,7 @@ ion-modal.booking-modal {
   font-size: 12px;
   font-weight: 800;
   opacity: 0.75;
+  white-space: nowrap;
 }
 
 .seatmap-stage {
@@ -2141,34 +2141,32 @@ ion-modal.booking-modal {
   width: 100%;
   border-radius: 16px;
   overflow: hidden;
-  max-height: 600px;
+  max-height: 600x;
 }
 
 .seatmap-img {
   width: 100%;
-  height: auto;
+  height: auto; 
+  max-height: 600px;
   display: block;
 }
 
-/* Pins */
 .seat-pin {
   position: absolute;
   transform: translate(-50%, -50%);
   border: 0;
-
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
   padding: 0;
-
   border-radius: 999px;
   font-weight: 900;
   font-size: 9px;
   line-height: 20px;
   text-align: center;
-
   color: #141414;
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
   outline: 2px solid rgba(255, 255, 255, 0.95);
+  cursor: pointer;
 }
 
 .seat-pin.room {
@@ -2179,21 +2177,18 @@ ion-modal.booking-modal {
   padding: 0 10px;
 }
 
-/* Selected pin (calibrate mode) */
 .seat-pin.selected {
   outline: 2px solid rgba(0, 0, 0, 0.65);
 }
-
-/* colors */
 .seat-green { background: #00d75a; }
 .seat-yellow { background: #f4c542; }
 .seat-orange { background: red; }
 .seat-purple { background: #b55cff; }
 
-/* legend */
 .seatmap-legend {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 10px 14px;
   margin-top: 12px;
   padding: 8px 6px 2px;
@@ -2215,11 +2210,113 @@ ion-modal.booking-modal {
   outline: 2px solid rgba(0, 0, 0, 0.06);
 }
 
-/* calibrate hint */
 .seatmap-hint {
   margin-top: 8px;
   font-size: 12px;
   opacity: 0.75;
+}
+
+/* =========================
+   RESPONSIVE TUNING
+========================= */
+
+/* phones */
+@media (max-width: 420px) {
+  .seatmap-card {
+    max-width: 100%;
+  }
+
+  .seat-pin {
+    width: 15px;
+    height: 15px;
+    line-height: 18px;
+    font-size: 8px;
+  }
+
+  .seat-pin.room {
+    width: 120px;
+    height: 22px;
+    line-height: 22px;
+    font-size: 9px;
+  }
+
+  .legend-item {
+    font-size: 11px;
+  }
+}
+
+/* tablets */
+@media (min-width: 421px) and (max-width: 1023px) {
+  .seatmap-card {
+    max-width: clamp(420px, 60vw, 540px);
+  }
+}
+
+/* desktop */
+@media (min-width: 1024px) {
+  .seatmap-card {
+    max-width: 560px;
+  }
+}
+
+@media (max-width: 480px) {
+  .seatmap-stage {
+    max-height: 440px;
+  }
+
+  .seatmap-img {
+    max-height: 440px;
+  }
+}
+
+.seatmap-container {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  
+}
+
+/* 🧸 RESPONSIVE BEAR */
+.seatmap-bear-outside {
+  position: absolute;
+
+  /* position relative sa card */
+  right: -26.5%;
+  bottom: 6%;
+
+  /* auto scaling */
+  width: clamp(70px, 14vw, 140px);
+  height: auto;
+
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.95;
+}
+
+
+/* tablet */
+@media (max-width: 900px) {
+  .seatmap-bear-outside {
+    width: 110px;
+    margin-left: -30px;
+  }
+}
+
+/* phone: hide para hindi sikip */
+@media (max-width: 480px) {
+  .seatmap-bear-outside {
+    display: none;
+  }
+}
+
+
+/* phone */
+@media (max-width: 480px) {
+  .seatmap-bear {
+    width: 80px;
+    right: -25px;
+    bottom: 30px;
+  }
 }
 
 

@@ -1,7 +1,15 @@
 // src/pages/Staff_Dashboard.tsx
+// ✅ STRICT TYPESCRIPT
+// ✅ NO any
+// ✅ SAME COLOR LOGIC AS ADMIN:
+//    - promo => YELLOW (occupied_temp)
+//    - regular => ORANGE (occupied)
+// ✅ Conference room => YELLOW when promo_bookings overlap NOW (seat_number IS NULL + status=active)
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonPage, IonContent } from "@ionic/react";
 import seatsImage from "../assets/seats.png";
+import bearImage from "../assets/bear.png";
 import { supabase } from "../utils/supabaseClient";
 
 type SeatStatus = "temp_available" | "occupied_temp" | "occupied" | "reserved";
@@ -18,7 +26,17 @@ type SeatPin = {
 type StoredPos = { x: number; y: number };
 type StoredMap = Record<string, StoredPos>;
 
+type SeatBlockedRow = {
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: "promo" | "regular" | string;
+};
+
+type PromoConferenceRow = { id: string };
+
 const STORAGE_KEY = "seatmap_pin_positions_v1";
+const CONFERENCE_ID = "CONFERENCE_ROOM";
 
 const STATUS_COLOR: Record<SeatStatus, string> = {
   temp_available: "seat-green",
@@ -53,6 +71,7 @@ const loadStored = (): StoredMap => {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return {};
     const rec = parsed as Record<string, unknown>;
+
     const out: StoredMap = {};
     for (const k of Object.keys(rec)) {
       const v = rec[k];
@@ -68,24 +87,10 @@ const saveStored = (m: StoredMap): void => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(m));
 };
 
-type SeatBlockedRow = {
-  seat_number: string;
-  start_at: string;
-  end_at: string;
-  source: "promo" | "regular" | string;
-};
-
-type PromoConferenceRow = {
-  id: string;
-  start_at: string;
-  end_at: string;
-  status: string;
-  area: string;
-};
-
 const normalizeSeatId = (v: string): string => String(v).trim();
 
-const CONFERENCE_ID = "CONFERENCE_ROOM";
+const farFutureIso = (): string =>
+  new Date("2999-12-31T23:59:59.000Z").toISOString();
 
 const Staff_Dashboard: React.FC = () => {
   const defaultPins: SeatPin[] = useMemo(
@@ -169,9 +174,10 @@ const Staff_Dashboard: React.FC = () => {
     [pins]
   );
 
+  // ✅ SAME STATUS LOGIC AS ADMIN
   const loadSeatStatuses = async (): Promise<void> => {
     const startIso = new Date().toISOString();
-    const endIso = new Date("2999-12-31T23:59:59.000Z").toISOString();
+    const endIso = farFutureIso();
 
     const seatsReq = supabase
       .from("seat_blocked_times")
@@ -182,8 +188,10 @@ const Staff_Dashboard: React.FC = () => {
 
     const confReq = supabase
       .from("promo_bookings")
-      .select("id, start_at, end_at, status, area")
+      .select("id")
       .eq("area", "conference_room")
+      .eq("status", "active")
+      .is("seat_number", null)
       .lt("start_at", endIso)
       .gt("end_at", startIso);
 
@@ -193,21 +201,34 @@ const Staff_Dashboard: React.FC = () => {
     const next: Record<string, SeatStatus> = {};
     for (const p of pins) next[p.id] = "temp_available";
 
+    // seats: promo => yellow, regular => orange
     if (seatErr) {
       console.error("Seat status error:", seatErr.message);
     } else {
       const rows = (seatData ?? []) as SeatBlockedRow[];
-      const blocked = new Set(rows.map((r) => normalizeSeatId(r.seat_number)));
+      const bySeat: Record<string, SeatStatus> = {};
+
+      for (const r of rows) {
+        const id = normalizeSeatId(r.seat_number);
+        if (r.source === "regular") bySeat[id] = "occupied"; // orange
+        else if (r.source === "promo") {
+          if (bySeat[id] !== "occupied") bySeat[id] = "occupied_temp"; // yellow
+        } else {
+          if (!bySeat[id]) bySeat[id] = "occupied"; // fallback
+        }
+      }
+
       for (const id of seatIdsOnly) {
-        if (blocked.has(id)) next[id] = "occupied";
+        if (bySeat[id]) next[id] = bySeat[id];
       }
     }
 
+    // conference: promo booking => yellow
     if (confErr) {
       console.error("Conference status error:", confErr.message);
     } else {
       const rows = (confData ?? []) as PromoConferenceRow[];
-      if (rows.length > 0) next[CONFERENCE_ID] = "occupied";
+      if (rows.length > 0) next[CONFERENCE_ID] = "occupied_temp"; // ✅ yellow
     }
 
     setStatusBySeat(next);
@@ -224,6 +245,7 @@ const Staff_Dashboard: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seatIdsOnly.join("|"), pins.length]);
 
+  // ===== calibrate =====
   const setPinPositionFromClick = (clientX: number, clientY: number): void => {
     if (!calibrate) return;
     if (!selectedPinId) return;
@@ -242,7 +264,7 @@ const Staff_Dashboard: React.FC = () => {
 
     const next: StoredMap = { ...stored, [selectedPinId]: { x, y } };
     setStored(next);
-    saveStored(next); // ✅ removed duplicate save
+    saveStored(next);
   };
 
   const onStageClick = (e: React.MouseEvent<HTMLDivElement>): void => {
@@ -259,67 +281,71 @@ const Staff_Dashboard: React.FC = () => {
 
   return (
     <IonPage>
-      {/* ✅ NO LEAVES + BACKGROUND COLOR #FFFF99 */}
       <IonContent fullscreen className="staff-content" scrollY={true}>
         <div className="seatmap-wrap">
-          <div className="seatmap-card">
-            <div className="seatmap-topbar">
-              <p className="seatmap-title">Seat Map</p>
-              <span className="seatmap-date">{formatPHDate(now)}</span>
-            </div>
+          <div className="seatmap-container">
+            <div className="seatmap-card">
+              <div className="seatmap-topbar">
+                <p className="seatmap-title">Seat Map</p>
+                <span className="seatmap-date">{formatPHDate(now)}</span>
+              </div>
 
-            <div className="seatmap-stage" ref={stageRef} onClick={onStageClick}>
-              <img src={seatsImage} alt="Seat Map" className="seatmap-img" />
+              <div className="seatmap-stage" ref={stageRef} onClick={onStageClick}>
+                <img src={seatsImage} alt="Seat Map" className="seatmap-img" />
 
-              {pins.map((p) => {
-                const st: SeatStatus = statusBySeat[p.id] ?? "temp_available";
-                const baseCls = p.kind === "room" ? "seat-pin room" : "seat-pin";
-                const selectedCls = calibrate && selectedPinId === p.id ? " selected" : "";
-                const cls = `${baseCls} ${STATUS_COLOR[st]}${selectedCls}`;
+                {pins.map((p) => {
+                  const st: SeatStatus = statusBySeat[p.id] ?? "temp_available";
+                  const baseCls = p.kind === "room" ? "seat-pin room" : "seat-pin";
+                  const selectedCls = calibrate && selectedPinId === p.id ? " selected" : "";
+                  const cls = `${baseCls} ${STATUS_COLOR[st]}${selectedCls}`;
 
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={cls}
-                    style={{ left: `${p.x}%`, top: `${p.y}%` }}
-                    title={calibrate ? `Click to select: ${p.label}` : `${p.label} • ${st}`}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      if (calibrate) setSelectedPinId(p.id);
-                    }}
-                  >
-                    {p.label}
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={cls}
+                      style={{ left: `${p.x}%`, top: `${p.y}%` }}
+                      title={calibrate ? `Click to select: ${p.label}` : `${p.label} • ${st}`}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        if (calibrate) setSelectedPinId(p.id);
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="seatmap-legend">
+                <div className="legend-item">
+                  <span className="legend-dot seat-green" /> Temporarily Available
+                </div>
+                <div className="legend-item">
+                  <span className="legend-dot seat-yellow" /> Occupied Temporarily
+                </div>
+                <div className="legend-item">
+                  <span className="legend-dot seat-orange" /> Occupied
+                </div>
+                <div className="legend-item">
+                  <span className="legend-dot seat-purple" /> Reserved
+                </div>
+              </div>
+
+              {calibrate ? (
+                <div className="seatmap-hint">
+                  Calibrate mode ON: click a pin to select, then click exact number on the image to place it.
+                  <br />
+                  Selected: <strong>{selectedPinId || "NONE"}</strong>{" "}
+                  <button type="button" onClick={clearSaved} style={{ marginLeft: 8 }}>
+                    Reset Saved Pins
                   </button>
-                );
-              })}
+                </div>
+              ) : null}
             </div>
 
-            <div className="seatmap-legend">
-              <div className="legend-item">
-                <span className="legend-dot seat-green" /> Temporarily Available
-              </div>
-              <div className="legend-item">
-                <span className="legend-dot seat-yellow" /> Occupied Temporarily
-              </div>
-              <div className="legend-item">
-                <span className="legend-dot seat-orange" /> Occupied
-              </div>
-              <div className="legend-item">
-                <span className="legend-dot seat-purple" /> Reserved
-              </div>
-            </div>
-
-            {calibrate ? (
-              <div className="seatmap-hint">
-                Calibrate mode ON: click a pin to select, then click exact number on the image to place it.
-                <br />
-                Selected: <strong>{selectedPinId || "NONE"}</strong>{" "}
-                <button type="button" onClick={clearSaved} style={{ marginLeft: 8 }}>
-                  Reset Saved Pins
-                </button>
-              </div>
-            ) : null}
+            {/* 🧸 Bear OUTSIDE card */}
+            <img src={bearImage} alt="Bear" className="seatmap-bear-outside" draggable={false} />
           </div>
         </div>
       </IonContent>

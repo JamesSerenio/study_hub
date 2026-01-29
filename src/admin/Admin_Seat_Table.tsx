@@ -27,6 +27,7 @@ import {
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import seatsImage from "../assets/seats.png";
+import bearImage from "../assets/bear.png";
 import { supabase } from "../utils/supabaseClient";
 
 type SeatStatus = "temp_available" | "occupied_temp" | "occupied" | "reserved";
@@ -535,100 +536,112 @@ const Admin_Seat_Table: React.FC = () => {
     void loadSeatStatuses();
   };
 
-  const currentStatus: SeatStatus = selectedSeat ? statusBySeat[selectedSeat] ?? "temp_available" : "temp_available";
+  const currentStatus: SeatStatus =
+    selectedSeat ? statusBySeat[selectedSeat] ?? "temp_available" : "temp_available";
 
   return (
     <IonPage>
       <IonContent fullscreen className="staff-content">
         <div className="seatmap-wrap">
-          <div className="seatmap-card">
-            <div className="seatmap-topbar">
-              <p className="seatmap-title">Seat Map (Admin)</p>
-              <span className="seatmap-date">{formatPHDate(now)}</span>
-            </div>
+          {/* ✅ NEW: container para si bear nasa labas ng card (same as Staff_Dashboard) */}
+          <div className="seatmap-container">
+            <div className="seatmap-card">
+              <div className="seatmap-topbar">
+                <p className="seatmap-title">Seat Map (Admin)</p>
+                <span className="seatmap-date">{formatPHDate(now)}</span>
+              </div>
 
-            <div className="seatmap-stage" ref={stageRef} onClick={onStageClick}>
-              <img src={seatsImage} alt="Seat Map" className="seatmap-img" />
+              <div className="seatmap-stage" ref={stageRef} onClick={onStageClick}>
+                <img src={seatsImage} alt="Seat Map" className="seatmap-img" />
 
-              {pins.map((p) => {
-                const st: SeatStatus = statusBySeat[p.id] ?? "temp_available";
-                const baseCls = p.kind === "room" ? "seat-pin room" : "seat-pin";
-                const selectedCls = calibrate && selectedPinId === p.id ? " selected" : "";
-                const cls = `${baseCls} ${STATUS_COLOR[st]}${selectedCls}`;
+                {pins.map((p) => {
+                  const st: SeatStatus = statusBySeat[p.id] ?? "temp_available";
+                  const baseCls = p.kind === "room" ? "seat-pin room" : "seat-pin";
+                  const selectedCls = calibrate && selectedPinId === p.id ? " selected" : "";
+                  const cls = `${baseCls} ${STATUS_COLOR[st]}${selectedCls}`;
 
-                const isRoom = p.kind === "room";
+                  const isRoom = p.kind === "room";
 
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={cls}
-                    style={{ left: `${p.x}%`, top: `${p.y}%` }}
-                    title={
-                      calibrate
-                        ? `Click to select: ${p.label}`
-                        : st === "occupied_temp"
-                        ? `Click to CLEAR temp occupied: ${p.label}`
-                        : st === "temp_available"
-                        ? `Click to SET temp occupied: ${p.label}`
-                        : `Occupied (regular): ${p.label}`
-                    }
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-
-                      if (calibrate) {
-                        setSelectedPinId(p.id);
-                        return;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={cls}
+                      style={{ left: `${p.x}%`, top: `${p.y}%` }}
+                      title={
+                        calibrate
+                          ? `Click to select: ${p.label}`
+                          : st === "occupied_temp"
+                          ? `Click to CLEAR temp occupied: ${p.label}`
+                          : st === "temp_available"
+                          ? `Click to SET temp occupied: ${p.label}`
+                          : `Occupied (regular): ${p.label}`
                       }
+                      onClick={(ev) => {
+                        ev.stopPropagation();
 
-                      const stNow: SeatStatus = statusBySeat[p.id] ?? "temp_available";
+                        if (calibrate) {
+                          setSelectedPinId(p.id);
+                          return;
+                        }
 
-                      if (stNow === "occupied_temp") {
-                        setSelectedSeat(p.id);
-                        setSelectedKind(isRoom ? "room" : "seat");
-                        setIsModalOpen(true);
-                        return;
-                      }
+                        const stNow: SeatStatus = statusBySeat[p.id] ?? "temp_available";
 
-                      if (stNow === "temp_available") {
-                        openTempModalForPin(p.id, isRoom ? "room" : "seat");
-                        return;
-                      }
+                        if (stNow === "occupied_temp") {
+                          setSelectedSeat(p.id);
+                          setSelectedKind(isRoom ? "room" : "seat");
+                          setIsModalOpen(true);
+                          return;
+                        }
 
-                      alert("This is occupied/reserved (not temporary).");
-                    }}
-                  >
-                    {p.label}
+                        if (stNow === "temp_available") {
+                          openTempModalForPin(p.id, isRoom ? "room" : "seat");
+                          return;
+                        }
+
+                        alert("This is occupied/reserved (not temporary).");
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="seatmap-legend">
+                <div className="legend-item">
+                  <span className="legend-dot seat-green" /> Temporarily Available
+                </div>
+                <div className="legend-item">
+                  <span className="legend-dot seat-yellow" /> Occupied Temporarily
+                </div>
+                <div className="legend-item">
+                  <span className="legend-dot seat-orange" /> Occupied
+                </div>
+                <div className="legend-item">
+                  <span className="legend-dot seat-purple" /> Reserved
+                </div>
+              </div>
+
+              {calibrate ? (
+                <div className="seatmap-hint">
+                  Calibrate mode ON: click a pin to select, then click exact number on the image to place it.
+                  <br />
+                  Selected: <strong>{selectedPinId || "NONE"}</strong>{" "}
+                  <button type="button" onClick={clearSaved} style={{ marginLeft: 8 }}>
+                    Reset Saved Pins
                   </button>
-                );
-              })}
+                </div>
+              ) : null}
             </div>
 
-            <div className="seatmap-legend">
-              <div className="legend-item">
-                <span className="legend-dot seat-green" /> Temporarily Available
-              </div>
-              <div className="legend-item">
-                <span className="legend-dot seat-yellow" /> Occupied Temporarily
-              </div>
-              <div className="legend-item">
-                <span className="legend-dot seat-orange" /> Occupied
-              </div>
-              <div className="legend-item">
-                <span className="legend-dot seat-purple" /> Reserved
-              </div>
-            </div>
-
-            {calibrate ? (
-              <div className="seatmap-hint">
-                Calibrate mode ON: click a pin to select, then click exact number on the image to place it.
-                <br />
-                Selected: <strong>{selectedPinId || "NONE"}</strong>{" "}
-                <button type="button" onClick={clearSaved} style={{ marginLeft: 8 }}>
-                  Reset Saved Pins
-                </button>
-              </div>
-            ) : null}
+            {/* ✅ SAME AS STAFF_DASHBOARD: bear OUTSIDE card */}
+            <img
+              src={bearImage}
+              alt="Bear"
+              className="seatmap-bear-outside"
+              draggable={false}
+            />
           </div>
         </div>
 
@@ -660,12 +673,19 @@ const Admin_Seat_Table: React.FC = () => {
             <div className="bookadd-card">
               <IonItem className="form-item">
                 <IonLabel position="stacked">Target</IonLabel>
-                <IonInput value={isConference(selectedSeat) ? "CONFERENCE ROOM" : `SEAT ${selectedSeat}`} readonly />
+                <IonInput
+                  value={isConference(selectedSeat) ? "CONFERENCE ROOM" : `SEAT ${selectedSeat}`}
+                  readonly
+                />
               </IonItem>
 
               {currentStatus === "occupied_temp" ? (
                 <>
-                  <IonButton expand="block" color="medium" onClick={() => void clearTempNow(selectedSeat, selectedKind)}>
+                  <IonButton
+                    expand="block"
+                    color="medium"
+                    onClick={() => void clearTempNow(selectedSeat, selectedKind)}
+                  >
                     Set as Available (Delete Yellow Record)
                   </IonButton>
 
