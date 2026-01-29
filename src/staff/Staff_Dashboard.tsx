@@ -96,46 +96,46 @@ const farFutureIso = (): string =>
 const Staff_Dashboard: React.FC = () => {
   const defaultPins: SeatPin[] = useMemo(
     () => [
-      { id: CONFERENCE_ID, label: "CONFERENCE ROOM", x: 26.0, y: 23.8, kind: "room" },
+      { id: CONFERENCE_ID, label: "CONFERENCE ROOM", x: 13, y: 21.6, kind: "room" },
 
-      { id: "6", label: "6", x: 40.8, y: 30.5, kind: "seat" },
-      { id: "5", label: "5", x: 47.5, y: 30.5, kind: "seat" },
-      { id: "4", label: "4", x: 54, y: 30.5, kind: "seat" },
-      { id: "3", label: "3", x: 60.3, y: 30.5, kind: "seat" },
-      { id: "2", label: "2", x: 75.3, y: 30.5, kind: "seat" },
-      { id: "1", label: "1", x: 82, y: 30.5, kind: "seat" },
+      { id: "6", label: "6", x: 39.3, y: 29, kind: "seat" },
+      { id: "5", label: "5", x: 45.8, y: 29, kind: "seat" },
+      { id: "4", label: "4", x: 52.5, y: 29, kind: "seat" },
+      { id: "3", label: "3", x: 58.9, y: 29, kind: "seat" },
+      { id: "2", label: "2", x: 73.6, y: 29, kind: "seat" },
+      { id: "1", label: "1", x: 80.2, y: 29, kind: "seat" },
 
-      { id: "11", label: "11", x: 14.5, y: 42.1, kind: "seat" },
-      { id: "10", label: "10", x: 26, y: 44.0, kind: "seat" },
-      { id: "9", label: "9", x: 29.4, y: 40.8, kind: "seat" },
+      { id: "11", label: "11", x: 13, y: 40.7, kind: "seat" },
+      { id: "10", label: "10", x: 25.5, y: 42.7, kind: "seat" },
+      { id: "9", label: "9", x: 28, y: 39.5, kind: "seat" },
 
-      { id: "8A", label: "8A", x: 43.5, y: 41, kind: "seat" },
-      { id: "8B", label: "8B", x: 43.5, y: 44.6, kind: "seat" },
+      { id: "8A", label: "8A", x: 42, y: 39.5, kind: "seat" },
+      { id: "8B", label: "8B", x: 42., y: 43, kind: "seat" },
 
-      { id: "7A", label: "7A", x: 59.6, y: 40.7, kind: "seat" },
-      { id: "7B", label: "7B", x: 59.6, y: 44.4, kind: "seat" },
+      { id: "7A", label: "7A", x: 58, y: 39.7, kind: "seat" },
+      { id: "7B", label: "7B", x: 58.2, y: 43, kind: "seat" },
 
       { id: "13", label: "13", x: 42.5, y: 62.2, kind: "seat" },
 
-      { id: "14", label: "14", x: 49.5, y: 53.6, kind: "seat" },
-      { id: "15", label: "15", x: 56, y: 53.6, kind: "seat" },
-      { id: "16", label: "16", x: 62.5, y: 53.6, kind: "seat" },
-      { id: "17", label: "17", x: 69.1, y: 53.6, kind: "seat" },
+      { id: "14", label: "14", x: 47.8, y: 52.3, kind: "seat" },
+      { id: "15", label: "15", x: 54.5, y: 52.3, kind: "seat" },
+      { id: "16", label: "16", x: 61, y: 52.2, kind: "seat" },
+      { id: "17", label: "17", x: 67.6, y: 52.3, kind: "seat" },
 
-      { id: "25", label: "25", x: 57.1, y: 62.1, kind: "seat" },
+      { id: "25", label: "25", x: 55.5, y: 60.8, kind: "seat" },
 
-      { id: "18", label: "18", x: 49.5, y: 70.8, kind: "seat" },
-      { id: "19", label: "19", x: 58.4, y: 70.8, kind: "seat" },
-      { id: "20", label: "20", x: 67.6, y: 70.8, kind: "seat" },
+      { id: "18", label: "18", x: 47.8, y: 69.5, kind: "seat" },
+      { id: "19", label: "19", x: 56.7, y: 69.5, kind: "seat" },
+      { id: "20", label: "20", x: 65.8, y: 69.5, kind: "seat" },
 
-      { id: "24", label: "24", x: 77.5, y: 58, kind: "seat" },
-      { id: "23", label: "23", x: 83.4, y: 60.7, kind: "seat" },
-      { id: "22", label: "22", x: 75.8, y: 66.3, kind: "seat" },
-      { id: "21", label: "21", x: 83, y: 70, kind: "seat" },
+      { id: "24", label: "24", x: 76,y: 56.7, kind: "seat" },
+      { id: "23", label: "23", x: 81.5, y: 59.5, kind: "seat" },
+      { id: "22", label: "22", x: 74.4, y: 65.3, kind: "seat" },
+      { id: "21", label: "21", x: 82, y: 68.7, kind: "seat" },
 
-      { id: "12A", label: "12A", x: 10.7, y: 68.1, kind: "seat" },
-      { id: "12B", label: "12B", x: 17.8, y: 69.6, kind: "seat" },
-      { id: "12C", label: "12C", x: 25.7, y: 69.6, kind: "seat" },
+      { id: "12A", label: "12A", x: 9.1, y: 67, kind: "seat" },
+      { id: "12B", label: "12B", x: 16.5, y: 68.3, kind: "seat" },
+      { id: "12C", label: "12C", x: 24, y: 68.2 , kind: "seat" },
     ],
     []
   );

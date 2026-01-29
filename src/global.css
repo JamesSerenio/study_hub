@@ -2138,15 +2138,12 @@ ion-modal.booking-modal {
 .seatmap-card {
   position: relative;
   z-index: 10;
-
   width: min(92vw, 450px);
   border-radius: 18px;
   background: rgb(245, 239, 230) !important;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
   padding: clamp(10px, 1.4vw, 14px);
   box-sizing: border-box;
-
-  /* ✅ ensure card never exceeds viewport height */
   max-height: calc(100vh - 16px);
 }
 
@@ -2181,13 +2178,10 @@ ion-modal.booking-modal {
   overflow: hidden;
 }
 
-/* ✅ important: seat image shrinks to fit screen height */
 .seatmap-img {
   width: 100%;
   height: auto;
   display: block;
-
-  /* ✅ This prevents vertical scroll on small screens */
   max-height: calc(100vh - 230px);
 }
 
@@ -2196,17 +2190,14 @@ ion-modal.booking-modal {
   position: absolute;
   transform: translate(-50%, -50%);
   border: 0;
-
-  width: 17px;
-  height: 17px;
+  width: 13px;
+  height: 13px;
   padding: 0;
-
   border-radius: 999px;
   font-weight: 900;
-  font-size: 9px;
-  line-height: 20px;
+  font-size: 7px;
+  line-height: 15px;
   text-align: center;
-
   color: #141414;
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
   outline: 2px solid rgba(255, 255, 255, 0.95);
@@ -2265,36 +2256,26 @@ ion-modal.booking-modal {
 /* 🧸 Bear - FRONT (tabon sa seat img / card edge) */
 .seatmap-bear-outside {
   position: absolute;
-
-  /* ✅ move relative to screen size */
-  left: clamp(-265px, -22vw, -120px);
+  left: clamp(-243px, -22vw, -120px);
   bottom: clamp(350px, 12vh, 170px);
-
-  /* ✅ auto scale */
   width: clamp(110px, 18vw, 300px);
   height: auto;
-
   pointer-events: none;
   user-select: none;
-
-  z-index: 999; /* ✅ ALWAYS FRONT */
+  z-index: 999; 
   opacity: 0.98;
 }
 
 /* 🌿 Grass - right side (behind bear, but visible) */
 .seatmap-grass-outside {
   position: absolute;
-
-  right: clamp(-216px, -24vw, -130px);
-  top: clamp(-100px, -6vh, 10px);
-
-  width: clamp(320px, 20vw, 330px);
+  right: clamp(-200px, -24vw, -130px);
+  top: clamp(-140px, -12vh, 10px);
+  width: clamp(300px, 20vw, 330px);
   height: auto;
-
   pointer-events: none;
   user-select: none;
-
-  z-index: 5; /* behind card? still visible outside */
+  z-index: 5; 
   opacity: 0.95;
 }
 
@@ -2377,6 +2358,71 @@ ion-modal.booking-modal {
 @media (min-width: 1024px) {
   .seatmap-img {
     max-height: 650px;
+  }
+}
+
+/* =========================
+   ANIMATIONS (FADE + FLOAT)
+========================= */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInSoft {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes floatSoft {
+  0%   { transform: translateY(0); }
+  50%  { transform: translateY(-6px); }
+  100% { transform: translateY(0); }
+}
+
+/* ✅ Card fade-up */
+.seatmap-card {
+  animation: fadeUp 420ms ease-out both;
+}
+
+/* ✅ Stage (image area) soft fade */
+.seatmap-stage {
+  animation: fadeInSoft 520ms ease-out both;
+  animation-delay: 80ms;
+}
+
+/* ✅ Pins: staggered fade (smooth) */
+.seat-pin {
+  opacity: 0;
+  animation: fadeUp 360ms ease-out both;
+  animation-delay: calc(var(--i, 0) * 18ms + 120ms);
+}
+
+/* ✅ Outside decorations: fade + float */
+.seatmap-bear-outside,
+.seatmap-grass-outside {
+  opacity: 0;
+  animation:
+    fadeInSoft 650ms ease-out both,
+    floatSoft 3.6s ease-in-out infinite;
+  animation-delay: 140ms, 800ms; /* first is fade, second is float */
+}
+
+/* ✅ Reduce motion accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .seatmap-card,
+  .seatmap-stage,
+  .seat-pin,
+  .seatmap-bear-outside,
+  .seatmap-grass-outside {
+    animation: none !important;
+    opacity: 1 !important;
   }
 }
 

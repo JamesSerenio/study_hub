@@ -1,13 +1,15 @@
 // src/pages/Admin_Seat_Table.tsx
 // ✅ STRICT TYPESCRIPT
 // ✅ NO any
-// ✅ Uses EXISTING class names from your global CSS
+// ✅ SAME CLASS STRUCTURE AS Staff_Dashboard (staff-content / seatmap-wrap / seatmap-container / seatmap-card / etc.)
+// ✅ SAME X/Y pins AS Staff_Dashboard
+// ✅ Bear + Grass using SAME classes: seatmap-bear-outside / seatmap-grass-outside (placed SAME way as Staff: inside card)
 // ✅ Yellow = occupied_temp (source="promo")
 // ✅ Orange = occupied (source="regular")
 // ✅ Admin can SET/CLEAR temp occupied (yellow) for SEATS + CONFERENCE ROOM
 // ✅ Seats: promo_bookings(area="common_area", seat_number=...)
 // ✅ Conference: promo_bookings(area="conference_room", seat_number=NULL)
-// ✅ CLEAR = DELETE promo_bookings rows that overlap NOW (instead of update cancelled)
+// ✅ CLEAR = DELETE promo_bookings rows that overlap NOW
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -28,6 +30,7 @@ import {
 import { closeOutline } from "ionicons/icons";
 import seatsImage from "../assets/seats.png";
 import bearImage from "../assets/bear.png";
+import grassImage from "../assets/grass.png";
 import { supabase } from "../utils/supabaseClient";
 
 type SeatStatus = "temp_available" | "occupied_temp" | "occupied" | "reserved";
@@ -160,9 +163,9 @@ const addDurationToIso = (startIso: string, hhmm: string): string => {
   const start = new Date(startIso);
   if (!Number.isFinite(start.getTime())) return startIso;
 
-  const parts = hhmm.split(":");
-  const h = Number(parts[0]);
-  const m = Number(parts[1]);
+  const [hh, mm] = hhmm.split(":");
+  const h = Number(hh);
+  const m = Number(mm);
   if (Number.isNaN(h) || Number.isNaN(m)) return startIso;
 
   const totalMin = h * 60 + m;
@@ -172,53 +175,55 @@ const addDurationToIso = (startIso: string, hhmm: string): string => {
 const farFutureIso = (): string => new Date("2999-12-31T23:59:59.000Z").toISOString();
 
 const Admin_Seat_Table: React.FC = () => {
+  // ✅ SAME X/Y AS Staff_Dashboard
   const defaultPins: SeatPin[] = useMemo(
     () => [
-      { id: CONFERENCE_ID, label: "CONFERENCE ROOM", x: 26.0, y: 23.8, kind: "room" },
+      { id: CONFERENCE_ID, label: "CONFERENCE ROOM", x: 13, y: 21.6, kind: "room" },
 
-      { id: "6", label: "6", x: 40.8, y: 30.5, kind: "seat" },
-      { id: "5", label: "5", x: 47.5, y: 30.5, kind: "seat" },
-      { id: "4", label: "4", x: 54, y: 30.5, kind: "seat" },
-      { id: "3", label: "3", x: 60.3, y: 30.5, kind: "seat" },
-      { id: "2", label: "2", x: 75.3, y: 30.5, kind: "seat" },
-      { id: "1", label: "1", x: 82, y: 30.5, kind: "seat" },
+      { id: "6", label: "6", x: 39.3, y: 29, kind: "seat" },
+      { id: "5", label: "5", x: 45.8, y: 29, kind: "seat" },
+      { id: "4", label: "4", x: 52.5, y: 29, kind: "seat" },
+      { id: "3", label: "3", x: 58.9, y: 29, kind: "seat" },
+      { id: "2", label: "2", x: 73.6, y: 29, kind: "seat" },
+      { id: "1", label: "1", x: 80.2, y: 29, kind: "seat" },
 
-      { id: "11", label: "11", x: 14.5, y: 42.1, kind: "seat" },
-      { id: "10", label: "10", x: 26, y: 44.0, kind: "seat" },
-      { id: "9", label: "9", x: 29.4, y: 40.8, kind: "seat" },
+      { id: "11", label: "11", x: 13, y: 40.7, kind: "seat" },
+      { id: "10", label: "10", x: 25.5, y: 42.7, kind: "seat" },
+      { id: "9", label: "9", x: 28, y: 39.5, kind: "seat" },
 
-      { id: "8A", label: "8A", x: 43.5, y: 41, kind: "seat" },
-      { id: "8B", label: "8B", x: 43.5, y: 44.6, kind: "seat" },
+      { id: "8A", label: "8A", x: 42, y: 39.5, kind: "seat" },
+      { id: "8B", label: "8B", x: 42.0, y: 43, kind: "seat" },
 
-      { id: "7A", label: "7A", x: 59.6, y: 40.7, kind: "seat" },
-      { id: "7B", label: "7B", x: 59.6, y: 44.4, kind: "seat" },
+      { id: "7A", label: "7A", x: 58, y: 39.7, kind: "seat" },
+      { id: "7B", label: "7B", x: 58.2, y: 43, kind: "seat" },
 
       { id: "13", label: "13", x: 42.5, y: 62.2, kind: "seat" },
 
-      { id: "14", label: "14", x: 49.5, y: 53.6, kind: "seat" },
-      { id: "15", label: "15", x: 56, y: 53.6, kind: "seat" },
-      { id: "16", label: "16", x: 62.5, y: 53.6, kind: "seat" },
-      { id: "17", label: "17", x: 69.1, y: 53.6, kind: "seat" },
+      { id: "14", label: "14", x: 47.8, y: 52.3, kind: "seat" },
+      { id: "15", label: "15", x: 54.5, y: 52.3, kind: "seat" },
+      { id: "16", label: "16", x: 61, y: 52.2, kind: "seat" },
+      { id: "17", label: "17", x: 67.6, y: 52.3, kind: "seat" },
 
-      { id: "25", label: "25", x: 57.1, y: 62.1, kind: "seat" },
+      { id: "25", label: "25", x: 55.5, y: 60.8, kind: "seat" },
 
-      { id: "18", label: "18", x: 49.5, y: 70.8, kind: "seat" },
-      { id: "19", label: "19", x: 58.4, y: 70.8, kind: "seat" },
-      { id: "20", label: "20", x: 67.6, y: 70.8, kind: "seat" },
+      { id: "18", label: "18", x: 47.8, y: 69.5, kind: "seat" },
+      { id: "19", label: "19", x: 56.7, y: 69.5, kind: "seat" },
+      { id: "20", label: "20", x: 65.8, y: 69.5, kind: "seat" },
 
-      { id: "24", label: "24", x: 77.5, y: 58, kind: "seat" },
-      { id: "23", label: "23", x: 83.4, y: 60.7, kind: "seat" },
-      { id: "22", label: "22", x: 75.8, y: 66.3, kind: "seat" },
-      { id: "21", label: "21", x: 83, y: 70, kind: "seat" },
+      { id: "24", label: "24", x: 76, y: 56.7, kind: "seat" },
+      { id: "23", label: "23", x: 81.5, y: 59.5, kind: "seat" },
+      { id: "22", label: "22", x: 74.4, y: 65.3, kind: "seat" },
+      { id: "21", label: "21", x: 82, y: 68.7, kind: "seat" },
 
-      { id: "12A", label: "12A", x: 10.7, y: 68.1, kind: "seat" },
-      { id: "12B", label: "12B", x: 17.8, y: 69.6, kind: "seat" },
-      { id: "12C", label: "12C", x: 25.7, y: 69.6, kind: "seat" },
+      { id: "12A", label: "12A", x: 9.1, y: 67, kind: "seat" },
+      { id: "12B", label: "12B", x: 16.5, y: 68.3, kind: "seat" },
+      { id: "12C", label: "12C", x: 24, y: 68.2, kind: "seat" },
     ],
     []
   );
 
   const [stored, setStored] = useState<StoredMap>(() => loadStored());
+
   const pins: SeatPin[] = useMemo(() => {
     return defaultPins.map((p) => {
       const s = stored[p.id];
@@ -243,6 +248,7 @@ const Admin_Seat_Table: React.FC = () => {
       return false;
     }
   }, []);
+
   const [selectedPinId, setSelectedPinId] = useState<string>("");
   const stageRef = useRef<HTMLDivElement | null>(null);
 
@@ -288,7 +294,6 @@ const Admin_Seat_Table: React.FC = () => {
     void loadRequiredIds();
   }, []);
 
-  // ===== statuses (promo=YELLOW, regular=ORANGE) =====
   const loadSeatStatuses = async (): Promise<void> => {
     const startIso = new Date().toISOString();
     const endIso = farFutureIso();
@@ -309,10 +314,8 @@ const Admin_Seat_Table: React.FC = () => {
       .lt("start_at", endIso)
       .gt("end_at", startIso);
 
-    const [{ data: seatData, error: seatErr }, { data: confData, error: confErr }] = await Promise.all([
-      seatsReq,
-      confReq,
-    ]);
+    const [{ data: seatData, error: seatErr }, { data: confData, error: confErr }] =
+      await Promise.all([seatsReq, confReq]);
 
     const next: Record<string, SeatStatus> = {};
     for (const p of pins) next[p.id] = "temp_available";
@@ -364,6 +367,7 @@ const Admin_Seat_Table: React.FC = () => {
   const setPinPositionFromClick = (clientX: number, clientY: number): void => {
     if (!calibrate) return;
     if (!selectedPinId) return;
+
     const stage = stageRef.current;
     if (!stage) return;
 
@@ -416,7 +420,6 @@ const Admin_Seat_Table: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  // ✅ CLEAR = DELETE the overlapping promo_bookings rows (NOW)
   const clearTempNow = async (pinId: string, kind: PinKind): Promise<void> => {
     const nowIso = new Date().toISOString();
     const area = getAreaForSelection(kind);
@@ -443,7 +446,6 @@ const Admin_Seat_Table: React.FC = () => {
     }
 
     const ids = list.map((r) => r.id);
-
     const { error: delErr } = await supabase.from("promo_bookings").delete().in("id", ids);
     if (delErr) return alert(`Delete error: ${delErr.message}`);
 
@@ -458,7 +460,8 @@ const Admin_Seat_Table: React.FC = () => {
     const trimmed = fullName.trim();
     if (!trimmed) return alert("Full Name is required.");
 
-    if (!packageId) return alert('Missing package (area="common_area"). Create at least 1 common_area package.');
+    if (!packageId)
+      return alert('Missing package (area="common_area"). Create at least 1 common_area package.');
     if (!packageOptionId) return alert("Missing package option. Create at least 1 package option.");
 
     if (!openTime) {
@@ -528,7 +531,6 @@ const Admin_Seat_Table: React.FC = () => {
     const { error } = await supabase.from("promo_bookings").insert(insertPayload);
 
     setSaving(false);
-
     if (error) return alert(`Error saving: ${error.message}`);
 
     setIsModalOpen(false);
@@ -541,9 +543,9 @@ const Admin_Seat_Table: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent fullscreen className="staff-content">
+      {/* ✅ SAME CLASS AS STAFF + no scroll */}
+      <IonContent fullscreen className="staff-content" scrollY={false}>
         <div className="seatmap-wrap">
-          {/* ✅ NEW: container para si bear nasa labas ng card (same as Staff_Dashboard) */}
           <div className="seatmap-container">
             <div className="seatmap-card">
               <div className="seatmap-topbar">
@@ -559,7 +561,6 @@ const Admin_Seat_Table: React.FC = () => {
                   const baseCls = p.kind === "room" ? "seat-pin room" : "seat-pin";
                   const selectedCls = calibrate && selectedPinId === p.id ? " selected" : "";
                   const cls = `${baseCls} ${STATUS_COLOR[st]}${selectedCls}`;
-
                   const isRoom = p.kind === "room";
 
                   return (
@@ -575,7 +576,7 @@ const Admin_Seat_Table: React.FC = () => {
                           ? `Click to CLEAR temp occupied: ${p.label}`
                           : st === "temp_available"
                           ? `Click to SET temp occupied: ${p.label}`
-                          : `Occupied (regular): ${p.label}`
+                          : `Occupied/Reserved: ${p.label}`
                       }
                       onClick={(ev) => {
                         ev.stopPropagation();
@@ -633,15 +634,11 @@ const Admin_Seat_Table: React.FC = () => {
                   </button>
                 </div>
               ) : null}
-            </div>
 
-            {/* ✅ SAME AS STAFF_DASHBOARD: bear OUTSIDE card */}
-            <img
-              src={bearImage}
-              alt="Bear"
-              className="seatmap-bear-outside"
-              draggable={false}
-            />
+              {/* ✅ SAME AS STAFF: decorations placed INSIDE card using SAME classes */}
+              <img src={bearImage} alt="Bear" className="seatmap-bear-outside" draggable={false} />
+              <img src={grassImage} alt="Grass" className="seatmap-grass-outside" draggable={false} />
+            </div>
           </div>
         </div>
 
@@ -721,7 +718,12 @@ const Admin_Seat_Table: React.FC = () => {
                     </IonItem>
                   )}
 
-                  <IonButton expand="block" disabled={saving} onClick={() => void saveTempOccupied()} color="warning">
+                  <IonButton
+                    expand="block"
+                    disabled={saving}
+                    onClick={() => void saveTempOccupied()}
+                    color="warning"
+                  >
                     {saving ? "Saving..." : "Set as Occupied Temporarily (Yellow)"}
                   </IonButton>
 
