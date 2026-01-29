@@ -1,12 +1,6 @@
 // src/pages/Book_Add.tsx
 import React, { useState } from "react";
-import {
-  IonPage,
-  IonHeader,
-  IonContent,
-  IonButton,
-  IonAlert,
-} from "@ionic/react";
+import { IonPage, IonHeader, IonContent, IonButton, IonAlert } from "@ionic/react";
 import { useHistory } from "react-router-dom";
 
 import BookingModal from "../components/BookingModal";
@@ -15,6 +9,7 @@ import PromoModal from "../components/PromoModal";
 
 import leaves from "../assets/leave.png";
 import studyHubLogo from "../assets/study_hub.png";
+import whiteBear from "../assets/white_bear.png";
 
 type SeatGroup = { title: string; seats: string[] };
 
@@ -40,9 +35,7 @@ const Book_Add: React.FC = () => {
 
   // BOOKING SAVED ALERT
   const [bookingSavedOpen, setBookingSavedOpen] = useState<boolean>(false);
-  const [bookingSavedMessage, setBookingSavedMessage] = useState<string>(
-    "Booking saved successfully."
-  );
+  const [bookingSavedMessage, setBookingSavedMessage] = useState<string>("Booking saved successfully.");
 
   // ADD-ONS SENT ALERT
   const [addOnsSentOpen, setAddOnsSentOpen] = useState<boolean>(false);
@@ -56,7 +49,7 @@ const Book_Add: React.FC = () => {
       <IonHeader />
 
       <IonContent fullscreen className="bookadd-content" scrollY={false}>
-        {/* ✅ SAME LEAF STRUCTURE AS LOGIN (wrapper angle + inner img float) */}
+        {/* ✅ LEAVES */}
         <div className="leaf leaf-top-left">
           <img src={leaves} className="leaf-img" alt="leaf" />
         </div>
@@ -73,20 +66,35 @@ const Book_Add: React.FC = () => {
           <img src={leaves} className="leaf-img" alt="leaf" />
         </div>
 
+        {/* ✅ WHITE BEAR OUTSIDE CARD (BACKGROUND LAYER) */}
+        <div className="bookadd-bear" aria-hidden="true">
+          <img src={whiteBear} className="bookadd-bear-img" alt="" draggable={false} />
+        </div>
+
+        {/* ✅ CONTENT */}
         <div className="bookadd-wrapper">
           <div className="bookadd-hero-card">
             {/* HEADER */}
             <div className="bookadd-hero-header">
               <div className="bookadd-hero-brand">
-                <img
-                  src={studyHubLogo}
-                  className="bookadd-hero-logo"
-                  alt="Study Hub"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => history.push("/login")}
-                  onKeyDown={(e) => e.key === "Enter" && history.push("/login")}
-                />
+                {/* ✅ FIX: Use BUTTON instead of focusable IMG (removes aria-hidden focus warning) */}
+                <button
+                  type="button"
+                  className="bookadd-hero-logo-btn"
+                  onClick={(e) => {
+                    // remove focus before navigation (extra safe with Ionic transitions)
+                    (e.currentTarget as HTMLButtonElement).blur();
+                    history.push("/login");
+                  }}
+                >
+                  <img
+                    src={studyHubLogo}
+                    className="bookadd-hero-logo"
+                    alt="Study Hub"
+                    draggable={false}
+                  />
+                </button>
+
                 <div className="bookadd-hero-text">
                   <p className="bookadd-hero-title">Welcome to Me Tyme Lounge!</p>
                   <p className="bookadd-hero-subtitle">
@@ -161,13 +169,11 @@ const Book_Add: React.FC = () => {
         <AddOnsModal
           isOpen={isAddOnsOpen}
           onClose={() => setIsAddOnsOpen(false)}
-          onSaved={() => {
-            setAddOnsSentOpen(true); // ✅ show alert, close later on OK
-          }}
+          onSaved={() => setAddOnsSentOpen(true)}
           seatGroups={SEAT_GROUPS}
         />
 
-        {/* BOOKING ALERT (close form on OK) */}
+        {/* ALERTS */}
         <IonAlert
           isOpen={bookingSavedOpen}
           header="Saved"
@@ -183,7 +189,6 @@ const Book_Add: React.FC = () => {
           ]}
         />
 
-        {/* ✅ ADD-ONS ALERT (close form on OK) */}
         <IonAlert
           isOpen={addOnsSentOpen}
           header="Sent"

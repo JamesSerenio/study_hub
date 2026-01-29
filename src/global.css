@@ -16,7 +16,6 @@ ion-item {
    BACKGROUND
 ========================= */
 .login-content {
-  --background: linear-gradient(180deg, rgb(240, 219, 185), rgb(220, 181, 119));
   position: relative;
   overflow: hidden;
 }
@@ -122,7 +121,7 @@ ion-content,
   padding: clamp(18px, 4vw, 28px) clamp(16px, 4vw, 24px);
   border-radius: 16px;
 
-  background: rgba(230, 222, 222, 0.60);
+  background: rgba(248, 238, 220, 0.95);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 
@@ -836,11 +835,6 @@ ion-content,
    BOOK_ADD BACKGROUND (same as login)
 ========================= */
 .bookadd-content {
-  --background: linear-gradient(
-    180deg,
-    rgb(240, 219, 185),
-    rgb(220, 181, 119)
-  );
   position: relative;
   overflow: hidden;
 }
@@ -918,7 +912,6 @@ ion-content,
    BOOK_ADD BACKGROUND
 ========================= */
 .bookadd-content {
-  --background: linear-gradient(180deg, rgb(240, 219, 185), rgb(220, 181, 119));
   position: relative;
   overflow: hidden;
 }
@@ -951,7 +944,8 @@ ion-content,
   padding: clamp(12px, 1.8vw, 18px);
   border-radius: clamp(14px, 2vw, 18px);
 
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(248, 238, 220, 0.95);
+
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
 
@@ -1132,65 +1126,216 @@ ion-content,
   color: rgba(0, 0, 0, 0.7);
 }
 
-/* ================================
-   MOBILE VIEW (VERTICAL)
-================================ */
+/* =========================
+   MOBILE — EXTRA SMALL FORM
+========================= */
+@media (max-width: 600px) {
 
-/* Tablet: 2 columns */
-@media (max-width: 900px) {
+  /* wrapper spacing */
+  .bookadd-wrapper {
+    padding: 8px !important;
+  }
+
+  /* MAIN CARD */
+  .bookadd-hero-card {
+    width: 100% !important;
+    max-width: 330px !important;   /* ✅ MAS MALIIT */
+    padding: 10px !important;
+    border-radius: 12px !important;
+
+    height: auto !important;
+  }
+
+  /* HEADER */
+  .bookadd-hero-header {
+    padding: 8px !important;
+    gap: 8px !important;
+  }
+
+  .bookadd-hero-logo {
+    width: 36px !important;
+    height: 36px !important;
+  }
+
+  .bookadd-hero-title {
+    font-size: 13px !important;
+  }
+
+  .bookadd-hero-subtitle {
+    font-size: 10px !important;
+    line-height: 1.3;
+  }
+
+  /* READY CHIP */
+  .bookadd-hero-chip {
+    padding: 6px 8px !important;
+  }
+
+  .bookadd-hero-chip-text {
+    font-size: 11px !important;
+  }
+
+  /* TOPBAR */
+  .bookadd-topbar {
+    padding: 8px !important;
+    margin-bottom: 8px !important;
+  }
+
+  .bookadd-topbar-title {
+    font-size: 16px !important;
+  }
+
+  .bookadd-topbar-subtitle {
+    font-size: 11px !important;
+  }
+
+  /* ACTION GRID */
   .bookadd-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+
+  .bookadd-btn-card {
+    padding: 10px !important;
+  }
+
+  .bookadd-btn-label {
+    font-size: 14px !important;
+  }
+
+  .bookadd-btn-desc {
+    font-size: 11px !important;
+    margin-bottom: 8px !important;
+  }
+
+  /* BUTTON */
+  .bookadd-btn-card ion-button {
+    height: 38px !important;
+    font-size: 12px !important;
+    --border-radius: 12px;
+  }
+
+  /* WHITE BEAR */
+  .bookadd-bear {
+    left: 165px !important;
+    bottom: 655px !important;
+  }
+
+  .bookadd-bear-img {
+    width: 150px !important;
+    max-width: 38vw !important;
   }
 }
 
-@media (max-height: 720px) {
-  .bookadd-wrapper {
-    padding: 12px;
+
+/* =========================
+   TABLET (FIT + NICE)
+========================= */
+@media (min-width: 601px) and (max-width: 1024px){
+
+  .bookadd-wrapper{
+    padding: 14px !important;
   }
 
-  .bookadd-hero-card {
-    padding: 12px;
+  .bookadd-hero-card{
+    width: 100% !important;
+    max-width: 620px !important;
+    padding: 14px !important;
+    border-radius: 16px !important;
+    height: auto !important;
   }
 
-  .bookadd-actions {
+  .bookadd-hero-header{
+    padding: 12px !important;
     gap: 12px !important;
   }
 
-  .bookadd-btn-card ion-button {
-    height: 40px;
+  .bookadd-hero-logo{
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  .bookadd-hero-title{ font-size: 16px !important; }
+  .bookadd-hero-subtitle{ font-size: 13px !important; line-height: 1.4; }
+
+  .bookadd-topbar{
+    padding: 12px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .bookadd-topbar-title{ font-size: 20px !important; }
+  .bookadd-topbar-subtitle{ font-size: 14px !important; }
+
+  /* ✅ auto: 2 cols on tablet, but safe on smaller widths */
+  .bookadd-actions{
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 14px !important;
+  }
+
+  @media (min-width: 601px) and (max-width: 740px){
+    .bookadd-actions{
+      grid-template-columns: 1fr !important;
+    }
+  }
+
+  .bookadd-btn-card{ padding: 14px !important; }
+  .bookadd-btn-label{ font-size: 16px !important; }
+  .bookadd-btn-desc{ font-size: 13px !important; margin-bottom: 12px !important; }
+
+  .bookadd-btn-card ion-button{
+    height: 44px !important;
+    font-size: 14px !important;
+    --border-radius: 14px;
+  }
+
+  /* WHITE BEAR (TABLET - stable) */
+  .bookadd-bear{
+    left: auto !important;
+    top: auto !important;
+    right: 300px !important;
+    bottom: 770px !important;
+    transform: none !important;
+  }
+
+  .bookadd-bear-img{
+    width: 300px !important;
+    max-width: 26vw !important;
   }
 }
 
-/* Mobile: 1 column */
-@media (max-width: 560px) {
-  .bookadd-actions {
-    grid-template-columns: 1fr !important;
-  }
-}
+/* =========================
+   DESKTOP (CLEAN + CENTER)
+========================= */
+@media (min-width: 1025px){
 
-/* Card padding scales */
-.bookadd-btn-card {
-  padding: clamp(14px, 2vw, 18px);
-}
+  .bookadd-wrapper{
+    padding: 18px !important;
+  }
 
-/* Header stacks better on small screens */
-@media (max-width: 520px) {
-  .bookadd-hero-header {
-    flex-direction: column;
-    align-items: flex-start;
+  .bookadd-hero-card{
+    width: min(760px, 100%) !important;
+    padding: 16px !important;
+    border-radius: 18px !important;
   }
-  .bookadd-hero-chip {
-    width: 100%;
-    justify-content: center;
-  }
-  .bookadd-topbar-title {
-    font-size: 18px;
-  }
-}
 
-@media (min-width: 1024px) {
-  .bookadd-hero-card {
-    width: min(760px, 100%);
+  /* 3 columns on desktop */
+  .bookadd-actions{
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+  }
+
+  /* WHITE BEAR (DESKTOP - bottom right) */
+  .bookadd-bear{
+    left: auto !important;
+    top: auto !important;
+    right: 630px !important;
+    bottom: 550px !important;
+    transform: none !important;
+  }
+
+  .bookadd-bear-img{
+    width: 300px !important;
+    max-width: 18vw !important;
   }
 }
 
@@ -1295,6 +1440,67 @@ ion-content,
 
 .bookadd-animate {
   animation: fadeUpSoft 420ms ease-out both;
+}
+
+/* =========================
+   WHITE BEAR (OUTSIDE CARD)
+   - anchored to viewport/content
+   - responsive sizes
+========================= */
+.bookadd-bear {
+  position: absolute;
+  left: clamp(-18px, -2vw, 12px);
+  bottom: clamp(-6px, -1vw, 10px);
+
+  z-index: 0;            /* same as leaves */
+  pointer-events: none;  /* never blocks clicks */
+  user-select: none;
+}
+
+.bookadd-bear-img {
+  width: clamp(120px, 18vw, 260px);
+  height: auto;
+  opacity: 0.95;
+
+  /* keep inside screen even if large */
+  max-width: 42vw;
+
+  /* optional soft floating (same vibe) */
+  animation: floatSoft 3.6s ease-in-out infinite;
+  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.18));
+}
+
+/* ✅ On very small phones: make it smaller + tuck more */
+@media (max-width: 420px) {
+  .bookadd-bear {
+    left: -10px;
+    bottom: -6px;
+  }
+  .bookadd-bear-img {
+    width: 140px;
+    max-width: 52vw;
+    opacity: 0.92;
+  }
+}
+
+/* ✅ On tablets: slightly bigger */
+@media (min-width: 768px) {
+  .bookadd-bear-img {
+    width: clamp(170px, 16vw, 280px);
+    max-width: 32vw;
+  }
+}
+
+/* ✅ On large desktop: keep it nice but not too huge */
+@media (min-width: 1200px) {
+  .bookadd-bear {
+    left: 635px;
+    bottom: 550px;
+  }
+  .bookadd-bear-img {
+    width: 260px;
+    max-width: 280px;
+  }
 }
 
 
