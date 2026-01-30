@@ -13,11 +13,28 @@ ion-item {
 }
 
 /* =========================
-   BACKGROUND
+   GLOBAL FONT
+========================= */
+* {
+  font-family: "Poppins", sans-serif;
+}
+
+/* REMOVE IONIC BLUE */
+ion-item {
+  --highlight-color-focused: transparent;
+  --highlight-color-valid: transparent;
+  --highlight-color-invalid: transparent;
+}
+
+/* =========================
+   BACKGROUND + NO SCROLL
 ========================= */
 .login-content {
   position: relative;
   overflow: hidden;
+
+  /* extra safety */
+  --overflow: hidden;
 }
 
 /* ✅ prevent horizontal overflow */
@@ -36,6 +53,57 @@ ion-content,
 }
 .login-content {
   scrollbar-width: none;
+}
+
+/* =========================
+   ✅ g.png DECOR (SINGLE ONLY)
+   - responsive mobile/tablet/desktop
+   - never causes scroll
+========================= */
+.login-g {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1; /* above leaves, below card */
+
+  width: clamp(140px, 34vw, 460px);
+  height: auto;
+
+  opacity: 0.95;
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.12));
+
+  /* ✅ single placement: bottom-right */
+  right: clamp(-34px, -4vw, -12px);
+  bottom: clamp(-28px, -4vw, -10px);
+  transform: none;
+}
+
+/* ✅ Extra small phones */
+@media (max-width: 360px) {
+  .login-g {
+    width: 150px;
+    right: 100px;
+    bottom: 585px;
+    opacity: 0.9;
+  }
+}
+
+/* ✅ Tablet */
+@media (min-width: 768px) {
+  .login-g {
+    width: clamp(220px, 26vw, 480px);
+    right: 265px;
+    bottom: 580px;
+  }
+}
+
+/* ✅ Desktop */
+@media (min-width: 1200px) {
+  .login-g {
+    width: 480px;
+    right: -44px;
+    bottom: -34px;
+  }
 }
 
 /* =========================
@@ -60,12 +128,20 @@ ion-content,
 }
 
 /* stagger delays */
-.leaf-top-left  .leaf-img { animation-delay: 0s; }
-.leaf-top-right .leaf-img { animation-delay: .7s; }
-.leaf-bottom-left .leaf-img { animation-delay: 1.3s; }
-.leaf-bottom-right .leaf-img { animation-delay: 2s; }
+.leaf-top-left .leaf-img {
+  animation-delay: 0s;
+}
+.leaf-top-right .leaf-img {
+  animation-delay: 0.7s;
+}
+.leaf-bottom-left .leaf-img {
+  animation-delay: 1.3s;
+}
+.leaf-bottom-right .leaf-img {
+  animation-delay: 2s;
+}
 
-/* ✅ CORNER POSITIONS + ORIGINAL ANGLES (sakto style mo dati) */
+/* ✅ CORNER POSITIONS + ORIGINAL ANGLES */
 .leaf-top-left {
   top: -12px;
   left: -12px;
@@ -90,34 +166,39 @@ ion-content,
   transform: rotate(-90deg);
 }
 
-/* ✅ FLOATING: translate only (NO ROTATE) para di masira angle */
+/* ✅ FLOATING: translate only (NO ROTATE) */
 @keyframes leafFloat {
-  0%   { transform: translate3d(0, 0, 0); }
-  50%  { transform: translate3d(6px, 10px, 0); }
-  100% { transform: translate3d(0, 0, 0); }
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(6px, 10px, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
 }
 
-
 /* =========================
-   CENTER (responsive)
+   CENTER (responsive + safe for mobile)
 ========================= */
 .login-wrapper {
   display: flex;
   justify-content: center;
   align-items: center;
 
-  min-height: 100vh;
-  padding: clamp(12px, 3vw, 20px);
+  min-height: 100svh; /* better on mobile */
+  padding: clamp(12px, 3vw, 22px);
 
   position: relative;
   z-index: 2;
 }
 
 /* =========================
-   CARD (smooth fade + responsive)
+   CARD (responsive)
 ========================= */
 .login-box {
-  width: min(92vw, 380px);
+  width: min(92vw, 420px);
   padding: clamp(18px, 4vw, 28px) clamp(16px, 4vw, 24px);
   border-radius: 16px;
 
@@ -131,9 +212,36 @@ ion-content,
   animation: fadeUp 0.65s ease;
 }
 
+/* ✅ Extra small phones */
+@media (max-width: 360px) {
+  .login-box {
+    width: min(300px);
+  }
+}
+
+/* tablet width */
+@media (min-width: 768px) {
+  .login-box {
+    width: min(45vw, 460px);
+  }
+}
+
+/* desktop width */
+@media (min-width: 1200px) {
+  .login-box {
+    width: 350px;
+  }
+}
+
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(18px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* =========================
@@ -176,8 +284,8 @@ ion-content,
   display: flex;
   align-items: center;
 
-  padding-left: 10px;
-  min-height: 48px;
+  padding-left: 12px;
+  min-height: 50px;
 
   transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
@@ -213,8 +321,8 @@ ion-content,
 ========================= */
 .login-btn {
   margin-top: 16px;
-  height: 46px;
   width: 100%;
+  height: clamp(44px, 6vh, 50px);
 
   font-size: 15px;
   font-weight: 700;
@@ -224,6 +332,7 @@ ion-content,
   --background: #000;
   --box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
 }
+
 
 
 /* =========================

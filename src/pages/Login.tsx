@@ -14,6 +14,7 @@ import { supabase } from "../utils/supabaseClient";
 
 import studyHubLogo from "../assets/study_hub.png";
 import leaves from "../assets/leave.png";
+import gImg from "../assets/g.png";
 
 const Login: React.FC = () => {
   const [emailFocused, setEmailFocused] = useState<boolean>(false);
@@ -62,11 +63,23 @@ const Login: React.FC = () => {
   return (
     <IonPage>
       <IonContent fullscreen className="login-content" scrollY={false}>
-        {/* ✅ Leaves wrapper (angle) + inner img (float animation) */}
-        <div className="leaf leaf-top-left"><img src={leaves} className="leaf-img" /></div>
-        <div className="leaf leaf-top-right"><img src={leaves} className="leaf-img" /></div>
-        <div className="leaf leaf-bottom-left"><img src={leaves} className="leaf-img" /></div>
-        <div className="leaf leaf-bottom-right"><img src={leaves} className="leaf-img" /></div>
+        {/* Leaves */}
+        <div className="leaf leaf-top-left">
+          <img src={leaves} className="leaf-img" alt="" />
+        </div>
+        <div className="leaf leaf-top-right">
+          <img src={leaves} className="leaf-img" alt="" />
+        </div>
+        <div className="leaf leaf-bottom-left">
+          <img src={leaves} className="leaf-img" alt="" />
+        </div>
+        <div className="leaf leaf-bottom-right">
+          <img src={leaves} className="leaf-img" alt="" />
+        </div>
+
+        {/* ✅ SINGLE g.png (outside card) */}
+        <img src={gImg} className="login-g" alt="" />
+
         <div className="login-wrapper">
           <div className="login-box">
             <div className="login-header">
