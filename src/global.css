@@ -2611,32 +2611,36 @@ ion-modal.booking-modal {
 
   /* bear + grass still visible (smaller) */
   .seatmap-bear-outside {
-    left: -120px;
-    bottom: 110px;
+    left: -125px;
+    bottom: 300px;
     width: 140px;
   }
 
   .seatmap-grass-outside {
-    right: -130px;
-    top: -10px;
+    right: -105px;
+    top: -65px;
     width: 160px;
+    height: 655px;
   }
 }
 
 /* tablets */
-@media (min-width: 481px) and (max-width: 1023px) {
+@media (min-width: 600px) and (max-width: 1023px) {
   .seatmap-card {
     width: min(88vw, 300px);
   }
 
   .seatmap-bear-outside {
-    left: clamp(-200px, -18vw, -120px);
-    width: clamp(136px, 18vw, 260px);
+    left: -125px;
+    bottom: 300px;
+    width: 140px;
   }
 
   .seatmap-grass-outside {
-    right: clamp(-210px, -20vw, -130px);
-    width: clamp(199px, 20vw, 300px);
+    right: -105px;
+    top: -65px;
+    width: 160px;
+    height: 660px;
   }
 
     .seat-pin {
