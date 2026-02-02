@@ -1009,13 +1009,15 @@ const Staff_Dashboard: React.FC = () => {
         </div>
 
         {/* MODAL */}
-        <IonModal
-          isOpen={isModalOpen}
-          onDidDismiss={() => {
-            setIsModalOpen(false);
-            setSelectedSeat("");
-          }}
-        >
+          <IonModal
+            isOpen={isModalOpen}
+            className="seat-manage-modal"
+            onDidDismiss={() => {
+              setIsModalOpen(false);
+              setSelectedSeat("");
+            }}
+          >
+
           <IonHeader>
             <IonToolbar>
               <IonTitle>Seat Status</IonTitle>
@@ -1084,30 +1086,43 @@ const Staff_Dashboard: React.FC = () => {
 
               <div style={{ height: 10 }} />
 
-              <IonButton expand="block" color="warning" disabled={saving} onClick={() => void saveTempOccupied()}>
+              <IonButton
+                expand="block"
+                className="seat-modal-btn seat-modal-btn--clear"
+                disabled={saving}
+                onClick={() => void clearToAvailableNow(selectedSeat, selectedKind)}
+              >
+                {saving ? "Working..." : "Set as Temporarily Available (CLEAR NOW)"}
+              </IonButton>
+
+              <div style={{ height: 10 }} />
+
+              <IonButton
+                expand="block"
+                className="seat-modal-btn seat-modal-btn--temp"
+                disabled={saving}
+                onClick={() => void saveTempOccupied()}
+              >
                 Set as Occupied Temporarily (Yellow)
               </IonButton>
 
-              <IonButton expand="block" color="danger" disabled={saving} onClick={() => void setBlocked("occupied")}>
+              <IonButton
+                expand="block"
+                className="seat-modal-btn seat-modal-btn--occupied"
+                disabled={saving}
+                onClick={() => void setBlocked("occupied")}
+              >
                 Set as Occupied (Red)
               </IonButton>
 
-              <IonButton expand="block" color="tertiary" disabled={saving} onClick={() => void setBlocked("reserved")}>
+              <IonButton
+                expand="block"
+                className="seat-modal-btn seat-modal-btn--reserved"
+                disabled={saving}
+                onClick={() => void setBlocked("reserved")}
+              >
                 Set as Reserved (Purple)
               </IonButton>
-
-              <p style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-                <strong>CLEAR NOW</strong> will DELETE overlapping rows (promo_bookings and/or seat_blocked_times)
-                for the selected target at the current time.
-              </p>
-
-              <p style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                <strong>Promo rule:</strong> Current promo = <strong>RED</strong>, Future promo = <strong>PURPLE</strong>.
-                <br />
-                <strong>TEMP</strong> (full_name starts with TEMP) = <strong>YELLOW</strong>.
-                <br />
-                TEMP also mirrors into <code>seat_blocked_times</code> as <code>source=reserved</code>, <code>note=temp</code>.
-              </p>
             </div>
           </IonContent>
         </IonModal>
