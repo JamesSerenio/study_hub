@@ -1,4 +1,6 @@
 // src/pages/Customer_Lists.tsx
+// ✅ Shows ONLY NON-RESERVATION records (reservation = "no")
+// ✅ Seat column REMOVED from Customer List table (but still shown on receipt; remove if you want)
 // ✅ Discount UI reverted to previous "breakdown" layout (System Cost / Discount / Final / New Balance / Auto Payment)
 // ✅ Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
 // ✅ Manual PAID/UNPAID toggle still works
@@ -157,10 +159,11 @@ const Customer_Lists: React.FC = () => {
   const fetchCustomerSessions = async (): Promise<void> => {
     setLoading(true);
 
+    // ✅ ONLY NON-RESERVATION
     const { data, error } = await supabase
       .from("customer_sessions")
       .select("*")
-      .neq("reservation", "yes")
+      .eq("reservation", "no")
       .order("date", { ascending: false });
 
     if (error) {
@@ -532,7 +535,7 @@ const Customer_Lists: React.FC = () => {
               <th>Discount</th>
               <th>Payment</th>
               <th>Paid?</th>
-              <th>Seat</th>
+              {/* ✅ SEAT REMOVED */}
               <th>Status</th>
               <th>Action</th>
             </tr>
@@ -603,7 +606,8 @@ const Customer_Lists: React.FC = () => {
                     </button>
                   </td>
 
-                  <td>{session.seat_number}</td>
+                  {/* ✅ SEAT REMOVED */}
+
                   <td>{renderStatus(session)}</td>
 
                   <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -853,6 +857,7 @@ const Customer_Lists: React.FC = () => {
               <span>{selectedSession.customer_field ?? ""}</span>
             </div>
 
+            {/* NOTE: Seat is still shown on receipt. Remove this block if you also want it removed in receipt. */}
             <div className="receipt-row">
               <span>Seat</span>
               <span>{selectedSession.seat_number}</span>

@@ -79,30 +79,33 @@ ion-content,
 }
 
 /* ✅ Extra small phones */
-@media (max-width: 360px) {
+@media (max-width: 400px) {
   .login-g {
-    width: 150px;
-    right: 100px;
-    bottom: 585px;
+    z-index: 5;
+    width: 250px;
+    right:70px;
+    bottom: 546px;
     opacity: 0.9;
   }
 }
 
 /* ✅ Tablet */
-@media (min-width: 768px) {
+@media (min-width: 600px) {
   .login-g {
-    width: clamp(220px, 26vw, 480px);
-    right: 265px;
-    bottom: 580px;
+    z-index: 5;
+    width: clamp(300px, 26vw, 480px);
+    right: 145px;
+    bottom: 540px;
   }
 }
 
 /* ✅ Desktop */
 @media (min-width: 1200px) {
   .login-g {
-    width: 480px;
-    right: -44px;
-    bottom: -34px;
+    z-index: 5;
+    width: 350px;
+    right: 585px;
+    bottom: 375px;
   }
 }
 
