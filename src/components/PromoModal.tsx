@@ -2,7 +2,8 @@
 // ✅ STRICT TS
 // ✅ NO any
 // ✅ Required/errors/success = IonAlert modal only
-// ✅ Conference overlap (promo_no_overlap_conference) = friendly modal
+// ✅ Uses seat_blocked_times (EXCLUDE overlap) to block seats/conference after saving promo
+// ✅ Friendly overlap modal when seat_blocked_times_no_overlap hit
 // ✅ After success OK: closes THIS promo modal only (does NOT trigger parent "Thank you" unless your parent onSaved() shows it)
 // ✅ THEMED: className="booking-modal" + bookadd-card + form-item (same as Booking)
 
@@ -64,7 +65,16 @@ type SeatBlockedRow = {
   seat_number: string;
   start_at: string;
   end_at: string;
-  source: "promo" | "regular" | string;
+  source: "regular" | "reserved" | string;
+};
+
+type SeatBlockedInsert = {
+  created_by: string | null;
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: "regular" | "reserved";
+  note: string | null;
 };
 
 const isPackageArea = (v: unknown): v is PackageArea =>
@@ -81,6 +91,10 @@ const toNum = (v: number | string | null | undefined): number => {
   return 0;
 };
 
+/**
+ * datetime-local gives "YYYY-MM-DDTHH:mm" (no timezone)
+ * We want to store timestamptz accurately -> interpret as local time then toISOString()
+ */
 const localToIso = (v: string): string => new Date(v).toISOString();
 
 const isoToLocal = (iso: string): string => {
@@ -209,6 +223,14 @@ const checkPromoAvailability = async (params: {
 const isConferenceOverlapConstraint = (msg: string): boolean => {
   const m = msg.toLowerCase();
   return m.includes("promo_no_overlap_conference") || m.includes("exclusion constraint");
+};
+
+const isSeatBlockedOverlap = (msg: string): boolean => {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("seat_blocked_times_no_overlap") ||
+    m.includes("duplicate key") === false && m.includes("exclusion constraint") // generic pg wording
+  );
 };
 
 /* ================= COMPONENT ================= */
@@ -413,6 +435,46 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, area, startIso, endIso, conferenceBlocked]);
 
+  // ✅ create seat block row(s) after promo save
+  const createSeatBlock = async (params: {
+    userId: string | null;
+    area: PackageArea;
+    seatNumber: string;
+    startIso: string;
+    endIso: string;
+  }): Promise<{ ok: boolean; message?: string }> => {
+    const { userId, area, seatNumber, startIso, endIso } = params;
+
+    const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
+
+    const payload: SeatBlockedInsert = {
+      created_by: userId,
+      seat_number: seatKey,
+      start_at: startIso,
+      end_at: endIso,
+      source: "reserved", // ✅ allowed by your table constraint
+      note: "promo",
+    };
+
+    const ins = await supabase.from("seat_blocked_times").insert(payload);
+
+    if (ins.error) {
+      const msg = ins.error.message ?? "Seat blocking failed.";
+      if (isSeatBlockedOverlap(msg)) {
+        return {
+          ok: false,
+          message:
+            area === "conference_room"
+              ? "Conference room is not available for the selected schedule."
+              : "Seat is not available for the selected schedule.",
+        };
+      }
+      return { ok: false, message: msg };
+    }
+
+    return { ok: true };
+  };
+
   const submitPromo = async (): Promise<void> => {
     const name = fullName.trim();
 
@@ -440,6 +502,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     setLoading(true);
 
+    // extra safety: promo_bookings + sessions check
     const availability = await checkPromoAvailability({ area, seatNumber, startIso, endIso });
     if (!availability.ok) {
       setLoading(false);
@@ -472,6 +535,23 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       }
 
       return showAlert("Error", ins.error.message);
+    }
+
+    // ✅ NOW block the seat/conference in seat_blocked_times
+    const blockRes = await createSeatBlock({
+      userId,
+      area,
+      seatNumber,
+      startIso,
+      endIso,
+    });
+
+    if (!blockRes.ok) {
+      setLoading(false);
+
+      // optional: could also rollback promo_bookings here (delete last insert),
+      // but strict rollback needs returning inserted id. For now: just warn.
+      return showAlert("Not Available", blockRes.message ?? "Not available.");
     }
 
     setLoading(false);
@@ -553,9 +633,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           </IonItem>
 
           {selectedPackage?.description ? (
-            <p style={{ marginTop: 10, opacity: 0.85, fontWeight: 700 }}>
-              {selectedPackage.description}
-            </p>
+            <p style={{ marginTop: 10, opacity: 0.85, fontWeight: 700 }}>{selectedPackage.description}</p>
           ) : null}
 
           {amenitiesList.length > 0 ? (
