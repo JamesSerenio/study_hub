@@ -8,12 +8,11 @@
 // ✅ Auto refresh seats when date/time changes
 // ✅ 1-TAP date refresh (IonDatetime inline calendar fix)
 // ✅ Auto-delete expired reserved blocks (end_at < now) so seats come back
-// ✅ NEW FIX: ALSO "RELEASE EARLY" blocks that were stopped early
-//    - when staff pressed Stop Time, you UPDATE seat_blocked_times.end_at = now
-//    - but sometimes UI seat list still doesn't refresh because query uses effect-only
-//    - so we now always fetch seats based on NOW overlap and also cleanup BOTH:
-//       (1) expired blocks end_at < now
-//       (2) "ended early" blocks end_at <= now (same thing) and keep only active overlaps
+// ✅ FIX: Reservation "Open Time" will NOT use 2999 anymore
+//    - reservation openTime => end_at = end of the selected reservation date (23:59:59.999)
+//    - so when you pick NEXT DAY, seats are FREE automatically
+// ✅ Non-reservation openTime can stay FAR_FUTURE (seat is "N/A" so no seat blocking)
+// ✅ NEW: If Reservation Time Started is earlier than CURRENT TIME -> show modal + block saving
 // ✅ NO any
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +32,7 @@ import {
   IonSelectOption,
   IonToggle,
   IonDatetime,
+  IonAlert,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -218,6 +218,33 @@ const parseReservationToISO = (time12: string, yyyyMmDd: string): string | null 
   return local.toISOString();
 };
 
+// ✅ reservation end of local day (so NEXT DAY seats are free)
+const endOfLocalDayIso = (yyyyMmDd: string): string => {
+  const m = yyyyMmDd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return new Date().toISOString();
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  return new Date(y, mo, d, 23, 59, 59, 999).toISOString();
+};
+
+// ✅ clamp helper: don't let reservation spill into next day
+const clampToReservationDay = (endIso: string, reservationDate?: string): string => {
+  if (!reservationDate) return endIso;
+  const eod = endOfLocalDayIso(reservationDate);
+  const endMs = new Date(endIso).getTime();
+  const eodMs = new Date(eod).getTime();
+  if (!Number.isFinite(endMs) || !Number.isFinite(eodMs)) return endIso;
+  return endMs > eodMs ? eod : endIso;
+};
+
+// ✅ NEW: prevent reservation start time earlier than current time
+const isReservationStartInPast = (startIso: string): boolean => {
+  const startMs = new Date(startIso).getTime();
+  if (!Number.isFinite(startMs)) return true;
+  return startMs < Date.now();
+};
+
 type SeatBlockInsert = {
   seat_number: string;
   start_at: string;
@@ -260,6 +287,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   // ✅ NEW: local refresh tick so occupied seats re-fetch after external stop-time changes
   const [refreshSeatsTick, setRefreshSeatsTick] = useState(0);
+
+  // ✅ NEW: modal for invalid reservation time
+  const [timeAlertOpen, setTimeAlertOpen] = useState(false);
+  const [timeAlertMsg, setTimeAlertMsg] = useState("");
 
   const commitReservationTime = (raw: string) => {
     const normalized = normalizeReservationTime(raw);
@@ -326,7 +357,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   };
 
   // ✅ NEW: always fetch active overlaps for the window you are checking
-  // This automatically respects "Stop Time" because stop time sets end_at = now
   const fetchOccupiedSeats = async (startIso: string, endIso: string): Promise<void> => {
     await cleanupExpiredReserved();
 
@@ -347,20 +377,15 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setOccupiedSeats(Array.from(new Set(seats)));
   };
 
-  // ✅ NEW: realtime subscription so seats update when someone stops time (updates end_at)
+  // ✅ realtime subscription so seats update when someone stops time (updates end_at)
   useEffect(() => {
     if (!isOpen) return;
 
     const channel = supabase
       .channel("seat-blocked-times-live")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "seat_blocked_times" },
-        () => {
-          // trigger re-fetch
-          setRefreshSeatsTick((x) => x + 1);
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "seat_blocked_times" }, () => {
+        setRefreshSeatsTick((x) => x + 1);
+      })
       .subscribe();
 
     return () => {
@@ -477,8 +502,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  // ✅ IMPORTANT:
-  // Whenever date/time/duration changes, clear selected seats and refresh occupiedSeats
+  // ✅ IMPORTANT: Whenever date/time/duration changes, clear selected seats and refresh occupiedSeats
   useEffect(() => {
     if (!isOpen) return;
 
@@ -497,8 +521,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const startIso = reservationStartIso;
 
     let endIso: string;
+
     if (openTime) {
-      endIso = FAR_FUTURE_ISO;
+      endIso = form.reservation_date ? endOfLocalDayIso(form.reservation_date) : startIso;
     } else {
       const normalizedAvail = normalizeTimeAvail(timeAvailInput);
       if (!normalizedAvail || normalizedAvail === "00:00") {
@@ -514,6 +539,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         computedEnd === startIso
           ? new Date(new Date(startIso).getTime() + 60_000).toISOString()
           : computedEnd;
+
+      endIso = clampToReservationDay(endIso, form.reservation_date);
     }
 
     void fetchOccupiedSeats(startIso, endIso);
@@ -528,7 +555,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     isSeatPickReady,
     reservationStartIso,
     dateTouchTick,
-    refreshSeatsTick, // ✅ NEW: re-fetch when seat_blocked_times changes (stop time)
+    refreshSeatsTick,
   ]);
 
   const formatPH = (d: Date) =>
@@ -558,6 +585,17 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const timeOutDisplay = openTime ? "OPEN TIME" : formatPH(new Date(summaryEndIso));
 
   const handleSubmitBooking = async (): Promise<void> => {
+    // ✅ NEW: block reservation save if Time Started < current time
+    if (form.reservation && reservationStartIso) {
+      if (isReservationStartInPast(reservationStartIso)) {
+        setTimeAlertMsg(
+          "Time Started cannot be earlier than the current time. Please choose a valid future time."
+        );
+        setTimeAlertOpen(true);
+        return;
+      }
+    }
+
     const trimmedName = form.full_name.trim();
     if (!trimmedName) return alert("Full Name is required.");
 
@@ -593,14 +631,23 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         ? form.reservation_date
         : new Date().toISOString().split("T")[0];
 
-    const timeEndedToStore = openTime
-      ? FAR_FUTURE_ISO
-      : (() => {
-          const computed = getTimeEndedFrom(startIsoToStore);
-          return computed === startIsoToStore
-            ? new Date(new Date(startIsoToStore).getTime() + 60_000).toISOString()
-            : computed;
-        })();
+    const timeEndedToStore = (() => {
+      if (form.reservation && openTime) {
+        return form.reservation_date ? endOfLocalDayIso(form.reservation_date) : startIsoToStore;
+      }
+
+      if (!form.reservation && openTime) {
+        return FAR_FUTURE_ISO;
+      }
+
+      const computed = getTimeEndedFrom(startIsoToStore);
+      const end =
+        computed === startIsoToStore
+          ? new Date(new Date(startIsoToStore).getTime() + 60_000).toISOString()
+          : computed;
+
+      return form.reservation ? clampToReservationDay(end, form.reservation_date) : end;
+    })();
 
     if (form.reservation) {
       const { data: conflicts, error: conflictErr } = await supabase
@@ -707,6 +754,15 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           </IonButtons>
         </IonToolbar>
       </IonHeader>
+
+      {/* ✅ NEW: modal alert for invalid reservation time */}
+      <IonAlert
+        isOpen={timeAlertOpen}
+        header="Invalid Time Started"
+        message={timeAlertMsg}
+        buttons={["OK"]}
+        onDidDismiss={() => setTimeAlertOpen(false)}
+      />
 
       <IonContent className="ion-padding">
         <div className="bookadd-card">
@@ -864,8 +920,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                         const isOccupied = occupiedSeats.includes(seat);
                         const isSelected = form.seat_number.includes(seat);
 
-                        // ✅ FIX: when stop time happens, subscription triggers refreshSeatsTick,
-                        // so this list updates and seat becomes visible again.
                         if (isOccupied) return null;
 
                         return (
@@ -950,7 +1004,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             {form.reservation && (
               <p className="summary-text">
                 <strong>Seat:</strong>{" "}
-                {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
+                {isSeatPickReady
+                  ? form.seat_number.length
+                    ? form.seat_number.join(", ")
+                    : "None"
+                  : "—"}
               </p>
             )}
           </div>
