@@ -1326,13 +1326,13 @@ ion-content,
 
   /* WHITE BEAR */
   .bookadd-bear {
-    left: 165px !important;
-    bottom: 655px !important;
+    left: 182px !important;
+    bottom: 797px !important;
   }
 
   .bookadd-bear-img {
-    width: 150px !important;
-    max-width: 38vw !important;
+    width: 400px !important;
+    max-width: 40vw !important;
   }
 }
 
@@ -1400,15 +1400,15 @@ ion-content,
   /* WHITE BEAR (TABLET - stable) */
   .bookadd-bear{
     left: auto !important;
-    top: auto !important;
-    right: 300px !important;
+    top: 25px !important;
+    right: 170px !important;
     bottom: 770px !important;
     transform: none !important;
   }
 
   .bookadd-bear-img{
     width: 300px !important;
-    max-width: 26vw !important;
+    max-width: 45vw !important;
   }
 }
 
@@ -1661,28 +1661,33 @@ ion-modal.booking-modal {
 /* -------------------------
    MAIN modal wrapper (removes white sides)
 -------------------------- */
-.booking-modal::part(content) {
-  /* ✅ remove all white frame + same theme background */
-  background: linear-gradient(
-    180deg,
-    rgba(246, 232, 206, 0.98),
-    rgba(228, 193, 130, 0.98)
-  ) !important;
-
-  /* ✅ dialog sizing (responsive) */
-  width: min(620px, 92vw) !important;
+ion-modal.booking-modal::part(content) {
+  background: transparent !important;  /* ✅ alisin brown dito */
+  width: min(620px, 92vw) !important;  /* ✅ stable */
   max-height: 86vh;
-
-  /* ✅ no default padding (we control it inside) */
   padding: 0 !important;
-
   border-radius: 22px;
   margin: auto;
-
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
-
-  animation: bookingFadeIn 220ms ease-out both;
+  overflow: visible !important;
 }
+
+ion-modal.booking-modal::part(content)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 22px;
+
+  /* ✅ ito na yung brown/gradient */
+  background: linear-gradient(180deg, rgba(246, 232, 206, 0.98), rgba(228, 193, 130, 0.98));
+  
+  /* ✅ control mo yung background width ONLY */
+  width: 100%;               /* default */
+  max-width: 100%;
+  margin: auto;
+
+  z-index: 0;
+}
+
 
 /* ============================================
    SMOOTH SCROLL (BOOKING MODAL)
@@ -2188,24 +2193,6 @@ ion-modal.booking-modal {
   background: rgba(0, 0, 0, 0.45);
 }
 
-/* modal body */
-.booking-modal::part(content) {
-  background: linear-gradient(
-    180deg,
-    rgba(246, 232, 206, 0.98),
-    rgba(228, 193, 130, 0.98)
-  ) !important;
-
-  border-radius: 22px;
-  padding: 0 !important;
-
-  width: min(640px, 94vw);
-  max-height: 90vh;
-
-  margin: auto;
-}
-
-
 /* =====================================================
    HEADER
 ===================================================== */
@@ -2253,8 +2240,8 @@ ion-modal.booking-modal {
 ===================================================== */
 
 .booking-modal .bookadd-card {
-  width: 100%;
-  max-width: 640px;
+  width: 70%;
+  max-width: 600px;
   margin: 12px auto;
 
   background: rgba(248, 238, 220, 0.96);
