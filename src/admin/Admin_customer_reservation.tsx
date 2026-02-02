@@ -9,6 +9,7 @@
 // ✅ Delete by DATE (deletes ALL records with reservation_date = selectedDate from DB)
 // ✅ Promo filtered out (DB + frontend)
 // ✅ OPEN sessions auto-update display
+// ✅ Stop Time (OPEN) releases seat_blocked_times (end_at = now)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -54,6 +55,15 @@ interface CustomerSession {
   is_paid?: boolean | number | string | null;
   paid_at?: string | null;
 }
+
+type SeatBlockedRow = {
+  id: string;
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: string;
+  note: string | null;
+};
 
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
@@ -127,6 +137,13 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
   const g = round2(Math.min(d, Math.max(0, gcash)));
   const c = round2(Math.max(0, d - g));
   return { gcash: g, cash: c };
+};
+
+const splitSeats = (seatStr: string): string[] => {
+  return String(seatStr ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s.toUpperCase() !== "N/A");
 };
 
 const Admin_customer_reservation: React.FC = () => {
@@ -214,7 +231,7 @@ const Admin_customer_reservation: React.FC = () => {
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
     const end = new Date(s.time_ended);
-    return end.getFullYear() >= 2999;
+    return end.getFullYear() >= 2999; // legacy fallback
   };
 
   const diffMinutes = (startIso: string, endIso: string): number => {
@@ -321,6 +338,50 @@ const Admin_customer_reservation: React.FC = () => {
     return { gcash, cash, totalPaid };
   };
 
+  // ✅ NEW: release seat_blocked_times (end_at = now) when Stop Time
+  const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
+    const seats = splitSeats(session.seat_number);
+    if (seats.length === 0) return;
+
+    // primary match: same seat, source reserved, start_at = time_started, still active
+    const { data, error } = await supabase
+      .from("seat_blocked_times")
+      .select("id, seat_number, start_at, end_at, source, note")
+      .in("seat_number", seats)
+      .eq("source", "reserved")
+      .eq("start_at", session.time_started)
+      .gt("end_at", nowIso);
+
+    if (error) {
+      console.warn("releaseSeatBlocksNow select:", error.message);
+      return;
+    }
+
+    const rows = (data ?? []) as SeatBlockedRow[];
+
+    if (rows.length === 0) {
+      // fallback if start_at doesn't match exactly (timezone rounding etc.)
+      const { error: upErr } = await supabase
+        .from("seat_blocked_times")
+        .update({ end_at: nowIso, note: "stopped (fallback)" })
+        .in("seat_number", seats)
+        .eq("source", "reserved")
+        .gt("end_at", nowIso);
+
+      if (upErr) console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
+      return;
+    }
+
+    const ids = rows.map((r) => r.id);
+
+    const { error: upErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped" })
+      .in("id", ids);
+
+    if (upErr) console.warn("releaseSeatBlocksNow update:", upErr.message);
+  };
+
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
     if (!canShowStopButton(session)) {
       alert("Stop Time is only allowed when the reservation date/time has started.");
@@ -334,6 +395,7 @@ const Admin_customer_reservation: React.FC = () => {
       const totalMinutes = diffMinutes(session.time_started, nowIso);
       const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
+      // 1) stop customer session
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
@@ -351,6 +413,10 @@ const Admin_customer_reservation: React.FC = () => {
         return;
       }
 
+      // 2) ✅ release seat blocks NOW
+      await releaseSeatBlocksNow(session, nowIso);
+
+      // 3) update UI
       setSessions((prev) => {
         const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
         return next.filter((s) => !isPromoType(s.customer_type));

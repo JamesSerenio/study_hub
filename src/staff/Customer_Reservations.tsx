@@ -10,6 +10,7 @@
 //    - Payment modal (GCash/Cash) based on Total Balance AFTER discount
 //    - Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
 //    - Manual PAID/UNPAID toggle still works
+// ✅ Open Time Stop -> ALSO releases seat_blocked_times (end_at = now)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -54,6 +55,15 @@ interface CustomerSession {
   is_paid?: boolean | number | string | null;
   paid_at?: string | null;
 }
+
+type SeatBlockedRow = {
+  id: string;
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: string;
+  note: string | null;
+};
 
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
@@ -127,6 +137,13 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
   return { gcash: g, cash: c };
 };
 
+const splitSeats = (seatStr: string): string[] => {
+  return String(seatStr ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s.toUpperCase() !== "N/A");
+};
+
 const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -193,10 +210,14 @@ const Customer_Reservations: React.FC = () => {
     return sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
   }, [sessions, selectedDate]);
 
+  // ✅ Open Time detection: hour_avail === "OPEN" (primary)
+  // (Optional legacy) if you still have old 2999 rows, keep fallback:
   const isOpenTimeSession = (s: CustomerSession): boolean => {
-    if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
+    if ((s.hour_avail || "").trim().toUpperCase() === "OPEN") return true;
+
     const end = new Date(s.time_ended);
-    return end.getFullYear() >= 2999;
+    if (!Number.isFinite(end.getTime())) return false;
+    return end.getFullYear() >= 2999; // legacy fallback only
   };
 
   const diffMinutes = (startIso: string, endIso: string): number => {
@@ -305,6 +326,54 @@ const Customer_Reservations: React.FC = () => {
     return nowTick >= start;
   };
 
+  // ✅ NEW: Release seat_blocked_times for this session (end_at = now)
+  const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
+    const seats = splitSeats(session.seat_number);
+    if (seats.length === 0) return;
+
+    // We target blocks:
+    // - same seat_number
+    // - source reserved
+    // - start_at matches session.time_started (best match)
+    // - still active (end_at > now)
+    const { data, error } = await supabase
+      .from("seat_blocked_times")
+      .select("id, seat_number, start_at, end_at, source, note")
+      .in("seat_number", seats)
+      .eq("source", "reserved")
+      .eq("start_at", session.time_started)
+      .gt("end_at", nowIso);
+
+    if (error) {
+      console.warn("releaseSeatBlocksNow select:", error.message);
+      return;
+    }
+
+    const rows = (data ?? []) as SeatBlockedRow[];
+    if (rows.length === 0) {
+      // fallback: maybe start_at not exact (timezone differences)
+      // So update any active reserved block for those seats
+      const { error: upErr } = await supabase
+        .from("seat_blocked_times")
+        .update({ end_at: nowIso, note: "stopped (fallback)" })
+        .in("seat_number", seats)
+        .eq("source", "reserved")
+        .gt("end_at", nowIso);
+
+      if (upErr) console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
+      return;
+    }
+
+    const ids = rows.map((r) => r.id);
+
+    const { error: upErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped" })
+      .in("id", ids);
+
+    if (upErr) console.warn("releaseSeatBlocksNow update:", upErr.message);
+  };
+
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
     if (!canShowStopButton(session)) {
       alert("Stop Time is only allowed when the reservation date/time has started.");
@@ -318,6 +387,7 @@ const Customer_Reservations: React.FC = () => {
       const totalMinutes = diffMinutes(session.time_started, nowIso);
       const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
+      // 1) stop session
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
@@ -335,6 +405,10 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
+      // 2) ✅ release seats immediately
+      await releaseSeatBlocksNow(session, nowIso);
+
+      // 3) update UI
       setSessions((prev) => {
         const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
         return next.filter((s) => !isPromoType(s.customer_type));
