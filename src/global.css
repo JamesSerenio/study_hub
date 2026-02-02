@@ -2377,8 +2377,8 @@ ion-modal.booking-modal {
 /* phones */
 @media (max-width: 420px) {
   .booking-modal::part(content) {
-    width: 96vw;
-    max-height: 92vh;
+    max-width: 65vw;
+    max-height: 50vh;
     border-radius: 18px;
   }
 
@@ -2387,15 +2387,15 @@ ion-modal.booking-modal {
   }
 
   .booking-modal ion-title {
-    font-size: 16px;
+    font-size: 10px;
   }
 }
 
 /* tablets */
 @media (min-width: 600px) and (max-width: 1024px) {
   .booking-modal::part(content) {
-    width: 92vw;
-    max-height: 88vh;
+    max-width: 65vw;
+    max-height: 65vh;
   }
 }
 
