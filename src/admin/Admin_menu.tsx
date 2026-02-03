@@ -2,6 +2,7 @@
 // ✅ SAME CLASSNAMES AS Staff_menu (staff-menu / staff-menu-header / staff-menu-content / menu-flowers / menu-flower / menu-items-layer)
 // ✅ Added STATIC flowers (NO appear/disappear)
 // ✅ Keeps your existing pages/files/menu items (WALANG papalitan sa files)
+// ✅ FIX: Wrap in ONE IonPage so mobile widths (360-767) won't become "half" on local + Vercel
 
 import React, { useMemo, useState } from "react";
 import {
@@ -16,6 +17,7 @@ import {
   IonSplitPane,
   IonToolbar,
   IonIcon,
+  IonPage, // ✅ ADD
 } from "@ionic/react";
 import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
@@ -86,20 +88,23 @@ const Admin_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState<MenuKey>("dashboard");
 
-  const menuItems: MenuItem[] = [
-    { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
-    { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
-    { name: "Item Lists", key: "item_lists", icon: itemIcon },
-    { name: "Restock Records", key: "restock_records", icon: restockIcon },
-    { name: "Staff Expenses", key: "staff_expenses", icon: expenseIcon },
-    { name: "Sales Report", key: "sales_report", icon: salesIcon },
-    { name: "Customer Add-Ons", key: "customer_add_ons", icon: hamburgerIcon },
-    { name: "Customer List", key: "customer_list", icon: customerListIcon },
-    { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
-    { name: "Seat Table", key: "seat_table", icon: seatIcon },
-    { name: "Promotions", key: "packages", icon: promotionIcon },
-    { name: "Discount Records", key: "discount_records", icon: discountIcon },
-  ];
+  const menuItems: MenuItem[] = useMemo(
+    () => [
+      { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
+      { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
+      { name: "Item Lists", key: "item_lists", icon: itemIcon },
+      { name: "Restock Records", key: "restock_records", icon: restockIcon },
+      { name: "Staff Expenses", key: "staff_expenses", icon: expenseIcon },
+      { name: "Sales Report", key: "sales_report", icon: salesIcon },
+      { name: "Customer Add-Ons", key: "customer_add_ons", icon: hamburgerIcon },
+      { name: "Customer List", key: "customer_list", icon: customerListIcon },
+      { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
+      { name: "Seat Table", key: "seat_table", icon: seatIcon },
+      { name: "Promotions", key: "packages", icon: promotionIcon },
+      { name: "Discount Records", key: "discount_records", icon: discountIcon },
+    ],
+    []
+  );
 
   const flowers: FlowerStatic[] = useMemo(
     () => [
@@ -162,99 +167,101 @@ const Admin_menu: React.FC = () => {
   };
 
   return (
-    <IonSplitPane contentId="main" when="(min-width: 768px)">
-      {/* ================= SIDEBAR ================= */}
-      <IonMenu contentId="main" className="staff-menu">
-        <IonHeader className="staff-menu-header">
-          <IonToolbar>
-            <div className="menu-brand">
-              <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
-              <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+    <IonPage className="staff-shell-page">
+      <IonSplitPane contentId="main" when="(min-width: 768px)">
+        {/* ================= SIDEBAR ================= */}
+        <IonMenu contentId="main" className="staff-menu">
+          <IonHeader className="staff-menu-header">
+            <IonToolbar>
+              <div className="menu-brand">
+                <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
+                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+              </div>
+            </IonToolbar>
+          </IonHeader>
+
+          <IonContent className="staff-menu-content">
+            {/* flowers background */}
+            <div className="menu-flowers" aria-hidden="true">
+              {flowers.map((f) => (
+                <img
+                  key={f.id}
+                  src={flowerImg}
+                  alt=""
+                  className="menu-flower"
+                  draggable={false}
+                  style={{
+                    left: f.left,
+                    top: f.top,
+                    width: f.size,
+                    height: f.size,
+                    opacity: f.opacity,
+                    transform: `rotate(${f.rotateDeg ?? 0}deg)`,
+                  }}
+                />
+              ))}
             </div>
-          </IonToolbar>
-        </IonHeader>
 
-        <IonContent className="staff-menu-content">
-          {/* flowers background */}
-          <div className="menu-flowers" aria-hidden="true">
-            {flowers.map((f) => (
-              <img
-                key={f.id}
-                src={flowerImg}
-                alt=""
-                className="menu-flower"
-                draggable={false}
-                style={{
-                  left: f.left,
-                  top: f.top,
-                  width: f.size,
-                  height: f.size,
-                  opacity: f.opacity,
-                  transform: `rotate(${f.rotateDeg ?? 0}deg)`,
-                }}
-              />
-            ))}
-          </div>
+            {/* menu items */}
+            <motion.div className="menu-items-layer" variants={listVariants} initial="hidden" animate="show">
+              {menuItems.map((item) => (
+                <IonMenuToggle key={item.key} autoHide={false}>
+                  <motion.div variants={itemVariants} whileHover={{ x: 3 }}>
+                    <IonItem
+                      button
+                      lines="none"
+                      className={`menu-item ${activePage === item.key ? "active" : ""}`}
+                      onClick={() => setActivePage(item.key)}
+                    >
+                      <img src={item.icon} alt={item.name} className="menu-icon" />
+                      <span className="menu-text">{item.name}</span>
+                    </IonItem>
+                  </motion.div>
+                </IonMenuToggle>
+              ))}
 
-          {/* menu items */}
-          <motion.div className="menu-items-layer" variants={listVariants} initial="hidden" animate="show">
-            {menuItems.map((item) => (
-              <IonMenuToggle key={item.key} autoHide={false}>
-                <motion.div variants={itemVariants} whileHover={{ x: 3 }}>
-                  <IonItem
-                    button
-                    lines="none"
-                    className={`menu-item ${activePage === item.key ? "active" : ""}`}
-                    onClick={() => setActivePage(item.key)}
-                  >
-                    <img src={item.icon} alt={item.name} className="menu-icon" />
-                    <span className="menu-text">{item.name}</span>
-                  </IonItem>
+              {/* logout */}
+              <IonMenuToggle autoHide={false}>
+                <motion.div variants={itemVariants}>
+                  <IonButton className="logout-btn" onClick={handleLogout}>
+                    <IonIcon icon={logOutOutline} slot="start" />
+                    Logout
+                  </IonButton>
                 </motion.div>
               </IonMenuToggle>
-            ))}
-
-            {/* logout */}
-            <IonMenuToggle autoHide={false}>
-              <motion.div variants={itemVariants}>
-                <IonButton className="logout-btn" onClick={handleLogout}>
-                  <IonIcon icon={logOutOutline} slot="start" />
-                  Logout
-                </IonButton>
-              </motion.div>
-            </IonMenuToggle>
-          </motion.div>
-        </IonContent>
-      </IonMenu>
-
-      {/* ================= MAIN =================
-          ✅ Use a real DOM element with id="main" (same fix as Staff_menu)
-      */}
-      <div id="main" className="staff-main-shell">
-        <IonHeader>
-          <IonToolbar>
-            <IonButtons slot="start">
-              <IonMenuButton />
-            </IonButtons>
-            <span className="topbar-title">Admin Panel</span>
-          </IonToolbar>
-        </IonHeader>
-
-        <IonContent className="ion-padding custom-bg">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activePage}
-              initial={{ opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -18 }}
-              transition={{ duration: 0.25 }}
-            >
-              {renderContent()}
             </motion.div>
-          </AnimatePresence>
-        </IonContent>
-      </div>
-    </IonSplitPane>
+          </IonContent>
+        </IonMenu>
+
+        {/* ================= MAIN =================
+            ✅ Keep real DOM element with id="main"
+        */}
+        <div id="main" className="staff-main-shell">
+          <IonHeader>
+            <IonToolbar>
+              <IonButtons slot="start">
+                <IonMenuButton />
+              </IonButtons>
+              <span className="topbar-title">Admin Panel</span>
+            </IonToolbar>
+          </IonHeader>
+
+          <IonContent className="ion-padding custom-bg">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activePage}
+                initial={{ opacity: 0, y: 18 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -18 }}
+                transition={{ duration: 0.25 }}
+              >
+                {renderContent()}
+              </motion.div>
+            </AnimatePresence>
+          </IonContent>
+        </div>
+      </IonSplitPane>
+    </IonPage>
   );
 };
 
