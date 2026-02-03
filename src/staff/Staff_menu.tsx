@@ -26,7 +26,8 @@ import Customer_Calendar from "./Customer_Calendar";
 import Product_Item_Lists from "./Product_Item_lists";
 import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Discount_List";
-import Staff_Sales_Report from "./Staff_sales_report";
+import Staff_Sales_Report from "./staff_sales_report";
+
 
 /* ===================== ASSETS ===================== */
 import dashboardIcon from "../assets/add_user.png";
