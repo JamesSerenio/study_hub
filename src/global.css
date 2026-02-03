@@ -5757,3 +5757,512 @@ ion-content.aao-content{
     padding-right: 8px;
   }
 }
+
+/* =========================
+   ADMIN DASHBOARD THEME
+========================= */
+.admin-dash-content {
+  --background: #b2c197;
+}
+
+.admin-dash-toolbar {
+  --background: #2b2b2b;
+  --color: #ffffff;
+}
+
+/* =========================
+   WIDTH WRAPPER
+   Mobile 400, Tablet 600, Desktop 1200
+========================= */
+.dash-wrap {
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+
+  max-width: 400px;
+  padding: 12px;
+}
+
+@media (min-width: 600px) {
+  .dash-wrap {
+    max-width: 600px;
+    padding: 14px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .dash-wrap {
+    max-width: 1200px;
+    padding: 16px;
+  }
+}
+
+/* =========================
+   TOTALS WRAP
+========================= */
+.dash-totals-wrap {
+  width: 100%;
+}
+
+/* =========================
+   ✅ MOBILE (<=599px): GRID 2x2 (NO SCROLL)
+   para di "nawawala" yung ibang cards
+========================= */
+.dash-totals-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* 2 cards per row */
+  gap: 12px;
+  align-items: stretch;
+}
+
+/* =========================
+   ✅ TABLET (>=600px): 2 per row (still grid)
+========================= */
+@media (min-width: 600px) {
+  .dash-totals-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* =========================
+   ✅ DESKTOP (>=1200px): 4 per row
+========================= */
+@media (min-width: 1200px) {
+  .dash-totals-row {
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+  }
+}
+
+/* =========================
+   CARD (SMOOTH FEEL)
+========================= */
+.dash-total-card {
+  width: 100%;
+  min-width: 0; /* ✅ IMPORTANT: prevent overflow */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  padding: 12px;
+  border-radius: 14px;
+
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(6px);
+
+  transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform: translateZ(0);
+}
+
+.dash-total-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.14);
+}
+
+.dash-total-card:active {
+  transform: translateY(0px) scale(0.99);
+}
+
+.dash-total-icon {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  flex: 0 0 38px;
+}
+
+@media (min-width: 1200px) {
+  .dash-total-icon {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+}
+
+.dash-total-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+  min-width: 0; /* ✅ allow text to ellipsis */
+}
+
+.dash-total-meta--all {
+  gap: 4px;
+}
+
+.dash-total-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.dash-total-value {
+  margin-top: 4px;
+  font-size: 22px;
+  font-weight: 900;
+  color: #111;
+}
+
+@media (min-width: 1200px) {
+  .dash-total-value {
+    font-size: 26px;
+  }
+}
+
+/* Accent strips */
+.dash-total-card--walkin {
+  border-left: 6px solid #2f3b2f;
+}
+.dash-total-card--reserve {
+  border-left: 6px solid #6a3fb5;
+}
+.dash-total-card--promo {
+  border-left: 6px solid #c04b1a;
+}
+.dash-total-card--all {
+  border-left: 6px solid #0f5a4a;
+}
+
+/* =========================
+   DATE BUTTON
+========================= */
+.dash-date-btn {
+  margin-top: 6px;
+  width: 100%;
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  padding: 8px 10px;
+  border-radius: 12px;
+
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+
+  cursor: pointer;
+  outline: none;
+
+  transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.dash-date-btn:hover {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.dash-date-btn:active {
+  transform: scale(0.98);
+}
+
+.dash-date-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex: 0 0 18px;
+}
+
+.dash-date-text {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.75);
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* =========================
+   CALENDAR MODAL (same as before)
+========================= */
+.dash-calendar-modal {
+  --backdrop-opacity: 0.45;
+}
+
+.dash-calendar-card {
+  margin: 16px;
+  padding: 14px;
+  border-radius: 16px;
+
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+
+.dash-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dash-calendar-title {
+  font-size: 14px;
+  font-weight: 900;
+  color: #111;
+}
+
+.dash-calendar-close {
+  --background: rgba(0, 0, 0, 0.08);
+  --color: #111;
+  --border-radius: 12px;
+}
+
+.dash-calendar-datetime {
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.dash-calendar-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.dash-calendar-today {
+  --background: rgba(0, 0, 0, 0.08);
+  --color: #111;
+  --border-radius: 12px;
+}
+
+.dash-calendar-done {
+  --background: #2b2b2b;
+  --color: #fff;
+  --border-radius: 12px;
+}
+
+/* =========================
+   PIE CHART CARD
+========================= */
+.dash-chart-card {
+  margin-top: 14px;
+  width: 100%;
+
+  padding: 14px;
+  border-radius: 16px;
+
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(6px);
+}
+
+.dash-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dash-chart-title {
+  font-size: 14px;
+  font-weight: 900;
+  color: #111;
+}
+
+.dash-chart-sub {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-chart-body {
+  position: relative;
+  width: 100%;
+}
+
+.dash-chart-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  flex-direction: column;
+}
+
+.dash-chart-center-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.dash-chart-center-value {
+  margin-top: 2px;
+  font-size: 26px;
+  font-weight: 1000;
+  color: #111;
+}
+
+.dash-chart-empty {
+  padding: 22px 12px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.65);
+  text-align: center;
+}
+
+/* =========================
+   CHARTS GRID (half-right on desktop)
+========================= */
+.dash-charts-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr; /* mobile stack */
+  gap: 12px;
+}
+
+@media (min-width: 1200px) {
+  .dash-charts-grid {
+    grid-template-columns: 1fr 1fr; /* ✅ half-half */
+    align-items: stretch;
+  }
+}
+
+/* =========================
+   CHART CARD (reuse same glass look)
+========================= */
+.dash-chart-card {
+  width: 100%;
+  padding: 14px;
+  border-radius: 16px;
+
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(6px);
+}
+
+.dash-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dash-chart-title {
+  font-size: 14px;
+  font-weight: 900;
+  color: #111;
+}
+
+.dash-chart-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* button on chart header */
+.dash-chart-datebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  padding: 8px 10px;
+  border-radius: 12px;
+
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.dash-chart-datebtn:hover {
+  background: rgba(0, 0, 0, 0.12);
+}
+.dash-chart-datebtn:active {
+  transform: scale(0.98);
+}
+
+/* loading */
+.dash-chart-loading {
+  height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.dash-chart-loading-text {
+  font-weight: 900;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* line chart wrap */
+.dash-line-wrap {
+  width: 100%;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+/* pie center */
+.dash-chart-body {
+  position: relative;
+  width: 100%;
+}
+
+.dash-chart-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  flex-direction: column;
+}
+
+.dash-chart-center-label {
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.dash-chart-center-value {
+  margin-top: 2px;
+  font-size: 26px;
+  font-weight: 1000;
+  color: #111;
+}
+
+.dash-chart-empty {
+  height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+
+  font-weight: 900;
+  color: rgba(0, 0, 0, 0.65);
+  text-align: center;
+  padding: 18px;
+}
