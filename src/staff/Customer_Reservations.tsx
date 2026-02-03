@@ -1,4 +1,5 @@
 // src/pages/Customer_Reservations.tsx
+// ✅ SAME CLASSNAMES as Customer_Lists so SAME CSS works
 // ✅ Date filter (shows reservations by selected reservation_date)
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both)
 // ✅ Receipt summary shows ONLY: Total Balance OR Total Change
@@ -7,13 +8,14 @@
 // ✅ DISCOUNT + PAYMENT + PAID:
 //    - Discount modal per reservation (percent/peso/none) + reason saved
 //    - Auto recompute totals (table + receipt)
-//    - Payment modal (GCash/Cash) based on Total Balance AFTER discount
+//    - Payment modal (GCash/Cash auto based on Total Balance AFTER discount)
 //    - Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
 //    - Manual PAID/UNPAID toggle still works
 // ✅ Open Time Stop -> ALSO releases seat_blocked_times (end_at = now)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
+import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
@@ -28,7 +30,7 @@ interface CustomerSession {
   date: string;
   full_name: string;
   customer_type: string;
-  customer_field: string;
+  customer_field: string | null;
   has_id: boolean;
   id_number: string | null;
   hour_avail: string;
@@ -73,9 +75,9 @@ const yyyyMmDdLocal = (d: Date): string => {
 };
 
 const formatTimeText = (iso: string): string => {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dt = new Date(iso);
+  if (!Number.isFinite(dt.getTime())) return "";
+  return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
 const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
@@ -144,14 +146,26 @@ const splitSeats = (seatStr: string): string[] => {
     .filter((s) => s.length > 0 && s.toUpperCase() !== "N/A");
 };
 
+const formatMinutesToTime = (minutes: number): string => {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "0 min";
+  const hrs = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hrs === 0) return `${mins} min`;
+  if (mins === 0) return `${hrs} hour${hrs > 1 ? "s" : ""}`;
+  return `${hrs} hr ${mins} min`;
+};
+
 const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
+
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+
+  // tick so OPEN sessions auto-update display
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
-  // date filter (by reservation_date)
+  // Date filter (by reservation_date)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   // Discount modal
@@ -170,29 +184,30 @@ const Customer_Reservations: React.FC = () => {
   // Paid toggle busy id
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
+  const isPromoType = (t: string | null | undefined): boolean => (t ?? "").trim().toLowerCase() === "promo";
+
   useEffect(() => {
     void fetchReservations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // tick so OPEN sessions auto-update display
   useEffect(() => {
     const t = window.setInterval(() => setNowTick(Date.now()), 10000);
     return () => window.clearInterval(t);
   }, []);
-
-  const isPromoType = (t: string | null | undefined): boolean => (t ?? "").trim().toLowerCase() === "promo";
 
   const fetchReservations = async (): Promise<void> => {
     setLoading(true);
 
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select(`*`)
+      .select("*")
       .eq("reservation", "yes")
       .neq("customer_type", "promo")
       .order("reservation_date", { ascending: false });
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error(error);
       alert(`Error loading reservations: ${error.message}`);
       setSessions([]);
@@ -211,13 +226,12 @@ const Customer_Reservations: React.FC = () => {
   }, [sessions, selectedDate]);
 
   // ✅ Open Time detection: hour_avail === "OPEN" (primary)
-  // (Optional legacy) if you still have old 2999 rows, keep fallback:
+  // (Optional legacy fallback) if you still have old 2999 rows
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").trim().toUpperCase() === "OPEN") return true;
-
     const end = new Date(s.time_ended);
     if (!Number.isFinite(end.getTime())) return false;
-    return end.getFullYear() >= 2999; // legacy fallback only
+    return end.getFullYear() >= 2999;
   };
 
   const diffMinutes = (startIso: string, endIso: string): number => {
@@ -225,15 +239,6 @@ const Customer_Reservations: React.FC = () => {
     const end = new Date(endIso).getTime();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
     return Math.floor((end - start) / (1000 * 60));
-  };
-
-  const formatMinutesToTime = (minutes: number): string => {
-    if (!Number.isFinite(minutes) || minutes <= 0) return "0 min";
-    const hrs = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    if (hrs === 0) return `${mins} min`;
-    if (mins === 0) return `${hrs} hour${hrs > 1 ? "s" : ""}`;
-    return `${hrs} hr ${mins} min`;
   };
 
   const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
@@ -326,16 +331,11 @@ const Customer_Reservations: React.FC = () => {
     return nowTick >= start;
   };
 
-  // ✅ NEW: Release seat_blocked_times for this session (end_at = now)
+  // ✅ Release seat_blocked_times for this session (end_at = now)
   const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
 
-    // We target blocks:
-    // - same seat_number
-    // - source reserved
-    // - start_at matches session.time_started (best match)
-    // - still active (end_at > now)
     const { data, error } = await supabase
       .from("seat_blocked_times")
       .select("id, seat_number, start_at, end_at, source, note")
@@ -345,14 +345,13 @@ const Customer_Reservations: React.FC = () => {
       .gt("end_at", nowIso);
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.warn("releaseSeatBlocksNow select:", error.message);
       return;
     }
 
     const rows = (data ?? []) as SeatBlockedRow[];
     if (rows.length === 0) {
-      // fallback: maybe start_at not exact (timezone differences)
-      // So update any active reserved block for those seats
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
         .update({ end_at: nowIso, note: "stopped (fallback)" })
@@ -360,18 +359,21 @@ const Customer_Reservations: React.FC = () => {
         .eq("source", "reserved")
         .gt("end_at", nowIso);
 
-      if (upErr) console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
+      if (upErr) {
+        // eslint-disable-next-line no-console
+        console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
+      }
       return;
     }
 
     const ids = rows.map((r) => r.id);
 
-    const { error: upErr } = await supabase
-      .from("seat_blocked_times")
-      .update({ end_at: nowIso, note: "stopped" })
-      .in("id", ids);
+    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in("id", ids);
 
-    if (upErr) console.warn("releaseSeatBlocksNow update:", upErr.message);
+    if (upErr) {
+      // eslint-disable-next-line no-console
+      console.warn("releaseSeatBlocksNow update:", upErr.message);
+    }
   };
 
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
@@ -397,7 +399,7 @@ const Customer_Reservations: React.FC = () => {
           hour_avail: "CLOSED",
         })
         .eq("id", session.id)
-        .select(`*`)
+        .select("*")
         .single();
 
       if (error || !updated) {
@@ -405,7 +407,7 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      // 2) ✅ release seats immediately
+      // 2) release seats immediately
       await releaseSeatBlocksNow(session, nowIso);
 
       // 3) update UI
@@ -416,6 +418,7 @@ const Customer_Reservations: React.FC = () => {
 
       setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Stop Time failed.");
     } finally {
@@ -423,7 +426,11 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  const renderTimeOut = (s: CustomerSession): string => (isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended));
+  const renderTimeOut = (s: CustomerSession): string => {
+    if (isOpenTimeSession(s)) return "OPEN";
+    const t = formatTimeText(s.time_ended);
+    return t || "—";
+  };
 
   const getUsedMinutesForReceipt = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
@@ -495,6 +502,7 @@ const Customer_Reservations: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === discountTarget.id ? (updated as CustomerSession) : prev));
       setDiscountTarget(null);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save discount failed.");
     } finally {
@@ -570,6 +578,7 @@ const Customer_Reservations: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === paymentTarget.id ? (updated as CustomerSession) : prev));
       setPaymentTarget(null);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
@@ -605,6 +614,7 @@ const Customer_Reservations: React.FC = () => {
       setSessions((prev) => prev.map((x) => (x.id === s.id ? (updated as CustomerSession) : x)));
       setSelectedSession((prev) => (prev?.id === s.id ? (updated as CustomerSession) : prev));
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -613,468 +623,489 @@ const Customer_Reservations: React.FC = () => {
   };
 
   return (
-    <div className="customer-lists-container">
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <h2 className="customer-lists-title" style={{ margin: 0 }}>
-          Customer Reservations
-        </h2>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
-        </div>
-      </div>
-
-      <div style={{ marginTop: 10, opacity: 0.85 }}>
-        Showing records for: <strong>{selectedDate}</strong>
-      </div>
-
-      {loading ? (
-        <p>Loading...</p>
-      ) : filteredSessions.length === 0 ? (
-        <p>No reservation records found for this date</p>
-      ) : (
-        <table className="customer-table">
-          <thead>
-            <tr>
-              <th>Reservation Date</th>
-              <th>Full Name</th>
-              <th>Field</th>
-              <th>Has ID</th>
-              <th>Specific ID</th>
-              <th>Hours</th>
-              <th>Time In</th>
-              <th>Time Out</th>
-              <th>Total Time</th>
-              <th>Total Balance / Change</th>
-              <th>Discount</th>
-              <th>Payment</th>
-              <th>Paid?</th>
-              <th>Seat</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {filteredSessions.map((session) => {
-              const open = isOpenTimeSession(session);
-              const disp = getDisplayAmount(session);
-
-              const due = getSessionBalance(session);
-              const pi = getPaidInfo(session);
-
-              return (
-                <tr key={session.id}>
-                  <td>{session.reservation_date ?? "N/A"}</td>
-                  <td>{session.full_name}</td>
-                  <td>{session.customer_field}</td>
-                  <td>{session.has_id ? "Yes" : "No"}</td>
-                  <td>{session.id_number || "N/A"}</td>
-                  <td>{session.hour_avail}</td>
-                  <td>{formatTimeText(session.time_started)}</td>
-                  <td>{renderTimeOut(session)}</td>
-
-                  <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
-
-                  <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <span style={{ fontWeight: 800 }}>{disp.label}</span>
-                      <span>₱{disp.value.toFixed(2)}</span>
-                    </div>
-                  </td>
-
-                  <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <span style={{ fontWeight: 800 }}>{getDiscountText(session)}</span>
-                      <button className="receipt-btn" onClick={() => openDiscountModal(session)}>
-                        Discount
-                      </button>
-                    </div>
-                  </td>
-
-                  <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <span style={{ fontWeight: 800 }}>
-                        GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
-                      </span>
-                      <button
-                        className="receipt-btn"
-                        onClick={() => openPaymentModal(session)}
-                        disabled={due <= 0}
-                        title={due <= 0 ? "No balance due" : "Set GCash/Cash payment"}
-                      >
-                        Payment
-                      </button>
-                    </div>
-                  </td>
-
-                  <td>
-                    <button
-                      className="receipt-btn"
-                      onClick={() => void togglePaid(session)}
-                      disabled={togglingPaidId === session.id}
-                      style={{ background: toBool(session.is_paid) ? "#1b5e20" : "#b00020" }}
-                      title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
-                    >
-                      {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
-                    </button>
-                  </td>
-
-                  <td>{session.seat_number}</td>
-                  <td>{getStatus(session)}</td>
-
-                  <td style={{ display: "flex", gap: 8 }}>
-                    {open && canShowStopButton(session) && (
-                      <button
-                        className="receipt-btn"
-                        disabled={stoppingId === session.id}
-                        onClick={() => void stopReservationTime(session)}
-                      >
-                        {stoppingId === session.id ? "Stopping..." : "Stop Time"}
-                      </button>
-                    )}
-
-                    <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
-                      View Receipt
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-
-      {/* DISCOUNT MODAL (same style as Customer_Lists) */}
-      {discountTarget && (
-        <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
-          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            <h3 className="receipt-title">DISCOUNT</h3>
-            <p className="receipt-subtitle">{discountTarget.full_name}</p>
-
-            <hr />
-
-            <div className="receipt-row">
-              <span>Discount Type</span>
-              <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
-                <option value="none">None</option>
-                <option value="percent">Percent (%)</option>
-                <option value="amount">Peso (₱)</option>
-              </select>
-            </div>
-
-            <div className="receipt-row">
-              <span>Value</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontWeight: 900 }}>{discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}</span>
-                <input
-                  type="number"
-                  min="0"
-                  step={discountKind === "percent" ? "1" : "0.01"}
-                  value={discountInput}
-                  onChange={(e) => setDiscountInput(e.currentTarget.value)}
-                  style={{ width: 140 }}
-                  disabled={discountKind === "none"}
-                />
+    <IonPage>
+      {/* ✅ SAME BACKGROUND as other pages */}
+      <IonContent scrollY={false} className="staff-content">
+        <div className="customer-lists-container">
+          {/* TOP BAR (same as Customer_Lists) */}
+          <div className="customer-topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Customer Reservations</h2>
+              <div className="customer-subtext">
+                Showing records for: <strong>{selectedDate}</strong>
               </div>
             </div>
 
-            <div className="receipt-row">
-              <span>Reason</span>
-              <input
-                type="text"
-                value={discountReason}
-                onChange={(e) => setDiscountReason(e.currentTarget.value)}
-                placeholder="e.g. Student discount / Promo / Goodwill"
-                style={{ width: 220 }}
-              />
+            <div className="customer-topbar-right">
+              <label className="date-pill">
+                <span className="date-pill-label">Date</span>
+                <input
+                  className="date-pill-input"
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                />
+                <span className="date-pill-icon" aria-hidden="true">
+                  📅
+                </span>
+              </label>
             </div>
+          </div>
 
-            {(() => {
-              const base = getBaseSystemCost(discountTarget);
-              const val = toMoney(discountInput);
-              const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+          {/* TABLE */}
+          {loading ? (
+            <p className="customer-note">Loading...</p>
+          ) : filteredSessions.length === 0 ? (
+            <p className="customer-note">No reservation records found for this date</p>
+          ) : (
+            <div className="customer-table-wrap" key={selectedDate}>
+              <table className="customer-table">
+                <thead>
+                  <tr>
+                    <th>Reservation Date</th>
+                    <th>Full Name</th>
+                    <th>Field</th>
+                    <th>Has ID</th>
+                    <th>Specific ID</th>
+                    <th>Hours</th>
+                    <th>Time In</th>
+                    <th>Time Out</th>
+                    <th>Total Time</th>
+                    <th>Total Balance / Change</th>
+                    <th>Discount</th>
+                    <th>Payment</th>
+                    <th>Paid?</th>
+                    <th>Seat</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
 
-              const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-              const due = round2(Math.max(0, discountedCost - DOWN_PAYMENT));
+                <tbody>
+                  {filteredSessions.map((session) => {
+                    const open = isOpenTimeSession(session);
+                    const disp = getDisplayAmount(session);
 
-              const prevPay = getPaidInfo(discountTarget);
-              const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
+                    const due = getSessionBalance(session);
+                    const pi = getPaidInfo(session);
 
-              return (
-                <>
-                  <hr />
+                    return (
+                      <tr key={session.id}>
+                        <td>{session.reservation_date ?? "N/A"}</td>
+                        <td>{session.full_name}</td>
+                        <td>{session.customer_field ?? ""}</td>
+                        <td>{session.has_id ? "Yes" : "No"}</td>
+                        <td>{session.id_number ?? "N/A"}</td>
+                        <td>{session.hour_avail}</td>
+                        <td>{formatTimeText(session.time_started)}</td>
+                        <td>{renderTimeOut(session)}</td>
 
-                  <div className="receipt-row">
-                    <span>System Cost (Before)</span>
-                    <span>₱{base.toFixed(2)}</span>
-                  </div>
+                        <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
 
-                  <div className="receipt-row">
-                    <span>Discount</span>
-                    <span>{getDiscountTextFrom(discountKind, appliedVal)}</span>
-                  </div>
+                        <td>
+                          <div className="cell-stack">
+                            <span className="cell-strong">{disp.label}</span>
+                            <span>₱{disp.value.toFixed(2)}</span>
+                          </div>
+                        </td>
 
-                  <div className="receipt-row">
-                    <span>Discount Amount</span>
-                    <span>₱{discountAmount.toFixed(2)}</span>
-                  </div>
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">{getDiscountText(session)}</span>
+                            <button className="receipt-btn" onClick={() => openDiscountModal(session)}>
+                              Discount
+                            </button>
+                          </div>
+                        </td>
 
-                  <div className="receipt-row">
-                    <span>Final System Cost</span>
-                    <span>₱{discountedCost.toFixed(2)}</span>
-                  </div>
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">
+                              GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
+                            </span>
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openPaymentModal(session)}
+                              disabled={due <= 0}
+                              title={due <= 0 ? "No balance due" : "Set GCash/Cash payment"}
+                            >
+                              Payment
+                            </button>
+                          </div>
+                        </td>
 
-                  <div className="receipt-total">
-                    <span>NEW TOTAL BALANCE</span>
-                    <span>₱{due.toFixed(2)}</span>
-                  </div>
+                        <td>
+                          <button
+                            className={`receipt-btn pay-badge ${toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            onClick={() => void togglePaid(session)}
+                            disabled={togglingPaidId === session.id}
+                            title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
+                          >
+                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                          </button>
+                        </td>
 
-                  <div className="receipt-row">
-                    <span>Auto Payment After Save</span>
-                    <span>
-                      GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                        <td>{session.seat_number}</td>
+                        <td>{getStatus(session)}</td>
+
+                        <td>
+                          <div className="action-stack">
+                            {open && canShowStopButton(session) && (
+                              <button
+                                className="receipt-btn"
+                                disabled={stoppingId === session.id}
+                                onClick={() => void stopReservationTime(session)}
+                              >
+                                {stoppingId === session.id ? "Stopping..." : "Stop Time"}
+                              </button>
+                            )}
+
+                            <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
+                              View Receipt
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* DISCOUNT MODAL (same as Customer_Lists) */}
+          {discountTarget && (
+            <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DISCOUNT</h3>
+                <p className="receipt-subtitle">{discountTarget.full_name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Discount Type</span>
+                  <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
+                    <option value="none">None</option>
+                    <option value="percent">Percent (%)</option>
+                    <option value="amount">Peso (₱)</option>
+                  </select>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Value</span>
+                  <div className="inline-input">
+                    <span className="inline-input-prefix">
+                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
                     </span>
-                  </div>
-                </>
-              );
-            })()}
-
-            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-              <button className="receipt-btn" onClick={() => setDiscountTarget(null)} style={{ flex: 1 }}>
-                Cancel
-              </button>
-              <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount} style={{ flex: 1 }}>
-                {savingDiscount ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* PAYMENT MODAL */}
-      {paymentTarget && (
-        <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
-          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            <h3 className="receipt-title">PAYMENT</h3>
-            <p className="receipt-subtitle">{paymentTarget.full_name}</p>
-
-            <hr />
-
-            {(() => {
-              const due = getSessionBalance(paymentTarget);
-              const gcIn = Math.max(0, toMoney(gcashInput));
-              const adj = recalcPaymentsToDue(due, gcIn);
-
-              const totalPaid = round2(adj.gcash + adj.cash);
-              const remaining = round2(Math.max(0, due - totalPaid));
-
-              return (
-                <>
-                  <div className="receipt-row">
-                    <span>Total Balance (Due)</span>
-                    <span>₱{due.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>GCash</span>
                     <input
+                      className="small-input"
                       type="number"
                       min="0"
-                      step="0.01"
-                      value={gcashInput}
-                      onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
-                      style={{ width: 160 }}
+                      step={discountKind === "percent" ? "1" : "0.01"}
+                      value={discountInput}
+                      onChange={(e) => setDiscountInput(e.currentTarget.value)}
+                      disabled={discountKind === "none"}
                     />
                   </div>
+                </div>
 
-                  <div className="receipt-row">
-                    <span>Cash</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={cashInput}
-                      onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
-                      style={{ width: 160 }}
-                    />
-                  </div>
+                <div className="receipt-row">
+                  <span>Reason</span>
+                  <input
+                    className="reason-input"
+                    type="text"
+                    value={discountReason}
+                    onChange={(e) => setDiscountReason(e.currentTarget.value)}
+                    placeholder="e.g. Student discount / Promo / Goodwill"
+                  />
+                </div>
 
-                  <hr />
+                {(() => {
+                  const base = getBaseSystemCost(discountTarget);
+                  const val = toMoney(discountInput);
+                  const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
-                  <div className="receipt-row">
-                    <span>Total Paid</span>
-                    <span>₱{totalPaid.toFixed(2)}</span>
-                  </div>
+                  const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
+                  const due = round2(Math.max(0, discountedCost - DOWN_PAYMENT));
 
-                  <div className="receipt-row">
-                    <span>Remaining</span>
-                    <span>₱{remaining.toFixed(2)}</span>
-                  </div>
+                  const prevPay = getPaidInfo(discountTarget);
+                  const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
 
-                  <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                    <button className="receipt-btn" onClick={() => setPaymentTarget(null)} style={{ flex: 1 }}>
-                      Cancel
+                  return (
+                    <>
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>System Cost (Before)</span>
+                        <span>₱{base.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Discount</span>
+                        <span>{getDiscountTextFrom(discountKind, appliedVal)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Discount Amount</span>
+                        <span>₱{discountAmount.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Final System Cost</span>
+                        <span>₱{discountedCost.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-total">
+                        <span>NEW TOTAL BALANCE</span>
+                        <span>₱{due.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Auto Payment After Save</span>
+                        <span>
+                          GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setDiscountTarget(null)}>
+                    Cancel
+                  </button>
+                  <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount}>
+                    {savingDiscount ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PAYMENT MODAL (same as Customer_Lists) */}
+          {paymentTarget && (
+            <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">PAYMENT</h3>
+                <p className="receipt-subtitle">{paymentTarget.full_name}</p>
+
+                <hr />
+
+                {(() => {
+                  const due = getSessionBalance(paymentTarget);
+                  const gcIn = Math.max(0, toMoney(gcashInput));
+                  const adj = recalcPaymentsToDue(due, gcIn);
+
+                  const totalPaid = round2(adj.gcash + adj.cash);
+                  const remaining = round2(Math.max(0, due - totalPaid));
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>Total Balance (Due)</span>
+                        <span>₱{due.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashInput}
+                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                        />
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={cashInput}
+                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                        />
+                      </div>
+
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>₱{totalPaid.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining</span>
+                        <span>₱{remaining.toFixed(2)}</span>
+                      </div>
+
+                      <div className="modal-actions">
+                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)}>
+                          Cancel
+                        </button>
+                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment}>
+                          {savingPayment ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* RECEIPT MODAL (same classnames as Customer_Lists) */}
+          {selectedSession && (
+            <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+
+                <h3 className="receipt-title">ME TYME LOUNGE</h3>
+                <p className="receipt-subtitle">RESERVATION RECEIPT</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Reservation Date</span>
+                  <span>{selectedSession.reservation_date ?? "N/A"}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Customer</span>
+                  <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{selectedSession.seat_number}</span>
+                </div>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Time In</span>
+                  <span>{formatTimeText(selectedSession.time_started)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Time Out</span>
+                  <span>{renderTimeOut(selectedSession)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Minutes Used</span>
+                  <span>{getUsedMinutesForReceipt(selectedSession)} min</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Charge Minutes</span>
+                  <span>{getChargeMinutesForReceipt(selectedSession)} min</span>
+                </div>
+
+                {isOpenTimeSession(selectedSession) && canShowStopButton(selectedSession) && (
+                  <div className="block-top">
+                    <button
+                      className="receipt-btn btn-full"
+                      disabled={stoppingId === selectedSession.id}
+                      onClick={() => void stopReservationTime(selectedSession)}
+                    >
+                      {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
-                    <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment} style={{ flex: 1 }}>
-                      {savingPayment ? "Saving..." : "Save"}
-                    </button>
                   </div>
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      )}
+                )}
 
-      {/* RECEIPT MODAL */}
-      {selectedSession && (
-        <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
-          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+                <hr />
 
-            <h3 className="receipt-title">ME TYME LOUNGE</h3>
-            <p className="receipt-subtitle">RESERVATION RECEIPT</p>
+                {(() => {
+                  const disp = getDisplayAmount(selectedSession);
 
-            <hr />
+                  const baseCost = getBaseSystemCost(selectedSession);
+                  const di = getDiscountInfo(selectedSession);
+                  const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
-            <div className="receipt-row">
-              <span>Reservation Date</span>
-              <span>{selectedSession.reservation_date ?? "N/A"}</span>
-            </div>
+                  const pi = getPaidInfo(selectedSession);
+                  const due = getSessionBalance(selectedSession);
+                  const remaining = round2(Math.max(0, due - pi.totalPaid));
 
-            <div className="receipt-row">
-              <span>Customer</span>
-              <span>{selectedSession.full_name}</span>
-            </div>
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>{disp.label}</span>
+                        <span>₱{disp.value.toFixed(2)}</span>
+                      </div>
 
-            <div className="receipt-row">
-              <span>Seat</span>
-              <span>{selectedSession.seat_number}</span>
-            </div>
+                      <div className="receipt-row">
+                        <span>Down Payment</span>
+                        <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
+                      </div>
 
-            <hr />
+                      <div className="receipt-row">
+                        <span>Discount</span>
+                        <span>{getDiscountTextFrom(di.kind, di.value)}</span>
+                      </div>
 
-            <div className="receipt-row">
-              <span>Time In</span>
-              <span>{formatTimeText(selectedSession.time_started)}</span>
-            </div>
+                      <div className="receipt-row">
+                        <span>Discount Amount</span>
+                        <span>₱{discountCalc.discountAmount.toFixed(2)}</span>
+                      </div>
 
-            <div className="receipt-row">
-              <span>Time Out</span>
-              <span>{renderTimeOut(selectedSession)}</span>
-            </div>
+                      <div className="receipt-row">
+                        <span>System Cost</span>
+                        <span>₱{discountCalc.discountedCost.toFixed(2)}</span>
+                      </div>
 
-            <div className="receipt-row">
-              <span>Minutes Used</span>
-              <span>{getUsedMinutesForReceipt(selectedSession)} min</span>
-            </div>
+                      <hr />
 
-            <div className="receipt-row">
-              <span>Charge Minutes</span>
-              <span>{getChargeMinutesForReceipt(selectedSession)} min</span>
-            </div>
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <span>₱{pi.gcash.toFixed(2)}</span>
+                      </div>
 
-            {isOpenTimeSession(selectedSession) && canShowStopButton(selectedSession) && (
-              <div style={{ marginTop: 12 }}>
-                <button
-                  className="receipt-btn"
-                  disabled={stoppingId === selectedSession.id}
-                  onClick={() => void stopReservationTime(selectedSession)}
-                  style={{ width: "100%" }}
-                >
-                  {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <span>₱{pi.cash.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>₱{pi.totalPaid.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining Balance</span>
+                        <span>₱{remaining.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Status</span>
+                        <span className="receipt-status">{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
+                      </div>
+
+                      <div className="receipt-total">
+                        <span>{disp.label.toUpperCase()}</span>
+                        <span>₱{disp.value.toFixed(2)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                <p className="receipt-footer">
+                  Thank you for choosing <br />
+                  <strong>Me Tyme Lounge</strong>
+                </p>
+
+                <button className="close-btn" onClick={() => setSelectedSession(null)}>
+                  Close
                 </button>
               </div>
-            )}
-
-            <hr />
-
-            {(() => {
-              const disp = getDisplayAmount(selectedSession);
-
-              const baseCost = getBaseSystemCost(selectedSession);
-              const di = getDiscountInfo(selectedSession);
-              const discountCalc = applyDiscount(baseCost, di.kind, di.value);
-
-              const pi = getPaidInfo(selectedSession);
-              const due = getSessionBalance(selectedSession);
-              const remaining = round2(Math.max(0, due - pi.totalPaid));
-
-              return (
-                <>
-                  <div className="receipt-row">
-                    <span>{disp.label}</span>
-                    <span>₱{disp.value.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Down Payment</span>
-                    <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Discount</span>
-                    <span>{getDiscountTextFrom(di.kind, di.value)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Discount Amount</span>
-                    <span>₱{discountCalc.discountAmount.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>System Cost</span>
-                    <span>₱{discountCalc.discountedCost.toFixed(2)}</span>
-                  </div>
-
-                  <hr />
-
-                  <div className="receipt-row">
-                    <span>GCash</span>
-                    <span>₱{pi.gcash.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Cash</span>
-                    <span>₱{pi.cash.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Total Paid</span>
-                    <span>₱{pi.totalPaid.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Remaining Balance</span>
-                    <span>₱{remaining.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Status</span>
-                    <span style={{ fontWeight: 900 }}>{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
-                  </div>
-
-                  <div className="receipt-total">
-                    <span>{disp.label.toUpperCase()}</span>
-                    <span>₱{disp.value.toFixed(2)}</span>
-                  </div>
-                </>
-              );
-            })()}
-
-            <p className="receipt-footer">
-              Thank you for choosing <br />
-              <strong>Me Tyme Lounge</strong>
-            </p>
-
-            <button className="close-btn" onClick={() => setSelectedSession(null)}>
-              Close
-            </button>
-          </div>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      </IonContent>
+    </IonPage>
   );
 };
 
