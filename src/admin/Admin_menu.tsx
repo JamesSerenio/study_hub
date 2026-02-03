@@ -1,4 +1,4 @@
-// src/pages/Admin_menu.tsx
+// src/admin/Admin_menu.tsx
 // ✅ SAME CLASSNAMES AS Staff_menu (staff-menu / staff-menu-header / staff-menu-content / menu-flowers / menu-flower / menu-items-layer)
 // ✅ Added STATIC flowers (NO appear/disappear)
 // ✅ Keeps your existing pages/files/menu items (WALANG papalitan sa files)
@@ -13,7 +13,6 @@ import {
   IonMenu,
   IonMenuButton,
   IonMenuToggle,
-  IonPage,
   IonSplitPane,
   IonToolbar,
   IonIcon,
@@ -51,7 +50,7 @@ import salesIcon from "../assets/sales.png";
 import restockIcon from "../assets/restock.png";
 import studyHubLogo from "../assets/study_hub.png";
 
-/* 🌼 STATIC flower background (same as Staff_menu) */
+/* 🌼 STATIC flower background */
 import flowerImg from "../assets/flower.png";
 
 type MenuKey =
@@ -76,9 +75,9 @@ type MenuItem = {
 
 type FlowerStatic = {
   id: string;
-  left: string; // css value
-  top: string; // css value
-  size: string; // px
+  left: string;
+  top: string;
+  size: string;
   opacity: number;
   rotateDeg?: number;
 };
@@ -102,16 +101,10 @@ const Admin_menu: React.FC = () => {
     { name: "Discount Records", key: "discount_records", icon: discountIcon },
   ];
 
-  /* ===================== STATIC FLOWERS (NO APPEAR/DISAPPEAR) ===================== */
   const flowers: FlowerStatic[] = useMemo(
     () => [
-      // ✅ BIG flower top-right (same feel as Staff_menu)
       { id: "big-tr", left: "62%", top: "10%", size: "260px", opacity: 0.18, rotateDeg: 0 },
-
-      // ✅ BIG flower bottom-left
       { id: "big-bl", left: "-10%", top: "70%", size: "320px", opacity: 0.16, rotateDeg: 0 },
-
-      // ✅ small flowers scattered
       { id: "s1", left: "58%", top: "52%", size: "110px", opacity: 0.18, rotateDeg: 0 },
       { id: "s2", left: "73%", top: "62%", size: "95px", opacity: 0.18, rotateDeg: 0 },
       { id: "s3", left: "64%", top: "74%", size: "105px", opacity: 0.18, rotateDeg: 0 },
@@ -155,10 +148,9 @@ const Admin_menu: React.FC = () => {
   const handleLogout = (): void => {
     localStorage.clear();
     sessionStorage.clear();
-    history.push("/login");
+    history.replace("/login");
   };
 
-  /* ===================== MENU ANIMATION (same as Staff_menu) ===================== */
   const listVariants = {
     hidden: { opacity: 0 },
     show: { opacity: 1, transition: { staggerChildren: 0.06, delayChildren: 0.05 } },
@@ -170,66 +162,59 @@ const Admin_menu: React.FC = () => {
   };
 
   return (
-    <IonPage>
-      <IonSplitPane contentId="main" when="(min-width: 768px)">
-        {/* ================= SIDEBAR ================= */}
-        <IonMenu contentId="main" className="staff-menu">
-          <IonHeader className="staff-menu-header">
-            <IonToolbar>
-              <div className="menu-brand">
-                <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
-                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
-              </div>
-            </IonToolbar>
-          </IonHeader>
-
-          {/* ✅ match Staff_menu IonContent classname */}
-          <IonContent className="staff-menu-content">
-            {/* ✅ STATIC FLOWERS LAYER (BACKGROUND) */}
-            <div className="menu-flowers" aria-hidden="true">
-              {flowers.map((f) => (
-                <img
-                  key={f.id}
-                  src={flowerImg}
-                  alt=""
-                  className="menu-flower"
-                  draggable={false}
-                  style={{
-                    left: f.left,
-                    top: f.top,
-                    width: f.size,
-                    height: f.size,
-                    opacity: f.opacity,
-                    transform: `rotate(${f.rotateDeg ?? 0}deg)`,
-                  }}
-                />
-              ))}
+    <IonSplitPane contentId="main" when="(min-width: 768px)">
+      {/* ================= SIDEBAR ================= */}
+      <IonMenu contentId="main" className="staff-menu">
+        <IonHeader className="staff-menu-header">
+          <IonToolbar>
+            <div className="menu-brand">
+              <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
+              <span className="menu-title-text figma-title">Me Tyme Lounge</span>
             </div>
+          </IonToolbar>
+        </IonHeader>
 
-            {/* MENU ITEMS (ABOVE FLOWERS) */}
-            <motion.div
-              className="menu-items-layer"
-              variants={listVariants}
-              initial="hidden"
-              animate="show"
-            >
-              {menuItems.map((item) => (
-                <IonMenuToggle key={item.key} autoHide={false}>
-                  <motion.div variants={itemVariants} whileHover={{ x: 3 }}>
-                    <IonItem
-                      button
-                      lines="none"
-                      className={`menu-item ${activePage === item.key ? "active" : ""}`}
-                      onClick={() => setActivePage(item.key)}
-                    >
-                      <img src={item.icon} alt={item.name} className="menu-icon" />
-                      <span className="menu-text">{item.name}</span>
-                    </IonItem>
-                  </motion.div>
-                </IonMenuToggle>
-              ))}
+        <IonContent className="staff-menu-content">
+          {/* flowers background */}
+          <div className="menu-flowers" aria-hidden="true">
+            {flowers.map((f) => (
+              <img
+                key={f.id}
+                src={flowerImg}
+                alt=""
+                className="menu-flower"
+                draggable={false}
+                style={{
+                  left: f.left,
+                  top: f.top,
+                  width: f.size,
+                  height: f.size,
+                  opacity: f.opacity,
+                  transform: `rotate(${f.rotateDeg ?? 0}deg)`,
+                }}
+              />
+            ))}
+          </div>
 
-            {/* LOGOUT */}
+          {/* menu items */}
+          <motion.div className="menu-items-layer" variants={listVariants} initial="hidden" animate="show">
+            {menuItems.map((item) => (
+              <IonMenuToggle key={item.key} autoHide={false}>
+                <motion.div variants={itemVariants} whileHover={{ x: 3 }}>
+                  <IonItem
+                    button
+                    lines="none"
+                    className={`menu-item ${activePage === item.key ? "active" : ""}`}
+                    onClick={() => setActivePage(item.key)}
+                  >
+                    <img src={item.icon} alt={item.name} className="menu-icon" />
+                    <span className="menu-text">{item.name}</span>
+                  </IonItem>
+                </motion.div>
+              </IonMenuToggle>
+            ))}
+
+            {/* logout */}
             <IonMenuToggle autoHide={false}>
               <motion.div variants={itemVariants}>
                 <IonButton className="logout-btn" onClick={handleLogout}>
@@ -238,37 +223,38 @@ const Admin_menu: React.FC = () => {
                 </IonButton>
               </motion.div>
             </IonMenuToggle>
+          </motion.div>
+        </IonContent>
+      </IonMenu>
+
+      {/* ================= MAIN =================
+          ✅ Use a real DOM element with id="main" (same fix as Staff_menu)
+      */}
+      <div id="main" className="staff-main-shell">
+        <IonHeader>
+          <IonToolbar>
+            <IonButtons slot="start">
+              <IonMenuButton />
+            </IonButtons>
+            <span className="topbar-title">Admin Panel</span>
+          </IonToolbar>
+        </IonHeader>
+
+        <IonContent className="ion-padding custom-bg">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activePage}
+              initial={{ opacity: 0, y: 18 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -18 }}
+              transition={{ duration: 0.25 }}
+            >
+              {renderContent()}
             </motion.div>
-          </IonContent>
-        </IonMenu>
-
-        {/* ================= MAIN ================= */}
-        <IonPage id="main">
-          <IonHeader>
-            <IonToolbar>
-              <IonButtons slot="start">
-                <IonMenuButton />
-              </IonButtons>
-              <span className="topbar-title">Admin Panel</span>
-            </IonToolbar>
-          </IonHeader>
-
-          <IonContent className="ion-padding custom-bg">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activePage}
-                initial={{ opacity: 0, y: 18 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -18 }}
-                transition={{ duration: 0.25 }}
-              >
-                {renderContent()}
-              </motion.div>
-            </AnimatePresence>
-          </IonContent>
-        </IonPage>
-      </IonSplitPane>
-    </IonPage>
+          </AnimatePresence>
+        </IonContent>
+      </div>
+    </IonSplitPane>
   );
 };
 
