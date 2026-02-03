@@ -1,21 +1,15 @@
 // src/pages/Admin_Staff_Expenses&Expired.tsx
 // ✅ Admin view: staff expenses/expired logs
-// ✅ Shows: full name, product, qty, type, date/time, description
+// ✅ Date filter calendar (same style as Customer_Lists: date-pill)
+// ✅ Same classnames as Customer_Lists for consistent CSS
 // ✅ Admin can DELETE (no revert)
 // ✅ Admin can VOID (reverts add_ons counts via DB trigger)
-// ✅ STRICT TS, NO any, NO unknown, no unused locals
+// ✅ STRICT TS, NO any, NO unknown
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
-  IonHeader,
-  IonToolbar,
-  IonTitle,
   IonContent,
-  IonGrid,
-  IonRow,
-  IonCol,
-  IonLabel,
   IonButton,
   IonIcon,
   IonToast,
@@ -24,7 +18,6 @@ import {
   IonRefresherContent,
   RefresherEventDetail,
   IonAlert,
-  IonBadge,
 } from "@ionic/react";
 import { trashOutline, closeCircleOutline, refreshOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -45,6 +38,27 @@ type ExpenseRow = {
   voided_at: string | null;
 };
 
+type ExpenseRowDB = {
+  id: string;
+  created_at: string;
+  add_on_id: string;
+  full_name: string | null;
+  category: string | null;
+  product_name: string | null;
+  quantity: number | string | null;
+  expense_type: string | null;
+  description: string | null;
+  voided: boolean | null;
+  voided_at: string | null;
+};
+
+const yyyyMmDdLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
 const formatDateTime = (iso: string): string => {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
@@ -53,6 +67,21 @@ const formatDateTime = (iso: string): string => {
 
 const typeLabel = (t: ExpenseType): string =>
   t === "expired" ? "Expired" : "Staff Consumed";
+
+const toQty = (v: number | string | null): number => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+};
+
+const toExpenseType = (v: string | null): ExpenseType | null => {
+  if (v === "expired") return "expired";
+  if (v === "staff_consumed") return "staff_consumed";
+  return null;
+};
 
 const Admin_Staff_Expenses_Expired: React.FC = () => {
   const [rows, setRows] = useState<ExpenseRow[]>([]);
@@ -66,6 +95,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
 
   const [busyId, setBusyId] = useState<string>("");
 
+  // ✅ Date filter (same pattern as Customer_Lists)
+  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+
   const fetchRows = async (): Promise<void> => {
     setLoading(true);
     try {
@@ -74,47 +106,39 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
         .select(
           "id, created_at, add_on_id, full_name, category, product_name, quantity, expense_type, description, voided, voided_at"
         )
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .returns<ExpenseRowDB[]>();
 
       if (error) throw error;
 
-      // ✅ normalize to strict types (no blind casting)
       const normalized: ExpenseRow[] = (data ?? [])
-        .map((r) => {
-          const expenseType = String((r as { expense_type?: string }).expense_type ?? "");
-          if (expenseType !== "expired" && expenseType !== "staff_consumed") return null;
-
-          const qtyRaw = (r as { quantity?: number | string }).quantity;
-          const qtyNum =
-            typeof qtyRaw === "number"
-              ? qtyRaw
-              : typeof qtyRaw === "string"
-              ? Number(qtyRaw)
-              : 0;
+        .map((r): ExpenseRow | null => {
+          const et = toExpenseType(r.expense_type);
+          if (!et) return null;
 
           return {
-            id: String((r as { id?: string }).id ?? ""),
-            created_at: String((r as { created_at?: string }).created_at ?? ""),
-            add_on_id: String((r as { add_on_id?: string }).add_on_id ?? ""),
-            full_name: String((r as { full_name?: string }).full_name ?? ""),
-            category: String((r as { category?: string }).category ?? ""),
-            product_name: String((r as { product_name?: string }).product_name ?? ""),
-            quantity: Number.isFinite(qtyNum) ? qtyNum : 0,
-            expense_type: expenseType as ExpenseType,
-            description: String((r as { description?: string }).description ?? ""),
-            voided: Boolean((r as { voided?: boolean }).voided),
-            voided_at: ((r as { voided_at?: string | null }).voided_at ?? null) as
-              | string
-              | null,
+            id: r.id,
+            created_at: r.created_at,
+            add_on_id: r.add_on_id,
+            full_name: String(r.full_name ?? "").trim(),
+            category: String(r.category ?? "").trim(),
+            product_name: String(r.product_name ?? "").trim(),
+            quantity: toQty(r.quantity),
+            expense_type: et,
+            description: String(r.description ?? "").trim(),
+            voided: Boolean(r.voided ?? false),
+            voided_at: r.voided_at ?? null,
           };
         })
         .filter((x): x is ExpenseRow => x !== null);
 
       setRows(normalized);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Failed to load expenses logs.");
       setToastOpen(true);
+      setRows([]);
     } finally {
       setLoading(false);
     }
@@ -128,7 +152,14 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
     void fetchRows().finally(() => event.detail.complete());
   };
 
-  const activeRows = useMemo(() => rows, [rows]);
+  // ✅ Filter rows by selectedDate using created_at local date
+  const filteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      const d = new Date(r.created_at);
+      if (!Number.isFinite(d.getTime())) return false;
+      return yyyyMmDdLocal(d) === selectedDate;
+    });
+  }, [rows, selectedDate]);
 
   const doVoid = async (r: ExpenseRow): Promise<void> => {
     if (busyId) return;
@@ -146,6 +177,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       setToastOpen(true);
       await fetchRows();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Failed to void record.");
       setToastOpen(true);
@@ -165,6 +197,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       setToastOpen(true);
       await fetchRows();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Failed to delete record.");
       setToastOpen(true);
@@ -175,174 +208,185 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
 
   return (
     <IonPage>
-      <IonHeader>
-        <IonToolbar>
-          <IonTitle>Staff Expenses & Expired</IonTitle>
-        </IonToolbar>
-      </IonHeader>
-
-      <IonContent className="ion-padding">
+      {/* ✅ SAME BACKGROUND as other pages */}
+      <IonContent className="staff-content" scrollY={false}>
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>
 
-        <div className="admin-exp-topbar">
-          <IonButton
-            onClick={() => {
-              void fetchRows();
-            }}
-            fill="outline"
-          >
-            <IonIcon slot="start" icon={refreshOutline} />
-            Refresh
-          </IonButton>
+        <div className="customer-lists-container">
+          {/* ✅ SAME TOPBAR LAYOUT as Customer_Lists */}
+          <div className="customer-topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Staff Expenses & Expired</h2>
+              <div className="customer-subtext">
+                Showing records for: <strong>{selectedDate}</strong>{" "}
+                <span style={{ marginLeft: 8 }}>
+                  (Total: <strong>{filteredRows.length}</strong>)
+                </span>
+              </div>
+            </div>
 
-          <IonLabel className="admin-exp-count">
-            Total records: <strong>{activeRows.length}</strong>
-          </IonLabel>
-        </div>
+            <div className="customer-topbar-right">
+              <IonButton className="receipt-btn" onClick={() => void fetchRows()} fill="outline">
+                <IonIcon slot="start" icon={refreshOutline} />
+                Refresh
+              </IonButton>
 
-        {loading ? (
-          <div className="admin-exp-loading">
-            <IonSpinner />
-            <IonLabel>Loading...</IonLabel>
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Date</span>
+                <input
+                  className="date-pill-input"
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                />
+                <span className="date-pill-icon" aria-hidden="true">
+                  📅
+                </span>
+              </label>
+            </div>
           </div>
-        ) : (
-          <IonGrid className="admin-exp-grid">
-            <IonRow className="admin-exp-head">
-              <IonCol size="2">Full Name</IonCol>
-              <IonCol size="2">Product</IonCol>
-              <IonCol size="2">Category</IonCol>
-              <IonCol size="1">Qty</IonCol>
-              <IonCol size="2">Type</IonCol>
-              <IonCol size="2">Date & Time</IonCol>
-              <IonCol size="1">Action</IonCol>
-            </IonRow>
 
-            {activeRows.length === 0 ? (
-              <IonRow>
-                <IonCol size="12">
-                  <IonLabel>No records.</IonLabel>
-                </IonCol>
-              </IonRow>
-            ) : (
-              activeRows.map((r) => (
-                <IonRow
-                  key={r.id}
-                  className={`admin-exp-row ${r.voided ? "is-voided" : ""}`}
-                >
-                  <IonCol size="2">
-                    <IonLabel className="admin-exp-strong">{r.full_name}</IonLabel>
-                    {r.voided && (
-                      <div className="admin-exp-sub">
-                        <IonBadge color="medium">VOIDED</IonBadge>
-                        {r.voided_at ? <span> {formatDateTime(r.voided_at)}</span> : null}
-                      </div>
-                    )}
-                  </IonCol>
+          {/* ✅ TABLE (same classnames as Customer_Lists) */}
+          {loading ? (
+            <div className="customer-note" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <IonSpinner />
+              <span>Loading...</span>
+            </div>
+          ) : filteredRows.length === 0 ? (
+            <p className="customer-note">No records found for this date</p>
+          ) : (
+            <div className="customer-table-wrap" key={selectedDate}>
+              <table className="customer-table admin-exp-table">
+                <thead>
+                  <tr>
+                    <th>Full Name</th>
+                    <th>Product</th>
+                    <th>Category</th>
+                    <th>Qty</th>
+                    <th>Type</th>
+                    <th>Date & Time</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
 
-                  <IonCol size="2">
-                    <IonLabel className="admin-exp-strong">{r.product_name}</IonLabel>
-                    <div className="admin-exp-sub">{r.description}</div>
-                  </IonCol>
+                <tbody>
+                  {filteredRows.map((r) => (
+                    <tr key={r.id} className={r.voided ? "is-voided" : ""}>
+                      <td>
+                        <div className="cell-stack">
+                          <span className="cell-strong">{r.full_name || "—"}</span>
+                          {r.voided && (
+                            <span className="cell-sub">
+                              <span className="pill pill--muted">VOIDED</span>
+                              {r.voided_at ? ` • ${formatDateTime(r.voided_at)}` : ""}
+                            </span>
+                          )}
+                        </div>
+                      </td>
 
-                  <IonCol size="2">{r.category}</IonCol>
+                      <td>
+                        <div className="cell-stack">
+                          <span className="cell-strong">{r.product_name || "—"}</span>
+                          <span className="cell-sub">{r.description || "—"}</span>
+                        </div>
+                      </td>
 
-                  <IonCol size="1">
-                    <IonBadge color="dark">{r.quantity}</IonBadge>
-                  </IonCol>
+                      <td>{r.category || "—"}</td>
 
-                  <IonCol size="2">
-                    <IonBadge
-                      color={r.expense_type === "expired" ? "warning" : "tertiary"}
-                    >
-                      {typeLabel(r.expense_type)}
-                    </IonBadge>
-                  </IonCol>
+                      <td>
+                        <span className="pill pill--dark">{r.quantity}</span>
+                      </td>
 
-                  <IonCol size="2">{formatDateTime(r.created_at)}</IonCol>
+                      <td>
+                        <span className={`pill ${r.expense_type === "expired" ? "pill--warn" : "pill--info"}`}>
+                          {typeLabel(r.expense_type)}
+                        </span>
+                      </td>
 
-                  <IonCol size="1">
-                    <div className="admin-exp-actions">
-                      <IonButton
-                        size="small"
-                        color="danger"
-                        fill="outline"
-                        disabled={r.voided || busyId === r.id}
-                        onClick={() => setConfirmVoid(r)}
-                      >
-                        <IonIcon slot="start" icon={closeCircleOutline} />
-                        Void
-                      </IonButton>
+                      <td>{formatDateTime(r.created_at)}</td>
 
-                      <IonButton
-                        size="small"
-                        color="medium"
-                        fill="outline"
-                        disabled={busyId === r.id}
-                        onClick={() => setConfirmDelete(r)}
-                      >
-                        <IonIcon slot="start" icon={trashOutline} />
-                        Delete
-                      </IonButton>
-                    </div>
-                  </IonCol>
-                </IonRow>
-              ))
-            )}
-          </IonGrid>
-        )}
+                      <td>
+                        {/* ✅ actions same behavior; styled only */}
+                        <div className="action-stack action-stack--row">
+                          <button
+                            className="receipt-btn btn-danger"
+                            disabled={r.voided || busyId === r.id}
+                            onClick={() => setConfirmVoid(r)}
+                            title={r.voided ? "Already voided" : "Void (reverts stock via trigger)"}
+                          >
+                            <IonIcon icon={closeCircleOutline} />
+                            <span style={{ marginLeft: 6 }}>{busyId === r.id ? "..." : "Void"}</span>
+                          </button>
 
-        <IonAlert
-          isOpen={!!confirmVoid}
-          onDidDismiss={() => setConfirmVoid(null)}
-          header="Void this record?"
-          message={
-            confirmVoid
-              ? `This will restore stock by reverting ${typeLabel(
-                  confirmVoid.expense_type
-                )} (qty: ${confirmVoid.quantity}).`
-              : ""
-          }
-          buttons={[
-            { text: "Cancel", role: "cancel" },
-            {
-              text: "Void",
-              role: "destructive",
-              handler: () => {
-                const r = confirmVoid;
-                setConfirmVoid(null);
-                if (r) void doVoid(r);
+                          <button
+                            className="receipt-btn btn-gray"
+                            disabled={busyId === r.id}
+                            onClick={() => setConfirmDelete(r)}
+                            title="Delete log only (no revert)"
+                          >
+                            <IonIcon icon={trashOutline} />
+                            <span style={{ marginLeft: 6 }}>{busyId === r.id ? "..." : "Delete"}</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <IonAlert
+            isOpen={!!confirmVoid}
+            onDidDismiss={() => setConfirmVoid(null)}
+            header="Void this record?"
+            message={
+              confirmVoid
+                ? `This will restore stock by reverting ${typeLabel(confirmVoid.expense_type)} (qty: ${confirmVoid.quantity}).`
+                : ""
+            }
+            buttons={[
+              { text: "Cancel", role: "cancel" },
+              {
+                text: "Void",
+                role: "destructive",
+                handler: () => {
+                  const r = confirmVoid;
+                  setConfirmVoid(null);
+                  if (r) void doVoid(r);
+                },
               },
-            },
-          ]}
-        />
+            ]}
+          />
 
-        <IonAlert
-          isOpen={!!confirmDelete}
-          onDidDismiss={() => setConfirmDelete(null)}
-          header="Delete this log?"
-          message="This will delete the record only. Stock/counts will NOT change."
-          buttons={[
-            { text: "Cancel", role: "cancel" },
-            {
-              text: "Delete",
-              role: "destructive",
-              handler: () => {
-                const r = confirmDelete;
-                setConfirmDelete(null);
-                if (r) void doDelete(r);
+          <IonAlert
+            isOpen={!!confirmDelete}
+            onDidDismiss={() => setConfirmDelete(null)}
+            header="Delete this log?"
+            message="This will delete the record only. Stock/counts will NOT change."
+            buttons={[
+              { text: "Cancel", role: "cancel" },
+              {
+                text: "Delete",
+                role: "destructive",
+                handler: () => {
+                  const r = confirmDelete;
+                  setConfirmDelete(null);
+                  if (r) void doDelete(r);
+                },
               },
-            },
-          ]}
-        />
+            ]}
+          />
 
-        <IonToast
-          isOpen={toastOpen}
-          message={toastMsg}
-          duration={2500}
-          onDidDismiss={() => setToastOpen(false)}
-        />
+          <IonToast
+            isOpen={toastOpen}
+            message={toastMsg}
+            duration={2500}
+            onDidDismiss={() => setToastOpen(false)}
+          />
+        </div>
       </IonContent>
     </IonPage>
   );
