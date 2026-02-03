@@ -881,6 +881,42 @@ ion-content,
   to{ opacity:1; transform: translateY(0) scale(1); }
 }
 
+/* =========================
+   TOP BAR RIGHT AREA
+========================= */
+.customer-topbar-right{
+  display: flex;
+  align-items: center;        /* ✅ pantay vertical */
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* date pill stays left */
+.customer-topbar-right .date-pill{
+  margin-right: 6px;
+}
+
+/* buttons group */
+.admin-tools-row{
+  display: flex;
+  align-items: center;        /* ✅ pantay height */
+  gap: 8px;
+}
+
+/* danger button */
+.admin-danger{
+  background: #b00020 !important;
+}
+
+/* ensure same height */
+.admin-tools-row .receipt-btn{
+  height: 36px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 
 /* =========================
    TimeAlertModal (RESPONSIVE)
