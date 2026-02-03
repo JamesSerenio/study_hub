@@ -1,10 +1,8 @@
-// Admin_Add_Ons.tsx
+// src/pages/Admin_Add_Ons.tsx
 import React, { useEffect, useRef, useState } from "react";
 import {
   IonPage,
   IonHeader,
-  IonToolbar,
-  IonTitle,
   IonContent,
   IonItem,
   IonLabel,
@@ -14,9 +12,12 @@ import {
   IonPopover,
   IonList,
   IonText,
+  IonIcon,
 } from "@ionic/react";
 import type { IonInputCustomEvent, InputChangeEventDetail } from "@ionic/core";
+import { chevronDownOutline, imageOutline, addCircleOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
+
 
 type Profile = { role: string };
 
@@ -37,7 +38,7 @@ const Admin_Add_Ons: React.FC = () => {
   // ✅ Category suggestions (ONLY show when category is EMPTY)
   const [allCategories, setAllCategories] = useState<string[]>([]);
   const [catOpen, setCatOpen] = useState<boolean>(false);
-  const CAT_TRIGGER_ID = "category-trigger";
+  const CAT_TRIGGER_ID = "aao-category-trigger";
   const pickingRef = useRef<boolean>(false);
 
   useEffect(() => {
@@ -75,12 +76,8 @@ const Admin_Add_Ons: React.FC = () => {
   }, [category, catOpen]);
 
   const openIfEmpty = (): void => {
-    // ✅ only open when empty
-    if (category.trim() === "") {
-      setCatOpen(true);
-    } else {
-      setCatOpen(false);
-    }
+    if (category.trim() === "") setCatOpen(true);
+    else setCatOpen(false);
   };
 
   const closePopover = (): void => {
@@ -89,7 +86,7 @@ const Admin_Add_Ons: React.FC = () => {
   };
 
   const handlePickCategory = (picked: string): void => {
-    setCategory(picked); // useEffect will also close, but we close immediately too
+    setCategory(picked);
     closePopover();
   };
 
@@ -133,10 +130,7 @@ const Admin_Add_Ons: React.FC = () => {
 
         if (uploadError) throw uploadError;
 
-        const { data: urlData } = supabase.storage
-          .from("add-ons")
-          .getPublicUrl(filePath);
-
+        const { data: urlData } = supabase.storage.from("add-ons").getPublicUrl(filePath);
         imageUrl = urlData.publicUrl;
       }
 
@@ -156,10 +150,8 @@ const Admin_Add_Ons: React.FC = () => {
 
       if (insertErr) throw insertErr;
 
-      // ✅ update local category list if new
       setAllCategories((prev) => {
-        if (prev.some((c) => c.toLowerCase() === categoryFinal.toLowerCase()))
-          return prev;
+        if (prev.some((c) => c.toLowerCase() === categoryFinal.toLowerCase())) return prev;
         return [...prev, categoryFinal].sort((a, b) => a.localeCompare(b));
       });
 
@@ -176,137 +168,193 @@ const Admin_Add_Ons: React.FC = () => {
       setShowToast(true);
     } catch (err: unknown) {
       console.error(err);
-      setToastMessage(
-        err instanceof Error ? err.message : "Unexpected error occurred"
-      );
+      setToastMessage(err instanceof Error ? err.message : "Unexpected error occurred");
       setShowToast(true);
     }
   };
 
+  const fileLabel = imageFile ? imageFile.name : "Choose image (optional)";
+
   return (
-    <IonPage>
-      <IonHeader>
-        <IonToolbar>
-          <IonTitle>Admin Add-Ons</IonTitle>
-        </IonToolbar>
+    <IonPage className="aao-page">
+      <IonHeader className="aao-header">
       </IonHeader>
 
-      <IonContent className="ion-padding">
-        {/* ✅ CATEGORY: suggestions ONLY when EMPTY */}
-        <IonItem id={CAT_TRIGGER_ID}>
-          <IonLabel position="stacked">Category</IonLabel>
-          <IonInput
-            value={category}
-            placeholder="Tap to choose category"
-            onIonFocus={openIfEmpty}
-            onClick={openIfEmpty}
-            onIonInput={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
-              const v = (e.detail.value ?? "").toString();
-              setCategory(v);
+      <IonContent className="aao-content">
+        <div className="aao-wrap">
+          <div className="aao-card">
+            <div className="aao-card-head">
+              <div>
+                <div className="aao-card-title">Add New Product</div>
+                <div className="aao-card-sub">Fill the details below to add an add-on item</div>
+              </div>
+            </div>
 
-              // ✅ if user typed anything -> close and never show unless cleared
-              if (v.trim() !== "") closePopover();
-            }}
-          />
-        </IonItem>
+            <div className="aao-form">
+              {/* ✅ CATEGORY: suggestions ONLY when EMPTY */}
+              <IonItem id={CAT_TRIGGER_ID} className="aao-item" lines="none">
+                <IonLabel position="stacked" className="aao-label">
+                  Category <span className="aao-req">*</span>
+                </IonLabel>
 
-        <IonPopover
-          trigger={CAT_TRIGGER_ID}
-          // ✅ SUPER IMPORTANT: open only if BOTH (catOpen) AND (category is EMPTY)
-          isOpen={catOpen && category.trim() === ""}
-          keepContentsMounted
-          side="bottom"
-          alignment="start"
-          onDidDismiss={() => {
-            if (pickingRef.current) return;
-            closePopover();
-          }}
-        >
-          <IonContent className="ion-padding">
-            <IonText style={{ fontSize: 13, opacity: 0.8 }}>
-              Suggestions (tap to select)
-            </IonText>
+                <div className="aao-field aao-field--withIcon">
+                  <IonInput
+                    className="aao-input"
+                    value={category}
+                    placeholder="Tap to choose category"
+                    onIonFocus={openIfEmpty}
+                    onClick={openIfEmpty}
+                    onIonInput={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
+                      const v = (e.detail.value ?? "").toString();
+                      setCategory(v);
 
-            <IonList>
-              {allCategories.slice(0, 8).map((c) => (
-                <IonItem
-                  key={c}
-                  button
-                  onPointerDown={() => {
-                    pickingRef.current = true;
-                  }}
-                  onClick={() => handlePickCategory(c)}
-                >
-                  <IonLabel>{c}</IonLabel>
+                      if (v.trim() !== "") closePopover();
+                    }}
+                  />
+                  <IonIcon className="aao-field-icon" icon={chevronDownOutline} />
+                </div>
+              </IonItem>
+
+              <IonPopover
+                trigger={CAT_TRIGGER_ID}
+                isOpen={catOpen && category.trim() === ""}
+                keepContentsMounted
+                side="bottom"
+                alignment="start"
+                className="aao-popover"
+                onDidDismiss={() => {
+                  if (pickingRef.current) return;
+                  closePopover();
+                }}
+              >
+                <IonContent className="aao-popover-content">
+                  <IonText className="aao-popover-hint">Suggestions (tap to select)</IonText>
+
+                  <IonList className="aao-popover-list">
+                    {allCategories.slice(0, 10).map((c) => (
+                      <IonItem
+                        key={c}
+                        button
+                        className="aao-popover-item"
+                        onPointerDown={() => {
+                          pickingRef.current = true;
+                        }}
+                        onClick={() => handlePickCategory(c)}
+                      >
+                        <IonLabel className="aao-popover-label">{c}</IonLabel>
+                      </IonItem>
+                    ))}
+                  </IonList>
+                </IonContent>
+              </IonPopover>
+
+              <IonItem className="aao-item" lines="none">
+                <IonLabel position="stacked" className="aao-label">
+                  Item Name <span className="aao-req">*</span>
+                </IonLabel>
+                <div className="aao-field">
+                  <IonInput
+                    className="aao-input"
+                    value={name}
+                    placeholder="Example: Choco Syrup"
+                    onIonChange={(e) => setName((e.detail.value ?? "").toString())}
+                  />
+                </div>
+              </IonItem>
+
+              {/* IMAGE */}
+              <IonItem className="aao-item" lines="none">
+                <IonLabel position="stacked" className="aao-label">
+                  Image
+                </IonLabel>
+
+                <label className="aao-file">
+                  <IonIcon icon={imageOutline} className="aao-file-icon" />
+                  <span className="aao-file-text">{fileLabel}</span>
+                  <input
+                    className="aao-file-input"
+                    type="file"
+                    accept="image/*"
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const fileList: FileList | null = e.target.files;
+                      setImageFile(fileList && fileList.length > 0 ? fileList[0] : null);
+                    }}
+                  />
+                </label>
+
+                <div className="aao-help">Tip: image is optional. You can add later too.</div>
+              </IonItem>
+
+              <div className="aao-twoCol">
+                <IonItem className="aao-item" lines="none">
+                  <IonLabel position="stacked" className="aao-label">
+                    Restocked Quantity <span className="aao-req">*</span>
+                  </IonLabel>
+                  <div className="aao-field">
+                    <IonInput
+                      className="aao-input"
+                      inputMode="numeric"
+                      type="number"
+                      value={restocked}
+                      placeholder="e.g. 50"
+                      onIonChange={(e) => {
+                        const v: string = (e.detail.value ?? "").toString();
+                        setRestocked(v === "" ? undefined : Number(v));
+                      }}
+                    />
+                  </div>
                 </IonItem>
-              ))}
-            </IonList>
-          </IonContent>
-        </IonPopover>
 
-        <IonItem>
-          <IonLabel position="stacked">Item Name</IonLabel>
-          <IonInput
-            value={name}
-            onIonChange={(e) => setName((e.detail.value ?? "").toString())}
-          />
-        </IonItem>
+                <IonItem className="aao-item" lines="none">
+                  <IonLabel position="stacked" className="aao-label">
+                    Price <span className="aao-req">*</span>
+                  </IonLabel>
+                  <div className="aao-field">
+                    <IonInput
+                      className="aao-input"
+                      inputMode="decimal"
+                      type="number"
+                      value={price}
+                      placeholder="e.g. 25"
+                      onIonChange={(e) => {
+                        const v: string = (e.detail.value ?? "").toString();
+                        setPrice(v === "" ? undefined : Number(v));
+                      }}
+                    />
+                  </div>
+                </IonItem>
+              </div>
 
-        <IonItem>
-          <IonLabel position="stacked">Image</IonLabel>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-              const fileList: FileList | null = e.target.files;
-              setImageFile(fileList && fileList.length > 0 ? fileList[0] : null);
-            }}
-          />
-        </IonItem>
+              <IonItem className="aao-item" lines="none">
+                <IonLabel position="stacked" className="aao-label">
+                  Expenses
+                </IonLabel>
+                <div className="aao-field">
+                  <IonInput
+                    className="aao-input"
+                    type="number"
+                    inputMode="decimal"
+                    value={expenses}
+                    placeholder="0"
+                    onIonChange={(e) => {
+                      const v: string = (e.detail.value ?? "").toString();
+                      setExpenses(v === "" ? 0 : Number(v));
+                    }}
+                  />
+                </div>
+              </IonItem>
 
-        <IonItem>
-          <IonLabel position="stacked">Restocked Quantity</IonLabel>
-          <IonInput
-            type="number"
-            value={restocked}
-            onIonChange={(e) => {
-              const v: string = (e.detail.value ?? "").toString();
-              setRestocked(v === "" ? undefined : Number(v));
-            }}
-          />
-        </IonItem>
+              <IonButton className="aao-btn aao-btn--primary" expand="block" onClick={handleAddOnSubmit}>
+                <IonIcon slot="start" icon={addCircleOutline} />
+                Add Add-On
+              </IonButton>
 
-        <IonItem>
-          <IonLabel position="stacked">Price</IonLabel>
-          <IonInput
-            type="number"
-            value={price}
-            onIonChange={(e) => {
-              const v: string = (e.detail.value ?? "").toString();
-              setPrice(v === "" ? undefined : Number(v));
-            }}
-          />
-        </IonItem>
-
-        <IonItem>
-          <IonLabel position="stacked">Expenses</IonLabel>
-          <IonInput
-            type="number"
-            value={expenses}
-            onIonChange={(e) => {
-              const v: string = (e.detail.value ?? "").toString();
-              setExpenses(v === "" ? 0 : Number(v));
-            }}
-          />
-        </IonItem>
-
-        <IonButton
-          expand="block"
-          className="ion-margin-top"
-          onClick={handleAddOnSubmit}
-        >
-          Add Add-On
-        </IonButton>
+              <div className="aao-footnote">
+                Tip: Category suggestions will only appear when the category field is empty.
+              </div>
+            </div>
+          </div>
+        </div>
 
         <IonToast
           isOpen={showToast}

@@ -4880,6 +4880,7 @@ ion-content.pil-modal-content{
   margin-bottom: 10px;
 }
 .pil-label{
+  z-index: 5;
   font-size: 11px;
   font-weight: 1000;
   opacity: .82;
@@ -5059,5 +5060,317 @@ ion-content.pil-modal-content{
 @media (max-width: 400px){
   .pil-search-label{
     display:none; /* para di masikip sa super small */
+  }
+}
+
+/* =========================================================
+   ADMIN ADD-ONS (AAO)
+   ✅ same palette as PIL
+   ✅ smooth animations
+   ✅ responsive: 400 / 600 / 1200
+========================================================= */
+
+:root{
+  --aao-bg: #b9c9a3;
+  --aao-surface: rgba(248,238,220,.96);
+  --aao-surface-strong: rgba(248,238,220,.985);
+  --aao-ink: #1c1c1c;
+  --aao-line: rgba(0,0,0,.12);
+  --aao-line-soft: rgba(0,0,0,.08);
+  --aao-shadow: 0 14px 30px rgba(0,0,0,.12);
+  --aao-shadow-soft: 0 10px 22px rgba(0,0,0,.10);
+
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-soft: cubic-bezier(.22, 1, .36, 1);
+  --dur-fast: 180ms;
+  --dur-mid: 320ms;
+  --dur-slow: 420ms;
+}
+
+@media (prefers-reduced-motion: reduce){
+  .aao-page *{
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* PAGE */
+.aao-page{
+  --background: var(--aao-bg) !important;
+  background: var(--aao-bg) !important;
+  animation: aaoFade var(--dur-slow) var(--ease-soft) both;
+}
+ion-content.aao-content{
+  --background: var(--aao-bg) !important;
+  background: var(--aao-bg) !important;
+}
+
+.aao-toolbar{
+  --background: rgba(255,255,255,.70);
+  --border-color: rgba(0,0,0,.08);
+  backdrop-filter: blur(10px);
+}
+.aao-title{
+  font-weight: 1000;
+  letter-spacing: .2px;
+}
+
+.aao-wrap{
+  padding: 14px;
+  padding-bottom: 22px;
+}
+
+.aao-card{
+  max-width: 1200px;
+  margin: 0 auto;
+
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--aao-surface);
+  border: 1px solid var(--aao-line);
+  box-shadow: var(--aao-shadow);
+  backdrop-filter: blur(6px);
+
+  animation: aaoUp var(--dur-slow) var(--ease-out) both;
+}
+
+.aao-card-head{
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--aao-line-soft);
+}
+.aao-card-title{
+  font-weight: 1000;
+  letter-spacing: .2px;
+  font-size: 14px;
+}
+.aao-card-sub{
+  font-size: 12px;
+  opacity: .75;
+  margin-top: 2px;
+}
+
+.aao-form{
+  padding: 14px;
+}
+
+/* ITEMS */
+.aao-item{
+  --background: transparent;
+  --padding-start: 0;
+  --inner-padding-end: 0;
+  --min-height: unset;
+  margin-bottom: 12px;
+}
+
+.aao-label{
+  z-index: 5;
+  font-size: 11px;
+  font-weight: 1000;
+  opacity: .82;
+}
+.aao-req{
+  color: rgba(0,0,0,.55);
+  font-weight: 1000;
+}
+
+/* field wrapper (so inputs look like cards) */
+.aao-field{
+  position: relative;
+  border: 1px solid rgba(0,0,0,.14);
+  border-radius: 12px;
+  background: rgba(255,255,255,.92);
+  transition: box-shadow var(--dur-mid) var(--ease-soft),
+              border-color var(--dur-mid) var(--ease-soft),
+              transform var(--dur-fast) var(--ease-soft);
+}
+.aao-field:focus-within{
+  border-color: rgba(0,0,0,.22);
+  box-shadow: 0 10px 18px rgba(0,0,0,.10);
+}
+
+.aao-field--withIcon{
+  padding-right: 36px;
+}
+
+.aao-input{
+  font-weight: 900;
+  padding: 12px 12px;
+}
+
+/* right icon on category */
+.aao-field-icon{
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 18px;
+  opacity: .7;
+  pointer-events: none;
+}
+
+/* file input as button */
+.aao-file{
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  border: 1px dashed rgba(0,0,0,.18);
+  border-radius: 12px;
+  padding: 12px 12px;
+  background: rgba(255,255,255,.75);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-soft),
+              background var(--dur-mid) var(--ease-soft);
+}
+.aao-file:hover{
+  background: rgba(255,255,255,.88);
+}
+.aao-file:active{ transform: scale(.99); }
+
+.aao-file-icon{
+  font-size: 18px;
+  opacity: .8;
+}
+.aao-file-text{
+  font-weight: 900;
+  font-size: 13px;
+  opacity: .9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aao-file-input{
+  display: none;
+}
+
+.aao-help{
+  font-size: 12px;
+  opacity: .75;
+  margin-top: 8px;
+}
+
+/* layout */
+.aao-twoCol{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* button */
+.aao-btn{
+  --border-radius: 12px;
+  border-radius: 12px;
+  transition: transform var(--dur-fast) var(--ease-soft),
+              filter var(--dur-fast) var(--ease-soft),
+              opacity var(--dur-fast) var(--ease-soft);
+}
+.aao-btn:active{ transform: scale(.98); }
+
+.aao-btn--primary{
+  font-weight: 1000;
+}
+
+.aao-footnote{
+  margin-top: 12px;
+  font-size: 12px;
+  opacity: .75;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,.08);
+  background: rgba(0,0,0,.04);
+}
+
+/* POPOVER (fix “natatabunan yung words”) */
+.aao-popover{
+  --min-width: 260px;
+}
+.aao-popover .popover-content{
+  border-radius: 14px !important;
+  overflow: hidden;
+  box-shadow: var(--aao-shadow) !important;
+  border: 1px solid rgba(0,0,0,.10);
+}
+.aao-popover-content{
+  --background: var(--aao-surface-strong) !important;
+  background: var(--aao-surface-strong) !important;
+  padding: 12px;
+}
+.aao-popover-hint{
+  display: block;
+  font-size: 12px;
+  font-weight: 900;
+  opacity: .75;
+  margin-bottom: 8px;
+}
+.aao-popover-list{
+  background: transparent;
+}
+.aao-popover-item{
+  --background: rgba(255,255,255,.75);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(0,0,0,.08);
+}
+.aao-popover-item:last-child{ margin-bottom: 0; }
+.aao-popover-label{
+  font-weight: 1000;
+}
+
+/* RESPONSIVE */
+@media (min-width: 600px){
+  .aao-wrap{
+    padding-left: 100px;
+    padding-right: 100px;
+    padding-top: 20px;     /* maliit lang */
+    padding-bottom: 20px; /* maliit lang */
+  }
+
+  .aao-card{
+    margin-top: 0;        /* tanggal negative hack */
+  }
+}
+
+@media (min-width: 400px){
+  .aao-wrap{
+    padding-left: 50px;
+    padding-right: 50px;
+    padding-top: 10px;     /* maliit lang */
+    padding-bottom: 10px; /* maliit lang */
+  }
+
+  .aao-card{
+    margin-top: 0;        /* tanggal negative hack */
+  }
+}
+
+
+@media (min-width: 1200px){
+  .aao-wrap{
+    padding-left: 200px;
+    padding-right: 200px;
+    padding-top: 30px;     /* maliit lang */
+    padding-bottom: 30px; /* maliit lang */
+  }
+
+  .aao-card{
+    margin-top: 0;        /* tanggal negative hack */
+  }
+}
+
+
+/* ANIMATIONS */
+@keyframes aaoFade{
+  from{ opacity: 0; }
+  to{ opacity: 1; }
+}
+@keyframes aaoUp{
+  from{
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+  }
+  to{
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
