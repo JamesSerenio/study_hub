@@ -7,9 +7,12 @@
 // ✅ Removes blue tap highlight (keeps yellow current date)
 // ✅ customer_sessions + promo_bookings logic
 // ✅ FIX: hides neighboring month days (no 26–31 / no extra "1")
-// ✅ FIX: Sunday-first calendar
+// ✅ FIX: Sunday-first calendar (en-US)
+// ✅ Refresh button + auto refresh every 30s (nice for live updates)
+// ✅ Decor image (s.png) OUTSIDE the card
 
 import React, { useEffect, useState } from "react";
+import { IonContent, IonPage } from "@ionic/react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 import { supabase } from "../utils/supabaseClient";
@@ -18,12 +21,16 @@ import { supabase } from "../utils/supabaseClient";
 import walkInIcon from "../assets/customer_reservation.png";
 import reservationIcon from "../assets/customer.png";
 
+// ✅ decor
+import sDecor from "../assets/s.png";
+
 type Area = "common_area" | "conference_room" | string;
 
 interface CustomerSessionRow {
   date: string; // yyyy-mm-dd
   reservation: string; // "yes" | "no"
   reservation_date: string | null; // yyyy-mm-dd
+  customer_type?: string | null;
 }
 
 interface PromoBookingRow {
@@ -38,6 +45,11 @@ type Counts = {
 };
 
 type CountMap = Record<string, Counts>;
+
+type TileArgs = {
+  date: Date;
+  view: "month" | "year" | "decade" | "century";
+};
 
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
@@ -61,65 +73,83 @@ const addCount = (m: CountMap, date: string, key: keyof Counts): void => {
   ensure(m, date)[key] += 1;
 };
 
-type TileArgs = {
-  date: Date;
-  view: "month" | "year" | "decade" | "century";
-};
-
 const Customer_Calendar: React.FC = () => {
   const [counts, setCounts] = useState<CountMap>({});
+  const [loading, setLoading] = useState<boolean>(false);
+  const [lastUpdated, setLastUpdated] = useState<string>("");
 
   useEffect(() => {
     void loadCalendar();
+
+    const t = window.setInterval(() => {
+      void loadCalendar();
+    }, 30000);
+
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadCalendar = async (): Promise<void> => {
-    const sessionsReq = supabase
-      .from("customer_sessions")
-      .select("date, reservation, reservation_date");
+    try {
+      setLoading(true);
 
-    const promosReq = supabase.from("promo_bookings").select("start_at, area, status");
+      const sessionsReq = supabase
+        .from("customer_sessions")
+        .select("date, reservation, reservation_date, customer_type");
 
-    const [{ data: sessions, error: sErr }, { data: promos, error: pErr }] =
-      await Promise.all([sessionsReq, promosReq]);
+      const promosReq = supabase
+        .from("promo_bookings")
+        .select("start_at, area, status");
 
-    if (sErr) console.error("customer_sessions error:", sErr.message);
-    if (pErr) console.error("promo_bookings error:", pErr.message);
+      const [{ data: sessions, error: sErr }, { data: promos, error: pErr }] =
+        await Promise.all([sessionsReq, promosReq]);
 
-    const result: CountMap = {};
+      if (sErr) console.error("customer_sessions error:", sErr.message);
+      if (pErr) console.error("promo_bookings error:", pErr.message);
 
-    // customer_sessions
-    (sessions ?? []).forEach((s: CustomerSessionRow) => {
-      if (s.reservation === "yes" && s.reservation_date) {
-        addCount(result, s.reservation_date, "reservation");
-      } else {
-        addCount(result, s.date, "walkIn");
-      }
-    });
+      const result: CountMap = {};
 
-    // promo_bookings
-    const now = new Date();
-    const todayStart = startOfDayLocal(now);
-    const todayEnd = endOfDayLocal(now);
+      // ✅ sessions (ignore promo)
+      (sessions ?? []).forEach((s: CustomerSessionRow) => {
+        const ctype = String(s.customer_type ?? "").trim().toLowerCase();
+        if (ctype === "promo") return;
 
-    (promos ?? []).forEach((p: PromoBookingRow) => {
-      const start = new Date(p.start_at);
-      if (!Number.isFinite(start.getTime())) return;
+        if (s.reservation === "yes" && s.reservation_date) {
+          addCount(result, s.reservation_date, "reservation");
+        } else {
+          addCount(result, s.date, "walkIn");
+        }
+      });
 
-      const dateKey = yyyyMmDdLocal(start);
+      // ✅ promos (use CURRENT day range)
+      const now = new Date();
+      const todayStart = startOfDayLocal(now);
+      const todayEnd = endOfDayLocal(now);
 
-      if (p.area === "common_area") {
-        const isToday = start >= todayStart && start <= todayEnd;
+      (promos ?? []).forEach((p: PromoBookingRow) => {
+        const start = new Date(p.start_at);
+        if (!Number.isFinite(start.getTime())) return;
 
-        // If it's today and already started -> walk-in, else future -> reservation
-        if (isToday && start <= now) addCount(result, dateKey, "walkIn");
-        else addCount(result, dateKey, "reservation");
-      } else if (p.area === "conference_room") {
-        addCount(result, dateKey, "reservation");
-      }
-    });
+        const dateKey = yyyyMmDdLocal(start);
 
-    setCounts(result);
+        if (p.area === "common_area") {
+          const isToday = start >= todayStart && start <= todayEnd;
+
+          // If it's today and already started -> walk-in, else future -> reservation
+          if (isToday && start <= now) addCount(result, dateKey, "walkIn");
+          else addCount(result, dateKey, "reservation");
+        } else if (p.area === "conference_room") {
+          addCount(result, dateKey, "reservation");
+        }
+      });
+
+      setCounts(result);
+      setLastUpdated(
+        new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   const tileContent = ({ date, view }: TileArgs): React.ReactNode => {
@@ -135,18 +165,13 @@ const Customer_Calendar: React.FC = () => {
 
     return (
       <>
-        {/* Reservation (top-left) with number */}
         {showRes && (
-          <div
-            className="cal-icon-wrap cal-reservation"
-            title={`Reservation: ${data.reservation}`}
-          >
+          <div className="cal-icon-wrap cal-reservation" title={`Reservation: ${data.reservation}`}>
             <img src={reservationIcon} alt="Reservation" />
             <span className="cal-count">{data.reservation}</span>
           </div>
         )}
 
-        {/* Walk-in (bottom-right) with number */}
         {showWalk && (
           <div className="cal-icon-wrap cal-walkin" title={`Walk-in: ${data.walkIn}`}>
             <img src={walkInIcon} alt="Walk-in" />
@@ -158,36 +183,56 @@ const Customer_Calendar: React.FC = () => {
   };
 
   return (
-    <div className="customer-calendar-page">
-      <div className="customer-calendar-card">
-        <h2 className="calendar-title">Customer Calendar</h2>
+    <IonPage>
+      {/* ✅ keep your app background consistent */}
+      <IonContent className="staff-content" scrollY={false}>
+        <div className="customer-calendar-page customer-calendar-decor">
+          {/* ✅ s.png OUTSIDE card */}
+          <img className="customer-calendar-s" src={sDecor} alt="Decor" />
 
-        <div className="calendar-legend">
-          <div className="legend-row">
-            <img src={reservationIcon} className="legend-icon" alt="Reservation" />
-            <span>
-              <strong>Reservation</strong> — future bookings & conference room
-            </span>
-          </div>
+          <div className="customer-calendar-card">
+            <div className="calendar-topbar">
+              <h2 className="calendar-title">Customer Calendar</h2>
 
-          <div className="legend-row">
-            <img src={walkInIcon} className="legend-icon" alt="Walk-in" />
-            <span>
-              <strong>Walk-in</strong> — already started today
-            </span>
+              <div className="calendar-topbar-right">
+                <button className="receipt-btn" onClick={() => void loadCalendar()} disabled={loading}>
+                  {loading ? "Refreshing..." : "Refresh"}
+                </button>
+
+                <div className="calendar-updated">
+                  Updated: <strong>{lastUpdated || "—"}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="calendar-legend">
+              <div className="legend-row">
+                <img src={reservationIcon} className="legend-icon" alt="Reservation" />
+                <span>
+                  <strong>Reservation</strong> — future bookings & conference room
+                </span>
+              </div>
+
+              <div className="legend-row">
+                <img src={walkInIcon} className="legend-icon" alt="Walk-in" />
+                <span>
+                  <strong>Walk-in</strong> — already started today
+                </span>
+              </div>
+            </div>
+
+            <div className="calendar-wrap">
+              <Calendar
+                tileContent={tileContent}
+                showNeighboringMonth={false}
+                showFixedNumberOfWeeks={false}
+                locale="en-US"
+              />
+            </div>
           </div>
         </div>
-
-        <div className="calendar-wrap">
-        <Calendar
-          tileContent={tileContent}
-          showNeighboringMonth={false}
-          showFixedNumberOfWeeks={false}
-          locale="en-US"
-        />
-        </div>
-      </div>
-    </div>
+      </IonContent>
+    </IonPage>
   );
 };
 

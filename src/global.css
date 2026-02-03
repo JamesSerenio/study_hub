@@ -1025,40 +1025,119 @@ ion-content,
 }
 
 /* =========================
-   CUSTOMER CALENDAR (GLOBAL)
+   CUSTOMER CALENDAR (MATCH CUSTOMER LIST THEME)
+   - Page BG: #b2c197 (same as customer lists)
+   - Card + Calendar BG: rgba(248, 238, 220, 0.96) (same as table wrap)
+   - Responsive: 400 / 600 / 1200
+   - Animations
 ========================= */
 
+/* ✅ page wrapper (same background as customer lists) */
 .customer-calendar-page {
   width: 100%;
-  min-height: 100%;
+  min-height: 100vh;
   display: flex;
   justify-content: center;
-  padding: 18px 12px;
+
+  padding: clamp(12px, 3vw, 20px);
+  box-sizing: border-box;
+
+  background: #b2c197 !important;
+
+  /* same page fade-in feel */
+  animation: fadeInUp 380ms ease both;
+
+  /* ✅ for decorations */
+  position: relative;
+  overflow: hidden; /* ✅ prevents scroll even if decor goes outside */
 }
 
+/* ✅ decor wrapper helper */
+.customer-calendar-decor {
+  position: relative;
+}
+
+/* =========================
+   ✅ s.png DECOR (OUTSIDE CARD)
+   - responsive: mobile/tablet/desktop
+   - no scroll
+========================= */
+.customer-calendar-s {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+
+  /* default placement (desktop-ish) */
+  left: clamp(-18px, -1vw, 10px);
+  bottom: clamp(-20px, -2vw, 8px);
+
+  width: clamp(170px, 22vw, 320px);
+  height: auto;
+
+  opacity: 0.95;
+  transform: rotate(-6deg);
+
+  animation: sFloat 3.2s ease-in-out infinite;
+}
+
+/* ✅ main card (same as table wrapper look) */
 .customer-calendar-card {
-  width: min(860px, 100%);
-  border-radius: 18px;
-  padding: 16px 16px 18px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
+  width: min(1200px, 100%);
+  border-radius: 14px;
+
+  padding: clamp(12px, 2.2vw, 18px);
+
+  background: rgba(248, 238, 220, 0.96) !important;
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+
+  animation: fadeIn 320ms ease both;
+
+  /* ✅ keep above decor */
+  position: relative;
+  z-index: 2;
 }
 
+/* topbar layout (title + refresh + updated) */
+.calendar-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.calendar-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.calendar-updated {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+/* title */
 .calendar-title {
-  margin: 0 0 10px;
-  font-size: 20px;
+  margin: 0;
+  font-size: clamp(16px, 2.2vw, 22px);
   font-weight: 900;
   letter-spacing: 0.2px;
 }
 
+/* legend (same soft bar look) */
 .calendar-legend {
   display: grid;
   gap: 8px;
   padding: 10px 12px;
   border-radius: 14px;
+
   background: rgba(0, 0, 0, 0.035);
   border: 1px solid rgba(0, 0, 0, 0.06);
+  margin-top: 10px;
   margin-bottom: 12px;
 }
 
@@ -1066,6 +1145,8 @@ ion-content,
   display: flex;
   align-items: center;
   gap: 10px;
+  font-size: clamp(12px, 1.6vw, 14px);
+  line-height: 1.25;
 }
 
 .legend-icon {
@@ -1074,29 +1155,44 @@ ion-content,
   object-fit: contain;
 }
 
+/* center calendar */
 .calendar-wrap {
   display: flex;
   justify-content: center;
 }
 
-/* calendar box */
+/* ✅ calendar box (same bg as card) */
 .react-calendar {
-  width: min(820px, 100%);
+  width: min(1120px, 100%);
   border: none !important;
-  border-radius: 16px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.95);
+  border-radius: 14px;
+  padding: clamp(10px, 2vw, 14px);
+
+  background: rgba(248, 238, 220, 0.96) !important;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.10);
+
+  animation: fadeIn 320ms ease both;
 }
 
+/* nav buttons */
 .react-calendar__navigation button {
   border-radius: 12px;
-  font-weight: 800;
+  font-weight: 900;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.react-calendar__navigation button:enabled:hover {
+  background: rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+.react-calendar__navigation button:enabled:active {
+  transform: translateY(0px) scale(0.98);
 }
 
 /* weekdays */
 .react-calendar__month-view__weekdays {
-  font-weight: 800;
+  font-weight: 900;
   text-transform: uppercase;
   font-size: 11px;
   color: rgba(0, 0, 0, 0.65);
@@ -1118,29 +1214,38 @@ ion-content,
   border-radius: 14px;
 }
 
-/* ✅ tile spacing + thin black border for every date */
+/* ✅ tile spacing + thin border */
 .react-calendar__tile {
   position: relative;
   border-radius: 14px;
-  padding: 14px 10px 18px;
+  padding: clamp(10px, 2vw, 14px) clamp(8px, 1.6vw, 12px)
+    clamp(14px, 2.2vw, 18px);
   overflow: hidden;
 
-  border: 1px solid rgba(0, 0, 0, 0.25); /* ✅ black thin border */
+  border: 1px solid rgba(0, 0, 0, 0.25);
   background-clip: padding-box;
+
+  transition: transform 170ms ease, background 170ms ease, box-shadow 170ms ease;
 }
 
 .react-calendar__tile:enabled:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.35);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.10);
+}
+
+.react-calendar__tile:enabled:active {
+  transform: translateY(0px) scale(0.985);
 }
 
 .react-calendar__tile:disabled {
   background: transparent !important;
-  border-color: rgba(0,0,0,0.10) !important;
-  color: rgba(0,0,0,0.25) !important;
+  border-color: rgba(0, 0, 0, 0.10) !important;
+  color: rgba(0, 0, 0, 0.25) !important;
+  box-shadow: none !important;
 }
 
-
-/* date number always visible */
+/* date number */
 .react-calendar__tile abbr {
   position: relative;
   z-index: 5;
@@ -1150,7 +1255,7 @@ ion-content,
 }
 
 /* =========================
-   CORNER ICONS + NUMBER
+   CORNER ICONS + COUNT
 ========================= */
 
 .cal-icon-wrap {
@@ -1158,50 +1263,131 @@ ion-content,
   width: 16px;
   height: 16px;
   border-radius: 50%;
+
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(0, 0, 0, 0.14);
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.14);
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   pointer-events: none;
-  z-index: 3; /* ✅ above tile border */
+  z-index: 3;
 }
 
 .cal-icon-wrap img {
-  width: 10px; /* ✅ slightly smaller */
+  width: 10px;
   height: 10px;
   object-fit: contain;
 }
 
-/* reservation: top-left */
 .cal-reservation {
   top: 4px;
   left: 4px;
 }
 
-/* walk-in: bottom-right */
 .cal-walkin {
   bottom: 4px;
   right: 4px;
 }
 
-/* number badge */
 .cal-count {
   position: absolute;
   top: -7px;
   right: -7px;
+
   min-width: 14px;
   height: 14px;
   padding: 0 3px;
+
   border-radius: 999px;
   background: #ff3b30;
   color: #fff;
+
   font-size: 10px;
   font-weight: 900;
   line-height: 14px;
   text-align: center;
   border: 2px solid #fff;
+}
+
+/* =========================
+   RESPONSIVE BREAKPOINTS
+========================= */
+
+
+/* ✅ tablet 600 */
+@media (max-width: 600px) {
+  .customer-calendar-page {
+    padding: 300px 50px; /* ✅ fixed */
+  }
+
+  .customer-calendar-card {
+    padding: 14px;
+  }
+
+  .customer-calendar-s {
+    z-index: 5;
+    left: -28px;
+    bottom: 240px;
+    width: 150px;
+    opacity: 0.92;
+  }
+}
+
+/* ✅ desktop 1200 */
+@media (min-width: 1200px) {
+  .customer-calendar-page {
+    padding: 140px;
+  }
+
+  .react-calendar {
+    width: min(1160px, 100%);
+  }
+
+  .customer-calendar-s {
+    z-index: 5;
+    left: px;
+    bottom: 50px;
+    width: 200px;
+  }
+}
+
+/* =========================
+   ANIMATIONS (same as lists)
+========================= */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* subtle float for decor */
+@keyframes sFloat {
+  0%   { transform: translateY(0px) rotate(-6deg); }
+  50%  { transform: translateY(-7px) rotate(-6deg); }
+  100% { transform: translateY(0px) rotate(-6deg); }
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  .customer-calendar-page,
+  .customer-calendar-card,
+  .react-calendar,
+  .customer-calendar-s {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .react-calendar__tile {
+    transform: none !important;
+    box-shadow: none !important;
+  }
 }
 
 
