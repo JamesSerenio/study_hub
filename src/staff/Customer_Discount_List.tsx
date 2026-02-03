@@ -1,4 +1,5 @@
 // src/pages/Customer_Discount_List.tsx
+// ✅ SAME classnames as Customer_Lists.tsx so 1 CSS can style both pages
 // ✅ SAME behavior as Admin_Customer_Discount_List.tsx
 // ✅ Can edit: Discount + Discount Reason + Payment + Paid Toggle
 // ✅ Has Date Filter (view-only filter)
@@ -7,6 +8,7 @@
 // ✅ strict TS (NO "any")
 
 import React, { useEffect, useMemo, useState } from "react";
+import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
@@ -292,6 +294,7 @@ const Customer_Discount_List: React.FC = () => {
       .order("created_at", { ascending: false });
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error(error);
       alert(`Load error: ${error.message}`);
       setRows([]);
@@ -328,7 +331,7 @@ const Customer_Discount_List: React.FC = () => {
     const pi = getPaidInfo(r);
     const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
 
-    // ✅ FIX: total paid always matches due (no overpay)
+    // ✅ total paid always matches due (no overpay)
     const adj = recalcPaymentsToDue(due, existingGcash);
 
     setPaymentTarget(r);
@@ -354,7 +357,6 @@ const Customer_Discount_List: React.FC = () => {
 
     const ca = round2(Math.max(0, toNumber(cashStr)));
 
-    // ✅ FIX: keep totalPaid == due
     const cash = round2(Math.min(due, ca));
     const gcash = round2(Math.max(0, due - cash));
 
@@ -424,6 +426,7 @@ const Customer_Discount_List: React.FC = () => {
       setSelected((prev) => (prev?.id === paymentTarget.id ? updated : prev));
       setPaymentTarget(null);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
@@ -461,7 +464,6 @@ const Customer_Discount_List: React.FC = () => {
     const calc = applyDiscount(base, discountKind, finalVal);
     const newDue = round2(calc.discountedCost);
 
-    // auto payment after discount
     const gcIn = Math.max(0, toNumber(gcashInput));
     const adjPay = recalcPaymentsToDue(newDue, gcIn);
     const totalPaid = round2(adjPay.gcash + adjPay.cash);
@@ -520,6 +522,7 @@ const Customer_Discount_List: React.FC = () => {
       setSelected((prev) => (prev?.id === discountTarget.id ? updated : prev));
       setDiscountTarget(null);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save discount failed.");
     } finally {
@@ -576,6 +579,7 @@ const Customer_Discount_List: React.FC = () => {
           : prev
       );
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -600,498 +604,514 @@ const Customer_Discount_List: React.FC = () => {
   }, [filteredRows, tick]);
 
   return (
-    <div className="customer-lists-container">
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <h2 className="customer-lists-title" style={{ margin: 0 }}>
-          Customer Discount / Promo Records
-        </h2>
+    <IonPage>
+      {/* ✅ SAME PAGE BACKGROUND setup as Customer_Lists */}
+      <IonContent scrollY={false} className="staff-content">
+        <div className="customer-lists-container">
+          {/* TOP BAR (same classes as Customer_Lists) */}
+          <div className="customer-topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Customer Discount / Promo Records</h2>
 
-        {/* ✅ Date Filter (same idea, but view-only) */}
-        <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
-      </div>
-
-      <div style={{ marginBottom: 10, opacity: 0.85, marginTop: 10 }}>
-        <span style={{ marginRight: 14 }}>
-          Upcoming: <strong>{totals.upcoming}</strong>
-        </span>
-        <span style={{ marginRight: 14 }}>
-          Ongoing: <strong>{totals.ongoing}</strong>
-        </span>
-        <span style={{ marginRight: 14 }}>
-          Finished: <strong>{totals.finished}</strong>
-        </span>
-        <span>
-          Total Sales: <strong>₱{totals.total.toFixed(2)}</strong>
-        </span>
-      </div>
-
-      {loading ? (
-        <p>Loading...</p>
-      ) : filteredRows.length === 0 ? (
-        <p>No promo records found</p>
-      ) : (
-        <table className="customer-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Customer</th>
-              <th>Area</th>
-              <th>Seat</th>
-              <th>Package</th>
-              <th>Option</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>Price</th>
-              <th>Discount</th>
-              <th>Status</th>
-              <th>Paid?</th>
-              <th>Payment</th>
-              <th>Reason</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {filteredRows.map((r) => {
-              const opt = r.package_options;
-
-              const optionText =
-                opt?.option_name && opt?.duration_value && opt?.duration_unit
-                  ? `${opt.option_name} • ${formatDuration(Number(opt.duration_value), opt.duration_unit)}`
-                  : opt?.option_name || "—";
-
-              const paid = toBool(r.is_paid);
-
-              const base = round2(Math.max(0, toNumber(r.price)));
-              const calc = applyDiscount(base, r.discount_kind, r.discount_value);
-              const due = round2(calc.discountedCost);
-
-              const pi = getPaidInfo(r);
-              const remaining = round2(Math.max(0, due - pi.totalPaid));
-
-              return (
-                <tr key={r.id}>
-                  <td>{new Date(r.created_at).toLocaleString("en-PH")}</td>
-                  <td>{r.full_name}</td>
-                  <td>{prettyArea(r.area)}</td>
-                  <td>{seatLabel(r)}</td>
-                  <td>{r.packages?.title || "—"}</td>
-                  <td>{optionText}</td>
-                  <td>{new Date(r.start_at).toLocaleString("en-PH")}</td>
-                  <td>{new Date(r.end_at).toLocaleString("en-PH")}</td>
-
-                  <td>₱{due.toFixed(2)}</td>
-
-                  <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <span style={{ fontWeight: 800 }}>
-                        {getDiscountTextFrom(r.discount_kind, r.discount_value)}
-                      </span>
-                      <button className="receipt-btn" onClick={() => openDiscountModal(r)}>
-                        Discount
-                      </button>
-                    </div>
-                  </td>
-
-                  <td>
-                    <strong>{getStatus(r.start_at, r.end_at)}</strong>
-                  </td>
-
-                  <td>
-                    <button
-                      className="receipt-btn"
-                      onClick={() => void togglePaid(r)}
-                      disabled={togglingPaidId === r.id}
-                      style={{ background: paid ? "#1b5e20" : "#b00020" }}
-                      title={paid ? "Tap to set UNPAID" : "Tap to set PAID"}
-                    >
-                      {togglingPaidId === r.id ? "Updating..." : paid ? "PAID" : "UNPAID"}
-                    </button>
-                  </td>
-
-                  <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <span style={{ fontWeight: 800, fontSize: 12 }}>
-                        GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
-                      </span>
-                      <span style={{ fontSize: 12, opacity: 0.85 }}>
-                        Remaining ₱{remaining.toFixed(2)}
-                      </span>
-                      <button className="receipt-btn" onClick={() => openPaymentModal(r)} disabled={due <= 0}>
-                        Payment
-                      </button>
-                    </div>
-                  </td>
-
-                  <td>{(r.discount_reason ?? "").trim() || "—"}</td>
-
-                  <td style={{ display: "flex", gap: 8 }}>
-                    <button className="receipt-btn" onClick={() => setSelected(r)}>
-                      View Receipt
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-
-      {/* PAYMENT MODAL */}
-      {paymentTarget && (
-        <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
-          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            <h3 className="receipt-title">PAYMENT</h3>
-            <p className="receipt-subtitle">{paymentTarget.full_name}</p>
-
-            <hr />
-
-            {(() => {
-              const base = round2(Math.max(0, toNumber(paymentTarget.price)));
-              const calc = applyDiscount(base, paymentTarget.discount_kind, paymentTarget.discount_value);
-              const due = round2(calc.discountedCost);
-
-              const gcIn = Math.max(0, toNumber(gcashInput));
-              const adj = recalcPaymentsToDue(due, gcIn);
-
-              const totalPaid = round2(adj.gcash + adj.cash);
-              const remaining = round2(Math.max(0, due - totalPaid));
-              const willPaid = due > 0 && totalPaid >= due;
-
-              return (
-                <>
-                  <div className="receipt-row">
-                    <span>Total Due</span>
-                    <span>₱{due.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>GCash</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={gcashInput}
-                      onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
-                      style={{ width: 160 }}
-                    />
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Cash</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={cashInput}
-                      onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
-                      style={{ width: 160 }}
-                    />
-                  </div>
-
-                  <hr />
-
-                  <div className="receipt-row">
-                    <span>Total Paid</span>
-                    <span>₱{totalPaid.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Remaining</span>
-                    <span>₱{remaining.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Auto Status</span>
-                    <span style={{ fontWeight: 900 }}>{willPaid ? "PAID" : "UNPAID"}</span>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                    <button className="receipt-btn" onClick={() => setPaymentTarget(null)} style={{ flex: 1 }}>
-                      Cancel
-                    </button>
-                    <button
-                      className="receipt-btn"
-                      onClick={() => void savePayment()}
-                      disabled={savingPayment}
-                      style={{ flex: 1 }}
-                    >
-                      {savingPayment ? "Saving..." : "Save"}
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      )}
-
-      {/* DISCOUNT MODAL */}
-      {discountTarget && (
-        <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
-          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            <h3 className="receipt-title">DISCOUNT</h3>
-            <p className="receipt-subtitle">{discountTarget.full_name}</p>
-
-            <hr />
-
-            <div className="receipt-row">
-              <span>Discount Type</span>
-              <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
-                <option value="none">None</option>
-                <option value="percent">Percent (%)</option>
-                <option value="amount">Peso (₱)</option>
-              </select>
-            </div>
-
-            <div className="receipt-row">
-              <span>Value</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontWeight: 900 }}>
-                  {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
+              <div className="customer-subtext">
+                Showing records for: <strong>{selectedDate}</strong>
+                <span style={{ marginLeft: 10 }}>
+                  • Upcoming: <strong>{totals.upcoming}</strong>
                 </span>
-                <input
-                  type="number"
-                  min="0"
-                  step={discountKind === "percent" ? "1" : "0.01"}
-                  value={discountValueInput}
-                  onChange={(e) => setDiscountValueInput(e.currentTarget.value)}
-                  style={{ width: 140 }}
-                  disabled={discountKind === "none"}
-                />
+                <span style={{ marginLeft: 10 }}>
+                  • Ongoing: <strong>{totals.ongoing}</strong>
+                </span>
+                <span style={{ marginLeft: 10 }}>
+                  • Finished: <strong>{totals.finished}</strong>
+                </span>
+                <span style={{ marginLeft: 10 }}>
+                  • Total Sales: <strong>₱{totals.total.toFixed(2)}</strong>
+                </span>
               </div>
             </div>
 
-            <div className="receipt-row">
-              <span>Reason</span>
-              <input
-                type="text"
-                value={discountReasonInput}
-                onChange={(e) => setDiscountReasonInput(e.currentTarget.value)}
-                placeholder="e.g. loyalty card"
-                style={{ width: 200 }}
-              />
+            <div className="customer-topbar-right">
+              <label className="date-pill">
+                <span className="date-pill-label">Date</span>
+                <input
+                  className="date-pill-input"
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                />
+                <span className="date-pill-icon" aria-hidden="true">
+                  📅
+                </span>
+              </label>
             </div>
+          </div>
 
-            {(() => {
-              const base = round2(Math.max(0, toNumber(discountTarget.price)));
-              const rawVal = toNumber(discountValueInput);
-              const val = discountKind === "percent" ? clamp(Math.max(0, rawVal), 0, 100) : Math.max(0, rawVal);
+          {/* TABLE */}
+          {loading ? (
+            <p className="customer-note">Loading...</p>
+          ) : filteredRows.length === 0 ? (
+            <p className="customer-note">No promo records found for this date</p>
+          ) : (
+            <div className="customer-table-wrap" key={selectedDate}>
+              <table className="customer-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Customer</th>
+                    <th>Area</th>
+                    <th>Seat</th>
+                    <th>Package</th>
+                    <th>Option</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Price</th>
+                    <th>Discount</th>
+                    <th>Status</th>
+                    <th>Paid?</th>
+                    <th>Payment</th>
+                    <th>Reason</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
 
-              const { discountedCost, discountAmount } = applyDiscount(base, discountKind, val);
+                <tbody>
+                  {filteredRows.map((r) => {
+                    const opt = r.package_options;
 
-              const gcIn = Math.max(0, toNumber(gcashInput));
-              const adjPay = recalcPaymentsToDue(discountedCost, gcIn);
+                    const optionText =
+                      opt?.option_name && opt?.duration_value && opt?.duration_unit
+                        ? `${opt.option_name} • ${formatDuration(Number(opt.duration_value), opt.duration_unit)}`
+                        : opt?.option_name || "—";
 
-              const totalPaid = round2(adjPay.gcash + adjPay.cash);
-              const willPaid = discountedCost > 0 && totalPaid >= discountedCost;
+                    const paid = toBool(r.is_paid);
 
-              return (
-                <>
-                  <hr />
+                    const base = round2(Math.max(0, toNumber(r.price)));
+                    const calc = applyDiscount(base, r.discount_kind, r.discount_value);
+                    const due = round2(calc.discountedCost);
 
-                  <div className="receipt-row">
-                    <span>System Cost (Before)</span>
-                    <span>₱{base.toFixed(2)}</span>
+                    const pi = getPaidInfo(r);
+                    const remaining = round2(Math.max(0, due - pi.totalPaid));
+
+                    return (
+                      <tr key={r.id}>
+                        <td>{new Date(r.created_at).toLocaleString("en-PH")}</td>
+                        <td>{r.full_name}</td>
+                        <td>{prettyArea(r.area)}</td>
+                        <td>{seatLabel(r)}</td>
+                        <td>{r.packages?.title || "—"}</td>
+                        <td>{optionText}</td>
+                        <td>{new Date(r.start_at).toLocaleString("en-PH")}</td>
+                        <td>{new Date(r.end_at).toLocaleString("en-PH")}</td>
+
+                        <td>₱{due.toFixed(2)}</td>
+
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">
+                              {getDiscountTextFrom(r.discount_kind, r.discount_value)}
+                            </span>
+                            <button className="receipt-btn" onClick={() => openDiscountModal(r)}>
+                              Discount
+                            </button>
+                          </div>
+                        </td>
+
+                        <td>
+                          <span className="cell-strong">{getStatus(r.start_at, r.end_at)}</span>
+                        </td>
+
+                        <td>
+                          <button
+                            className={`receipt-btn pay-badge ${paid ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            onClick={() => void togglePaid(r)}
+                            disabled={togglingPaidId === r.id}
+                            title={paid ? "Tap to set UNPAID" : "Tap to set PAID"}
+                          >
+                            {togglingPaidId === r.id ? "Updating..." : paid ? "PAID" : "UNPAID"}
+                          </button>
+                        </td>
+
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">
+                              GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
+                            </span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              Remaining ₱{remaining.toFixed(2)}
+                            </span>
+                            <button className="receipt-btn" onClick={() => openPaymentModal(r)} disabled={due <= 0}>
+                              Payment
+                            </button>
+                          </div>
+                        </td>
+
+                        <td>{(r.discount_reason ?? "").trim() || "—"}</td>
+
+                        <td>
+                          <div className="action-stack">
+                            <button className="receipt-btn" onClick={() => setSelected(r)}>
+                              View Receipt
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* PAYMENT MODAL */}
+          {paymentTarget && (
+            <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">PAYMENT</h3>
+                <p className="receipt-subtitle">{paymentTarget.full_name}</p>
+
+                <hr />
+
+                {(() => {
+                  const base = round2(Math.max(0, toNumber(paymentTarget.price)));
+                  const calc = applyDiscount(base, paymentTarget.discount_kind, paymentTarget.discount_value);
+                  const due = round2(calc.discountedCost);
+
+                  const gcIn = Math.max(0, toNumber(gcashInput));
+                  const adj = recalcPaymentsToDue(due, gcIn);
+
+                  const totalPaid = round2(adj.gcash + adj.cash);
+                  const remaining = round2(Math.max(0, due - totalPaid));
+                  const willPaid = due > 0 && totalPaid >= due;
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>Total Due</span>
+                        <span>₱{due.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashInput}
+                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                        />
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={cashInput}
+                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                        />
+                      </div>
+
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>₱{totalPaid.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining</span>
+                        <span>₱{remaining.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Auto Status</span>
+                        <span className="receipt-status">{willPaid ? "PAID" : "UNPAID"}</span>
+                      </div>
+
+                      <div className="modal-actions">
+                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)}>
+                          Cancel
+                        </button>
+                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment}>
+                          {savingPayment ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* DISCOUNT MODAL */}
+          {discountTarget && (
+            <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DISCOUNT</h3>
+                <p className="receipt-subtitle">{discountTarget.full_name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Discount Type</span>
+                  <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
+                    <option value="none">None</option>
+                    <option value="percent">Percent (%)</option>
+                    <option value="amount">Peso (₱)</option>
+                  </select>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Value</span>
+                  <div className="inline-input">
+                    <span className="inline-input-prefix">
+                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
+                    </span>
+                    <input
+                      className="small-input"
+                      type="number"
+                      min="0"
+                      step={discountKind === "percent" ? "1" : "0.01"}
+                      value={discountValueInput}
+                      onChange={(e) => setDiscountValueInput(e.currentTarget.value)}
+                      disabled={discountKind === "none"}
+                    />
                   </div>
+                </div>
 
+                <div className="receipt-row">
+                  <span>Reason</span>
+                  <input
+                    className="reason-input"
+                    type="text"
+                    value={discountReasonInput}
+                    onChange={(e) => setDiscountReasonInput(e.currentTarget.value)}
+                    placeholder="e.g. loyalty card"
+                  />
+                </div>
+
+                {(() => {
+                  const base = round2(Math.max(0, toNumber(discountTarget.price)));
+                  const rawVal = toNumber(discountValueInput);
+                  const val = discountKind === "percent" ? clamp(Math.max(0, rawVal), 0, 100) : Math.max(0, rawVal);
+
+                  const { discountedCost, discountAmount } = applyDiscount(base, discountKind, val);
+
+                  const gcIn = Math.max(0, toNumber(gcashInput));
+                  const adjPay = recalcPaymentsToDue(discountedCost, gcIn);
+
+                  const totalPaid = round2(adjPay.gcash + adjPay.cash);
+                  const willPaid = discountedCost > 0 && totalPaid >= discountedCost;
+
+                  return (
+                    <>
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>System Cost (Before)</span>
+                        <span>₱{base.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Discount</span>
+                        <span>{getDiscountTextFrom(discountKind, val)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Discount Amount</span>
+                        <span>₱{discountAmount.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Final System Cost</span>
+                        <span>₱{round2(discountedCost).toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-total">
+                        <span>NEW TOTAL BALANCE</span>
+                        <span>₱{round2(discountedCost).toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Auto Payment After</span>
+                        <span>
+                          GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                        </span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Auto Paid</span>
+                        <span className="receipt-status">{willPaid ? "PAID" : "UNPAID"}</span>
+                      </div>
+
+                      <div className="modal-actions">
+                        <button className="receipt-btn" onClick={() => setDiscountTarget(null)}>
+                          Cancel
+                        </button>
+                        <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount}>
+                          {savingDiscount ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* RECEIPT (VIEW ONLY) */}
+          {selected && (
+            <div className="receipt-overlay" onClick={() => setSelected(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <img src={logo} className="receipt-logo" alt="logo" />
+
+                <h3 className="receipt-title">ME TYME LOUNGE</h3>
+                <p className="receipt-subtitle">PROMO RECEIPT</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Status</span>
+                  <span>{getStatus(selected.start_at, selected.end_at)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Customer</span>
+                  <span>{selected.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Area</span>
+                  <span>{prettyArea(selected.area)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{seatLabel(selected)}</span>
+                </div>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Package</span>
+                  <span>{selected.packages?.title || "—"}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Option</span>
+                  <span>{selected.package_options?.option_name || "—"}</span>
+                </div>
+
+                {selected.package_options?.duration_value && selected.package_options?.duration_unit ? (
                   <div className="receipt-row">
-                    <span>Discount</span>
-                    <span>{getDiscountTextFrom(discountKind, val)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Discount Amount</span>
-                    <span>₱{discountAmount.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Final System Cost</span>
-                    <span>₱{round2(discountedCost).toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-total">
-                    <span>NEW TOTAL BALANCE</span>
-                    <span>₱{round2(discountedCost).toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Auto Payment After</span>
+                    <span>Duration</span>
                     <span>
-                      GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                      {formatDuration(
+                        Number(selected.package_options.duration_value),
+                        selected.package_options.duration_unit
+                      )}
                     </span>
                   </div>
+                ) : null}
 
-                  <div className="receipt-row">
-                    <span>Auto Paid</span>
-                    <span style={{ fontWeight: 900 }}>{willPaid ? "PAID" : "UNPAID"}</span>
-                  </div>
+                <hr />
 
-                  <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                    <button className="receipt-btn" onClick={() => setDiscountTarget(null)} style={{ flex: 1 }}>
-                      Cancel
-                    </button>
-                    <button
-                      className="receipt-btn"
-                      onClick={() => void saveDiscount()}
-                      disabled={savingDiscount}
-                      style={{ flex: 1 }}
-                    >
-                      {savingDiscount ? "Saving..." : "Save"}
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      )}
+                <div className="receipt-row">
+                  <span>Start</span>
+                  <span>{new Date(selected.start_at).toLocaleString("en-PH")}</span>
+                </div>
 
-      {/* RECEIPT (VIEW ONLY) */}
-      {selected && (
-        <div className="receipt-overlay" onClick={() => setSelected(null)}>
-          <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-            <img src={logo} className="receipt-logo" alt="logo" />
+                <div className="receipt-row">
+                  <span>End</span>
+                  <span>{new Date(selected.end_at).toLocaleString("en-PH")}</span>
+                </div>
 
-            <h3 className="receipt-title">ME TYME LOUNGE</h3>
-            <p className="receipt-subtitle">PROMO RECEIPT</p>
+                <hr />
 
-            <hr />
+                {(() => {
+                  const base = round2(Math.max(0, toNumber(selected.price)));
+                  const { discountedCost, discountAmount } = applyDiscount(
+                    base,
+                    selected.discount_kind,
+                    selected.discount_value
+                  );
+                  const due = round2(discountedCost);
 
-            <div className="receipt-row">
-              <span>Status</span>
-              <span>{getStatus(selected.start_at, selected.end_at)}</span>
-            </div>
+                  const pi = getPaidInfo(selected);
+                  const remaining = round2(Math.max(0, due - pi.totalPaid));
+                  const paid = toBool(selected.is_paid);
 
-            <div className="receipt-row">
-              <span>Customer</span>
-              <span>{selected.full_name}</span>
-            </div>
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>System Cost (Before)</span>
+                        <span>₱{base.toFixed(2)}</span>
+                      </div>
 
-            <div className="receipt-row">
-              <span>Area</span>
-              <span>{prettyArea(selected.area)}</span>
-            </div>
+                      <div className="receipt-row">
+                        <span>Discount</span>
+                        <span>{getDiscountTextFrom(selected.discount_kind, selected.discount_value)}</span>
+                      </div>
 
-            <div className="receipt-row">
-              <span>Seat</span>
-              <span>{seatLabel(selected)}</span>
-            </div>
+                      <div className="receipt-row">
+                        <span>Discount Amount</span>
+                        <span>₱{discountAmount.toFixed(2)}</span>
+                      </div>
 
-            <hr />
+                      <div className="receipt-row">
+                        <span>Final Cost</span>
+                        <span>₱{due.toFixed(2)}</span>
+                      </div>
 
-            <div className="receipt-row">
-              <span>Package</span>
-              <span>{selected.packages?.title || "—"}</span>
-            </div>
+                      <hr />
 
-            <div className="receipt-row">
-              <span>Option</span>
-              <span>{selected.package_options?.option_name || "—"}</span>
-            </div>
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <span>₱{pi.gcash.toFixed(2)}</span>
+                      </div>
 
-            {selected.package_options?.duration_value && selected.package_options?.duration_unit ? (
-              <div className="receipt-row">
-                <span>Duration</span>
-                <span>
-                  {formatDuration(
-                    Number(selected.package_options.duration_value),
-                    selected.package_options.duration_unit
-                  )}
-                </span>
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <span>₱{pi.cash.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>₱{pi.totalPaid.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining</span>
+                        <span>₱{remaining.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Paid Status</span>
+                        <span className="receipt-status">{paid ? "PAID" : "UNPAID"}</span>
+                      </div>
+
+                      {/* ❌ discount_reason intentionally hidden */}
+
+                      <div className="receipt-total">
+                        <span>TOTAL</span>
+                        <span>₱{due.toFixed(2)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                <button className="close-btn" onClick={() => setSelected(null)}>
+                  Close
+                </button>
               </div>
-            ) : null}
-
-            <hr />
-
-            <div className="receipt-row">
-              <span>Start</span>
-              <span>{new Date(selected.start_at).toLocaleString("en-PH")}</span>
             </div>
-
-            <div className="receipt-row">
-              <span>End</span>
-              <span>{new Date(selected.end_at).toLocaleString("en-PH")}</span>
-            </div>
-
-            <hr />
-
-            {(() => {
-              const base = round2(Math.max(0, toNumber(selected.price)));
-              const { discountedCost, discountAmount } = applyDiscount(base, selected.discount_kind, selected.discount_value);
-              const due = round2(discountedCost);
-
-              const pi = getPaidInfo(selected);
-              const remaining = round2(Math.max(0, due - pi.totalPaid));
-              const paid = toBool(selected.is_paid);
-
-              return (
-                <>
-                  {/* ✅ Receipt shows discount + discount amount */}
-                  <div className="receipt-row">
-                    <span>System Cost (Before)</span>
-                    <span>₱{base.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Discount</span>
-                    <span>{getDiscountTextFrom(selected.discount_kind, selected.discount_value)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Discount Amount</span>
-                    <span>₱{discountAmount.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Final Cost</span>
-                    <span>₱{due.toFixed(2)}</span>
-                  </div>
-
-                  <hr />
-
-                  <div className="receipt-row">
-                    <span>GCash</span>
-                    <span>₱{pi.gcash.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Cash</span>
-                    <span>₱{pi.cash.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Total Paid</span>
-                    <span>₱{pi.totalPaid.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Remaining</span>
-                    <span>₱{remaining.toFixed(2)}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Paid Status</span>
-                    <span style={{ fontWeight: 900 }}>{paid ? "PAID" : "UNPAID"}</span>
-                  </div>
-
-                  {/* ❌ discount_reason intentionally hidden */}
-
-                  <div className="receipt-total">
-                    <span>TOTAL</span>
-                    <span>₱{due.toFixed(2)}</span>
-                  </div>
-                </>
-              );
-            })()}
-
-            <button className="close-btn" onClick={() => setSelected(null)}>
-              Close
-            </button>
-          </div>
+          )}
         </div>
-      )}
-    </div>
+      </IonContent>
+    </IonPage>
   );
 };
 

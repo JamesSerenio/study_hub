@@ -524,7 +524,10 @@ ion-content,
   padding: clamp(12px, 3vw, 20px);
   background: transparent !important;
 
-  animation: fadeInUp 280ms ease both;
+  will-change: transform, opacity;
+  transform: translate3d(0,0,0);
+
+  animation: fadeUpSmooth var(--dur-slow) var(--ease-out) both;
 }
 
 /* =========================
@@ -577,7 +580,10 @@ ion-content,
   border: 1px solid rgba(0,0,0,.12);
   box-shadow: 0 10px 22px rgba(0,0,0,.10);
 
-  animation: fadeIn 220ms ease both;
+  will-change: transform, opacity;
+  transform: translate3d(0,0,0);
+
+  animation: fadeInSmooth var(--dur-mid) var(--ease-soft) both;
 }
 
 .date-pill-label{
@@ -625,7 +631,10 @@ ion-content,
 
   -webkit-overflow-scrolling: touch;
 
-  animation: fadeIn 220ms ease both;
+  will-change: transform, opacity;
+  transform: translate3d(0,0,0);
+
+  animation: fadeUpSmooth var(--dur-slow) var(--ease-out) both
 }
 
 .customer-table{
@@ -722,7 +731,8 @@ ion-content,
   z-index: 999;
   padding: 16px;
 
-  animation: overlayFade 160ms ease both;
+  will-change: opacity;
+  animation: overlayFadeSmooth var(--dur-fast) var(--ease-soft) both;
 }
 
 .receipt-container{
@@ -736,7 +746,9 @@ ion-content,
   overflow: auto;
 
   box-shadow: 0 16px 38px rgba(0,0,0,.22);
-  animation: modalPop 180ms ease both;
+  will-change: transform, opacity;
+  transform: translate3d(0,0,0);
+  animation: modalPopSmooth var(--dur-mid) var(--ease-out) both;
 }
 
 .receipt-logo{
@@ -795,6 +807,15 @@ ion-content,
   cursor:pointer;
   transition: transform 120ms ease, opacity 120ms ease;
 }
+
+.customer-table tbody tr td{
+  transition: background var(--dur-mid) var(--ease-soft);
+}
+
+.receipt-btn{
+  transition: transform var(--dur-fast) var(--ease-soft), opacity var(--dur-fast) var(--ease-soft);
+}
+
 .close-btn:active{ transform: scale(.98); }
 
 /* modal inputs */
@@ -864,22 +885,70 @@ ion-content,
 /* =========================
    ANIMATIONS (fade)
 ========================= */
-@keyframes fadeIn{
-  from{ opacity:0; }
-  to{ opacity:1; }
+/* =========================
+   SMOOTH ANIMATIONS (IMPROVED)
+   - uses translate3d + will-change for buttery motion
+========================= */
+
+/* global animation variables */
+:root{
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-soft: cubic-bezier(.22, 1, .36, 1);
+  --dur-fast: 180ms;
+  --dur-mid: 320ms;
+  --dur-slow: 420ms;
 }
-@keyframes fadeInUp{
-  from{ opacity:0; transform: translateY(10px); }
-  to{ opacity:1; transform: translateY(0); }
+
+/* if user prefers reduced motion, disable */
+@media (prefers-reduced-motion: reduce){
+  *{
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }
-@keyframes overlayFade{
-  from{ opacity:0; }
-  to{ opacity:1; }
+
+/* helper classes (optional but safe) */
+.anim-fade{
+  animation: fadeInSmooth var(--dur-mid) var(--ease-soft) both;
 }
-@keyframes modalPop{
-  from{ opacity:0; transform: translateY(8px) scale(.98); }
-  to{ opacity:1; transform: translateY(0) scale(1); }
+.anim-up{
+  animation: fadeUpSmooth var(--dur-slow) var(--ease-out) both;
 }
+
+/* keyframes */
+@keyframes fadeInSmooth{
+  from{ opacity: 0; }
+  to{ opacity: 1; }
+}
+
+@keyframes fadeUpSmooth{
+  from{
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+  }
+  to{
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes overlayFadeSmooth{
+  from{ opacity: 0; }
+  to{ opacity: 1; }
+}
+
+@keyframes modalPopSmooth{
+  from{
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(.98);
+  }
+  to{
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
 
 /* =========================
    TOP BAR RIGHT AREA
