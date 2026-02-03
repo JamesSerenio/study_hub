@@ -3695,32 +3695,74 @@ ion-modal.booking-modal {
   }
 }
 
-/* global.css (ADD THIS SECTION) */
+/* src/theme/admin_packages.css */
+
 /* =========================
-   ADMIN PACKAGES
+   ADMIN PACKAGES (consistent theme)
 ========================= */
 .adminpkg {
   --adminpkg-radius: 16px;
 }
 
+/* same container rhythm as other pages */
 .adminpkg__wrap {
+  width: 100%;
   max-width: 1100px;
   margin: 0 auto;
+  animation: adminpkgFadeUp 260ms ease-out both;
 }
 
+@keyframes adminpkgFadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.adminpkg__topbar {
+  animation: adminpkgFadeUp 220ms ease-out both;
+}
+
+.adminpkg__topActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Loading */
 .adminpkg__loading {
   display: grid;
   place-items: center;
   padding: 24px;
+  animation: adminpkgFadeUp 220ms ease-out both;
 }
 
 .adminpkg__grid {
   padding: 0;
 }
 
+/* Cards */
 .adminpkg__card {
   border-radius: var(--adminpkg-radius);
   overflow: hidden;
+  background: rgba(255, 255, 255, 0.70);
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.08);
+  transform: translateY(0);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.adminpkg__card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.10);
+}
+
+.adminpkg__fadeIn {
+  animation: adminpkgCardIn 220ms ease-out both;
+}
+
+@keyframes adminpkgCardIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .adminpkg__cardTitle {
@@ -3747,6 +3789,7 @@ ion-modal.booking-modal {
   opacity: 0.9;
 }
 
+/* Amenities */
 .adminpkg__amenities {
   margin-top: 12px;
 }
@@ -3757,6 +3800,7 @@ ion-modal.booking-modal {
   line-height: 1.6;
 }
 
+/* Options */
 .adminpkg__options {
   margin-top: 12px;
 }
@@ -3775,6 +3819,13 @@ ion-modal.booking-modal {
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 14px;
   padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.55);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.adminpkg__optionRow:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px rgba(0,0,0,0.08);
 }
 
 .adminpkg__optionLeft {
@@ -3785,11 +3836,24 @@ ion-modal.booking-modal {
   font-weight: 900;
 }
 
+/* Actions (use receipt-btn vibe) */
 .adminpkg__actions {
   display: flex;
   gap: 10px;
   margin-top: 14px;
   flex-wrap: wrap;
+}
+
+.adminpkg__dangerBtn {
+  border: 1px solid rgba(220, 38, 38, 0.55);
+}
+
+/* Modal layout consistent */
+.adminpkg__modalWrap {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  animation: adminpkgFadeUp 220ms ease-out both;
 }
 
 .adminpkg__modalActions {
@@ -3805,6 +3869,7 @@ ion-modal.booking-modal {
   flex-wrap: wrap;
 }
 
+/* Ion list items round */
 .adminpkg__list ion-item {
   --border-radius: 14px;
   margin-bottom: 10px;
@@ -3819,7 +3884,33 @@ ion-modal.booking-modal {
   margin-right: 10px;
 }
 
-/* Responsive */
+/* =========================
+   Responsive
+   mobile 400 / tablet 600 / desktop 1200
+========================= */
+
+/* mobile <= 400 */
+@media (max-width: 400px) {
+  .adminpkg__topActions {
+    justify-content: flex-start;
+  }
+
+  .adminpkg__modalActions {
+    flex-direction: column;
+  }
+
+  .adminpkg__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adminpkg__optionRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* tablet <= 600 */
 @media (max-width: 600px) {
   .adminpkg__wrap {
     max-width: 100%;
@@ -3835,17 +3926,13 @@ ion-modal.booking-modal {
   }
 }
 
-.bookadd-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-
-@media (max-width: 520px) {
-  .bookadd-actions {
-    grid-template-columns: 1fr;
+/* desktop >= 1200 */
+@media (min-width: 1200px) {
+  .adminpkg__wrap {
+    max-width: 1200px;
   }
 }
+
 
 /* =========================
    ADMIN STAFF EXPENSES PAGE

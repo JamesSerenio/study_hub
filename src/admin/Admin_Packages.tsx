@@ -34,6 +34,7 @@ import {
 import { addOutline, closeOutline, trashOutline, createOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
+
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
 
@@ -55,7 +56,7 @@ interface PackageOptionRow {
   option_name: string;
   duration_value: number;
   duration_unit: DurationUnit;
-  price: number | string; // numeric may come as string
+  price: number | string;
 }
 
 const toNum = (v: number | string | null | undefined): number => {
@@ -390,6 +391,7 @@ const Admin_Packages: React.FC = () => {
       <IonHeader>
         <IonToolbar>
           <IonTitle>Admin Packages</IonTitle>
+
           <IonButtons slot="end">
             <IonButton onClick={openCreatePackage}>
               <IonIcon icon={addOutline} slot="start" />
@@ -399,17 +401,37 @@ const Admin_Packages: React.FC = () => {
         </IonToolbar>
       </IonHeader>
 
-      <IonContent className="ion-padding adminpkg">
-        <div className="adminpkg__wrap">
+      {/* ✅ SAME BACKGROUND AS OTHER PAGES */}
+      <IonContent className="staff-content" scrollY={false}>
+        <div className="customer-lists-container adminpkg adminpkg__wrap">
+          {/* ✅ SAME TOP BAR VIBE */}
+          <div className="customer-topbar adminpkg__topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Packages</h2>
+              <div className="customer-subtext">
+                Total packages: <strong>{packages.length}</strong>
+              </div>
+            </div>
+
+            <div className="customer-topbar-right adminpkg__topActions">
+              <button className="receipt-btn" onClick={openCreatePackage}>
+                <IonIcon icon={addOutline} />
+                <span style={{ marginLeft: 8 }}>New Package</span>
+              </button>
+
+              <button className="receipt-btn" onClick={() => void fetchPackages()}>
+                <span style={{ marginLeft: 2 }}>Refresh</span>
+              </button>
+            </div>
+          </div>
+
           {loading ? (
             <div className="adminpkg__loading">
               <IonSpinner />
-              <IonText className="adminpkg__muted" style={{ marginTop: 10 }}>
-                Loading packages...
-              </IonText>
+              <p className="customer-note" style={{ marginTop: 10 }}>Loading packages...</p>
             </div>
           ) : packages.length === 0 ? (
-            <IonText>No packages yet. Click “New”.</IonText>
+            <p className="customer-note">No packages yet. Click “New Package”.</p>
           ) : (
             <IonGrid className="adminpkg__grid">
               <IonRow>
@@ -417,10 +439,11 @@ const Admin_Packages: React.FC = () => {
                   const opts = optionsByPackage[p.id] || [];
                   return (
                     <IonCol size="12" sizeMd="6" key={p.id}>
-                      <IonCard className="adminpkg__card">
+                      <IonCard className="adminpkg__card adminpkg__fadeIn">
                         <IonCardHeader>
                           <IonCardTitle className="adminpkg__cardTitle">
                             <span className="adminpkg__titleText">{p.title}</span>
+
                             <IonBadge color={p.is_active ? "success" : "medium"}>
                               {p.is_active ? "ACTIVE" : "INACTIVE"}
                             </IonBadge>
@@ -446,6 +469,7 @@ const Admin_Packages: React.FC = () => {
                               <IonText>
                                 <strong>AMENITIES</strong>
                               </IonText>
+
                               <ul className="adminpkg__amenityList">
                                 {p.amenities
                                   .split("\n")
@@ -473,9 +497,13 @@ const Admin_Packages: React.FC = () => {
                                         {formatDuration(Number(o.duration_value), o.duration_unit)}
                                       </small>
                                     </div>
-                                    <div className="adminpkg__optionRight">₱{toNum(o.price).toFixed(2)}</div>
+
+                                    <div className="adminpkg__optionRight">
+                                      ₱{toNum(o.price).toFixed(2)}
+                                    </div>
                                   </div>
                                 ))}
+
                                 {opts.length > 6 ? (
                                   <IonText color="medium">
                                     <small>+{opts.length - 6} more…</small>
@@ -492,24 +520,25 @@ const Admin_Packages: React.FC = () => {
                           )}
 
                           <div className="adminpkg__actions">
-                            <IonButton size="small" onClick={() => openEditPackage(p)}>
-                              <IonIcon icon={createOutline} slot="start" />
-                              Edit
-                            </IonButton>
+                            <button className="receipt-btn" onClick={() => openEditPackage(p)}>
+                              <IonIcon icon={createOutline} />
+                              <span style={{ marginLeft: 8 }}>Edit</span>
+                            </button>
 
-                            <IonButton size="small" onClick={() => void openManageOptions(p)}>
+                            <button className="receipt-btn" onClick={() => void openManageOptions(p)}>
                               Manage Options
-                            </IonButton>
+                            </button>
 
-                            <IonButton
-                              size="small"
-                              color="danger"
+                            <button
+                              className="receipt-btn adminpkg__dangerBtn"
                               disabled={deletingId === p.id}
                               onClick={() => void deletePackage(p)}
                             >
-                              <IonIcon icon={trashOutline} slot="start" />
-                              {deletingId === p.id ? "Deleting..." : "Delete"}
-                            </IonButton>
+                              <IonIcon icon={trashOutline} />
+                              <span style={{ marginLeft: 8 }}>
+                                {deletingId === p.id ? "Deleting..." : "Delete"}
+                              </span>
+                            </button>
                           </div>
                         </IonCardContent>
                       </IonCard>
@@ -519,185 +548,220 @@ const Admin_Packages: React.FC = () => {
               </IonRow>
             </IonGrid>
           )}
-        </div>
 
-        {/* =========================
-            PACKAGE MODAL
-        ========================= */}
-        <IonModal isOpen={openPackageModal} onDidDismiss={() => setOpenPackageModal(false)}>
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>{activePackage ? "Edit Package" : "New Package"}</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setOpenPackageModal(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
+          {/* =========================
+              PACKAGE MODAL
+          ========================= */}
+          <IonModal
+            isOpen={openPackageModal}
+            onDidDismiss={() => setOpenPackageModal(false)}
+          >
+            <IonHeader>
+              <IonToolbar>
+                <IonTitle>{activePackage ? "Edit Package" : "New Package"}</IonTitle>
+                <IonButtons slot="end">
+                  <IonButton onClick={() => setOpenPackageModal(false)}>
+                    <IonIcon icon={closeOutline} />
+                  </IonButton>
+                </IonButtons>
+              </IonToolbar>
+            </IonHeader>
 
-          <IonContent className="ion-padding adminpkg">
-            <IonList className="adminpkg__list">
-              <IonItem>
-                <IonLabel position="stacked">Area</IonLabel>
-                <IonSelect value={pkgArea} onIonChange={(e) => setPkgArea(e.detail.value as PackageArea)}>
-                  <IonSelectOption value="common_area">Common Area</IonSelectOption>
-                  <IonSelectOption value="conference_room">Conference Room</IonSelectOption>
-                </IonSelect>
-              </IonItem>
-
-              <IonItem>
-                <IonLabel position="stacked">Title</IonLabel>
-                <IonInput value={pkgTitle} onIonChange={(e) => setPkgTitle(e.detail.value ?? "")} />
-              </IonItem>
-
-              <IonItem>
-                <IonLabel position="stacked">Description (optional)</IonLabel>
-                <IonTextarea autoGrow value={pkgDesc} onIonChange={(e) => setPkgDesc(e.detail.value ?? "")} />
-              </IonItem>
-
-              <IonItem>
-                <IonLabel position="stacked">AMENITIES (optional)</IonLabel>
-                <IonTextarea
-                  autoGrow
-                  placeholder={"Example:\n• Free Wi-Fi\n• Unlimited coffee\n• Printing services available"}
-                  value={pkgAmenities}
-                  onIonChange={(e) => setPkgAmenities(e.detail.value ?? "")}
-                />
-              </IonItem>
-
-              <IonItem>
-                <IonLabel position="stacked">Active?</IonLabel>
-                <IonSelect value={pkgActive ? "yes" : "no"} onIonChange={(e) => setPkgActive(e.detail.value === "yes")}>
-                  <IonSelectOption value="yes">Active</IonSelectOption>
-                  <IonSelectOption value="no">Inactive</IonSelectOption>
-                </IonSelect>
-              </IonItem>
-            </IonList>
-
-            <div className="adminpkg__modalActions">
-              <IonButton expand="block" disabled={saving} onClick={() => void savePackage()}>
-                {saving ? "Saving..." : "Save"}
-              </IonButton>
-              <IonButton
-                expand="block"
-                fill="outline"
-                onClick={() => {
-                  setOpenPackageModal(false);
-                  setActivePackage(null);
-                }}
-              >
-                Cancel
-              </IonButton>
-            </div>
-          </IonContent>
-        </IonModal>
-
-        {/* =========================
-            OPTIONS MODAL
-        ========================= */}
-        <IonModal isOpen={openOptionsModal} onDidDismiss={() => setOpenOptionsModal(false)}>
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>Options — {activePackage?.title ?? ""}</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setOpenOptionsModal(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-
-          <IonContent className="ion-padding adminpkg">
-            {!activePackage ? (
-              <IonText>No package selected.</IonText>
-            ) : (
-              <>
-                <IonCard className="adminpkg__card">
-                  <IonCardHeader>
-                    <IonCardTitle>{editingOption ? "Edit Option" : "Add Option"}</IonCardTitle>
-                  </IonCardHeader>
-                  <IonCardContent>
-                    <IonList className="adminpkg__list">
-                      <IonItem>
-                        <IonLabel position="stacked">Option Name</IonLabel>
-                        <IonInput value={optName} onIonChange={(e) => setOptName(e.detail.value ?? "")} />
-                      </IonItem>
-
-                      <IonItem>
-                        <IonLabel position="stacked">Duration Value</IonLabel>
-                        <IonInput
-                          type="number"
-                          value={String(optDurationValue)}
-                          onIonChange={(e) => setOptDurationValue(Number(e.detail.value ?? 1))}
-                        />
-                      </IonItem>
-
-                      <IonItem>
-                        <IonLabel position="stacked">Duration Unit</IonLabel>
-                        <IonSelect value={optDurationUnit} onIonChange={(e) => setOptDurationUnit(e.detail.value as DurationUnit)}>
-                          <IonSelectOption value="hour">Hour(s)</IonSelectOption>
-                          <IonSelectOption value="day">Day(s)</IonSelectOption>
-                          <IonSelectOption value="month">Month(s)</IonSelectOption>
-                          <IonSelectOption value="year">Year(s)</IonSelectOption>
-                        </IonSelect>
-                      </IonItem>
-
-                      <IonItem>
-                        <IonLabel position="stacked">Price (PHP)</IonLabel>
-                        <IonInput type="number" value={String(optPrice)} onIonChange={(e) => setOptPrice(Number(e.detail.value ?? 0))} />
-                      </IonItem>
-                    </IonList>
-
-                    <div className="adminpkg__optionActions">
-                      <IonButton disabled={saving} onClick={() => void saveOption()}>
-                        {saving ? "Saving..." : editingOption ? "Update Option" : "Add Option"}
-                      </IonButton>
-                      <IonButton fill="outline" onClick={resetOptionForm}>
-                        Clear
-                      </IonButton>
-                    </div>
-                  </IonCardContent>
-                </IonCard>
-
+            <IonContent className="staff-content">
+              <div className="customer-lists-container adminpkg adminpkg__modalWrap">
                 <IonList className="adminpkg__list">
-                  <IonListHeader>
-                    <IonLabel>Saved Options</IonLabel>
-                  </IonListHeader>
+                  <IonItem>
+                    <IonLabel position="stacked">Area</IonLabel>
+                    <IonSelect value={pkgArea} onIonChange={(e) => setPkgArea(e.detail.value as PackageArea)}>
+                      <IonSelectOption value="common_area">Common Area</IonSelectOption>
+                      <IonSelectOption value="conference_room">Conference Room</IonSelectOption>
+                    </IonSelect>
+                  </IonItem>
 
-                  {selectedOptions.length === 0 ? (
-                    <IonItem>
-                      <IonLabel>No options yet.</IonLabel>
-                    </IonItem>
-                  ) : (
-                    selectedOptions.map((o) => (
-                      <IonItem key={o.id}>
-                        <IonLabel>
-                          <strong>{o.option_name}</strong>
-                          <div className="adminpkg__muted" style={{ fontSize: 12 }}>
-                            {formatDuration(Number(o.duration_value), o.duration_unit)}
-                          </div>
-                        </IonLabel>
+                  <IonItem>
+                    <IonLabel position="stacked">Title</IonLabel>
+                    <IonInput value={pkgTitle} onIonChange={(e) => setPkgTitle(e.detail.value ?? "")} />
+                  </IonItem>
 
-                        <IonText className="adminpkg__price">₱{toNum(o.price).toFixed(2)}</IonText>
+                  <IonItem>
+                    <IonLabel position="stacked">Description (optional)</IonLabel>
+                    <IonTextarea autoGrow value={pkgDesc} onIonChange={(e) => setPkgDesc(e.detail.value ?? "")} />
+                  </IonItem>
 
-                        <IonButton size="small" fill="outline" onClick={() => openEditOption(o)} style={{ marginRight: 8 }}>
-                          Edit
-                        </IonButton>
+                  <IonItem>
+                    <IonLabel position="stacked">AMENITIES (optional)</IonLabel>
+                    <IonTextarea
+                      autoGrow
+                      placeholder={"Example:\n• Free Wi-Fi\n• Unlimited coffee\n• Printing services available"}
+                      value={pkgAmenities}
+                      onIonChange={(e) => setPkgAmenities(e.detail.value ?? "")}
+                    />
+                  </IonItem>
 
-                        <IonButton size="small" color="danger" disabled={deletingId === o.id} onClick={() => void deleteOption(o)}>
-                          {deletingId === o.id ? "..." : "Delete"}
-                        </IonButton>
-                      </IonItem>
-                    ))
-                  )}
+                  <IonItem>
+                    <IonLabel position="stacked">Active?</IonLabel>
+                    <IonSelect
+                      value={pkgActive ? "yes" : "no"}
+                      onIonChange={(e) => setPkgActive(e.detail.value === "yes")}
+                    >
+                      <IonSelectOption value="yes">Active</IonSelectOption>
+                      <IonSelectOption value="no">Inactive</IonSelectOption>
+                    </IonSelect>
+                  </IonItem>
                 </IonList>
-              </>
-            )}
-          </IonContent>
-        </IonModal>
 
-        <IonToast isOpen={toastOpen} message={toastMsg} duration={2200} onDidDismiss={() => setToastOpen(false)} />
+                <div className="adminpkg__modalActions">
+                  <IonButton expand="block" disabled={saving} onClick={() => void savePackage()}>
+                    {saving ? "Saving..." : "Save"}
+                  </IonButton>
+
+                  <IonButton
+                    expand="block"
+                    fill="outline"
+                    onClick={() => {
+                      setOpenPackageModal(false);
+                      setActivePackage(null);
+                    }}
+                  >
+                    Cancel
+                  </IonButton>
+                </div>
+              </div>
+            </IonContent>
+          </IonModal>
+
+          {/* =========================
+              OPTIONS MODAL
+          ========================= */}
+          <IonModal isOpen={openOptionsModal} onDidDismiss={() => setOpenOptionsModal(false)}>
+            <IonHeader>
+              <IonToolbar>
+                <IonTitle>Options — {activePackage?.title ?? ""}</IonTitle>
+                <IonButtons slot="end">
+                  <IonButton onClick={() => setOpenOptionsModal(false)}>
+                    <IonIcon icon={closeOutline} />
+                  </IonButton>
+                </IonButtons>
+              </IonToolbar>
+            </IonHeader>
+
+            <IonContent className="staff-content">
+              <div className="customer-lists-container adminpkg adminpkg__modalWrap">
+                {!activePackage ? (
+                  <p className="customer-note">No package selected.</p>
+                ) : (
+                  <>
+                    <IonCard className="adminpkg__card adminpkg__fadeIn">
+                      <IonCardHeader>
+                        <IonCardTitle>{editingOption ? "Edit Option" : "Add Option"}</IonCardTitle>
+                      </IonCardHeader>
+
+                      <IonCardContent>
+                        <IonList className="adminpkg__list">
+                          <IonItem>
+                            <IonLabel position="stacked">Option Name</IonLabel>
+                            <IonInput value={optName} onIonChange={(e) => setOptName(e.detail.value ?? "")} />
+                          </IonItem>
+
+                          <IonItem>
+                            <IonLabel position="stacked">Duration Value</IonLabel>
+                            <IonInput
+                              type="number"
+                              value={String(optDurationValue)}
+                              onIonChange={(e) => setOptDurationValue(Number(e.detail.value ?? 1))}
+                            />
+                          </IonItem>
+
+                          <IonItem>
+                            <IonLabel position="stacked">Duration Unit</IonLabel>
+                            <IonSelect
+                              value={optDurationUnit}
+                              onIonChange={(e) => setOptDurationUnit(e.detail.value as DurationUnit)}
+                            >
+                              <IonSelectOption value="hour">Hour(s)</IonSelectOption>
+                              <IonSelectOption value="day">Day(s)</IonSelectOption>
+                              <IonSelectOption value="month">Month(s)</IonSelectOption>
+                              <IonSelectOption value="year">Year(s)</IonSelectOption>
+                            </IonSelect>
+                          </IonItem>
+
+                          <IonItem>
+                            <IonLabel position="stacked">Price (PHP)</IonLabel>
+                            <IonInput
+                              type="number"
+                              value={String(optPrice)}
+                              onIonChange={(e) => setOptPrice(Number(e.detail.value ?? 0))}
+                            />
+                          </IonItem>
+                        </IonList>
+
+                        <div className="adminpkg__optionActions">
+                          <IonButton disabled={saving} onClick={() => void saveOption()}>
+                            {saving ? "Saving..." : editingOption ? "Update Option" : "Add Option"}
+                          </IonButton>
+
+                          <IonButton fill="outline" onClick={resetOptionForm}>
+                            Clear
+                          </IonButton>
+                        </div>
+                      </IonCardContent>
+                    </IonCard>
+
+                    <IonList className="adminpkg__list">
+                      <IonListHeader>
+                        <IonLabel>Saved Options</IonLabel>
+                      </IonListHeader>
+
+                      {selectedOptions.length === 0 ? (
+                        <IonItem>
+                          <IonLabel>No options yet.</IonLabel>
+                        </IonItem>
+                      ) : (
+                        selectedOptions.map((o) => (
+                          <IonItem key={o.id}>
+                            <IonLabel>
+                              <strong>{o.option_name}</strong>
+                              <div className="adminpkg__muted" style={{ fontSize: 12 }}>
+                                {formatDuration(Number(o.duration_value), o.duration_unit)}
+                              </div>
+                            </IonLabel>
+
+                            <IonText className="adminpkg__price">₱{toNum(o.price).toFixed(2)}</IonText>
+
+                            <IonButton
+                              size="small"
+                              fill="outline"
+                              onClick={() => openEditOption(o)}
+                              style={{ marginRight: 8 }}
+                            >
+                              Edit
+                            </IonButton>
+
+                            <IonButton
+                              size="small"
+                              color="danger"
+                              disabled={deletingId === o.id}
+                              onClick={() => void deleteOption(o)}
+                            >
+                              {deletingId === o.id ? "..." : "Delete"}
+                            </IonButton>
+                          </IonItem>
+                        ))
+                      )}
+                    </IonList>
+                  </>
+                )}
+              </div>
+            </IonContent>
+          </IonModal>
+
+          <IonToast
+            isOpen={toastOpen}
+            message={toastMsg}
+            duration={2200}
+            onDidDismiss={() => setToastOpen(false)}
+          />
+        </div>
       </IonContent>
     </IonPage>
   );
