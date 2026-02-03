@@ -365,16 +365,6 @@ const Admin_Dashboard: React.FC = () => {
                   <div className="dash-chart-title">Total All (7 days)</div>
                   <div className="dash-chart-sub">{weekRangeLabel}</div>
                 </div>
-
-                <button
-                  type="button"
-                  className="dash-chart-datebtn"
-                  onClick={() => setOpenCalendar(true)}
-                  title="Set week ending date"
-                >
-                  <img className="dash-date-icon" src={iconCalendar} alt="Calendar" />
-                  <span className="dash-date-text">Set Date</span>
-                </button>
               </div>
 
               {weekLoading ? (
