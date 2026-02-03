@@ -84,7 +84,7 @@ ion-content,
     z-index: 5;
     width: 250px;
     right:50px;
-    bottom: 420px;
+    bottom: 388px;
     opacity: 0.9;
   }
 }
@@ -2120,7 +2120,7 @@ ion-content,
 @media (max-width: 360px) {
   .bookadd-bear {
     left: 100px;
-    bottom: 670px;
+    bottom: 635px;
   }
   .bookadd-bear-img {
     width: 150px;

@@ -192,15 +192,15 @@ const Staff_menu: React.FC = () => {
                 </IonMenuToggle>
               ))}
 
-              {/* LOGOUT */}
-              <IonMenuToggle autoHide={false}>
-                <motion.div variants={itemVariants} whileHover={{ scale: 1.02 }}>
-                  <IonButton className="logout-btn" onClick={handleLogout}>
-                    <IonIcon icon={logOutOutline} slot="start" />
-                    Logout
-                  </IonButton>
-                </motion.div>
-              </IonMenuToggle>
+            {/* LOGOUT */}
+            <IonMenuToggle autoHide={false}>
+              <motion.div variants={itemVariants}>
+                <IonButton className="logout-btn" onClick={handleLogout}>
+                  <IonIcon icon={logOutOutline} slot="start" />
+                  Logout
+                </IonButton>
+              </motion.div>
+            </IonMenuToggle>
             </motion.div>
           </IonContent>
         </IonMenu>

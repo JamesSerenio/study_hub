@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonApp, IonRouterOutlet, setupIonicReact } from "@ionic/react";
 import { IonReactRouter } from "@ionic/react-router";
 import { Route, Redirect } from "react-router-dom";
+import type { RouteComponentProps } from "react-router-dom";
 
 /* Pages */
 import Login from "./pages/Login";
@@ -66,15 +67,25 @@ type CustomerSessionRow = {
 
 const getRole = (): string => (localStorage.getItem("role") || "").toLowerCase();
 
-/** small guard wrapper */
-const GuardedRoute: React.FC<{
+type RoleAllow = "staff" | "admin" | "any" | "guest";
+
+type GuardedRouteProps = {
   exact?: boolean;
   path: string;
-  component: React.ComponentType<any>;
-  allow: ("staff" | "admin" | "any" | "guest")[];
+  component: React.ComponentType<RouteComponentProps>;
+  allow: RoleAllow[];
   role: string;
-}> = ({ component: Component, allow, role, ...rest }) => {
+};
+
+/** ✅ NO any, strict TS safe */
+const GuardedRoute: React.FC<GuardedRouteProps> = ({
+  component: Component,
+  allow,
+  role,
+  ...rest
+}) => {
   const isGuest = !role;
+
   const ok =
     allow.includes("any") ||
     (allow.includes("guest") && isGuest) ||
@@ -84,12 +95,8 @@ const GuardedRoute: React.FC<{
   return (
     <Route
       {...rest}
-      render={(props) =>
-        ok ? (
-          <Component {...props} />
-        ) : (
-          <Redirect to={role ? "/home" : "/login"} />
-        )
+      render={(props: RouteComponentProps) =>
+        ok ? <Component {...props} /> : <Redirect to={role ? "/home" : "/login"} />
       }
     />
   );
@@ -100,7 +107,6 @@ const App: React.FC = () => {
   const [alertMessage, setAlertMessage] = useState("");
 
   const [role, setRole] = useState<string>(getRole());
-
   const isStaff = useMemo(() => role === "staff", [role]);
 
   /* avoid duplicate alerts */
@@ -136,14 +142,13 @@ const App: React.FC = () => {
         const end = new Date(session.time_ended);
         const diffSec = Math.floor((end.getTime() - now.getTime()) / 1000);
 
-        // make sure we don't miss alerts: trigger within a 30s window
-        // e.g. 5 minutes left = 300 seconds, accept 300..329
+        // trigger within a 30s window so we don't miss
         const matchMinute = ALERT_MINUTES.find((m) => {
           const target = m * 60;
           return diffSec >= target && diffSec < target + 30;
         });
 
-        if (!matchMinute) return;
+        if (matchMinute === undefined) return;
 
         const key = `${session.id}-${matchMinute}`;
         if (triggeredRef.current.has(key)) return;
@@ -185,162 +190,30 @@ const App: React.FC = () => {
           <Route exact path="/home" component={Home} />
 
           {/* staff */}
-          <GuardedRoute
-            exact
-            path="/staff-menu"
-            component={Staff_menu}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-dashboard"
-            component={Staff_Dashboard}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-sales-report"
-            component={StaffSalesReport}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-product-items"
-            component={Product_Item_Lists}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-customer-reservations"
-            component={Customer_Reservations}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-customer-lists"
-            component={Customer_Lists}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-customer-discounts"
-            component={Customer_Discount_List}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-customer-calendar"
-            component={Customer_Calendar}
-            allow={["staff"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/staff-customer-addons"
-            component={Customer_Add_ons}
-            allow={["staff"]}
-            role={role}
-          />
+          <GuardedRoute exact path="/staff-menu" component={Staff_menu} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-dashboard" component={Staff_Dashboard} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-sales-report" component={StaffSalesReport} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-product-items" component={Product_Item_Lists} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-customer-reservations" component={Customer_Reservations} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-customer-lists" component={Customer_Lists} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-customer-discounts" component={Customer_Discount_List} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-customer-calendar" component={Customer_Calendar} allow={["staff"]} role={role} />
+          <GuardedRoute exact path="/staff-customer-addons" component={Customer_Add_ons} allow={["staff"]} role={role} />
 
           {/* admin */}
-          <GuardedRoute
-            exact
-            path="/admin-menu"
-            component={Admin_menu}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-dashboard"
-            component={Admin_Dashboard}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-seat-table"
-            component={Admin_Seat_Table}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-packages"
-            component={Admin_Packages}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-item-lists"
-            component={Admin_Item_Lists}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-addons"
-            component={Admin_Add_Ons}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-customer-addons"
-            component={Admin_Customer_Add_ons}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-customer-discounts"
-            component={Admin_Customer_Discount_List}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-customer-list"
-            component={Admin_customer_list}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-customer-reservations"
-            component={Admin_customer_reservation}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-restock-record"
-            component={Admin_Restock_Record}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-sales-report"
-            component={AdminSalesReport}
-            allow={["admin"]}
-            role={role}
-          />
-          <GuardedRoute
-            exact
-            path="/admin-expenses-expired"
-            component={Admin_Staff_Expenses_Expired}
-            allow={["admin"]}
-            role={role}
-          />
+          <GuardedRoute exact path="/admin-menu" component={Admin_menu} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-dashboard" component={Admin_Dashboard} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-seat-table" component={Admin_Seat_Table} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-packages" component={Admin_Packages} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-item-lists" component={Admin_Item_Lists} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-addons" component={Admin_Add_Ons} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-customer-addons" component={Admin_Customer_Add_ons} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-customer-discounts" component={Admin_Customer_Discount_List} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-customer-list" component={Admin_customer_list} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-customer-reservations" component={Admin_customer_reservation} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-restock-record" component={Admin_Restock_Record} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-sales-report" component={AdminSalesReport} allow={["admin"]} role={role} />
+          <GuardedRoute exact path="/admin-expenses-expired" component={Admin_Staff_Expenses_Expired} allow={["admin"]} role={role} />
 
           {/* default */}
           <Route exact path="/">

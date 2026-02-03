@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { useHistory } from "react-router-dom";
 import {
   IonPage,
@@ -16,48 +16,89 @@ import studyHubLogo from "../assets/study_hub.png";
 import leaves from "../assets/leave.png";
 import gImg from "../assets/g.png";
 
+type ProfileRow = {
+  role: string;
+};
+
 const Login: React.FC = () => {
   const [emailFocused, setEmailFocused] = useState<boolean>(false);
   const [passwordFocused, setPasswordFocused] = useState<boolean>(false);
+
   const [email, setEmail] = useState<string>("");
   const [password, setPassword] = useState<string>("");
+
   const [toastMsg, setToastMsg] = useState<string>("");
   const [showToast, setShowToast] = useState<boolean>(false);
 
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
   const history = useHistory();
 
-  const handleLogin = async (): Promise<void> => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+  const isValidEmail = (v: string): boolean =>
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
-    if (error) {
-      setToastMsg(error.message);
-      setShowToast(true);
-      return;
-    }
-
-    if (!data.user) return;
-
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", data.user.id)
-      .single();
-
-    if (profileError) {
-      setToastMsg(profileError.message);
-      setShowToast(true);
-      return;
-    }
-
-    setToastMsg("Login successful!");
+  const showError = (msg: string): void => {
+    setToastMsg(msg);
     setShowToast(true);
+  };
 
-    if (profile.role === "staff") history.push("/staff-menu");
-    else if (profile.role === "admin") history.push("/admin-menu");
-    else history.push("/home");
+  const handleLogin = async (): Promise<void> => {
+    if (isLoading) return;
+
+    const emailClean = email.trim().toLowerCase();
+    const passwordClean = password;
+
+    if (!isValidEmail(emailClean)) {
+      showError("Invalid email format.");
+      return;
+    }
+
+    if (!passwordClean) {
+      showError("Password is required.");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: emailClean,
+        password: passwordClean,
+      });
+
+      if (error) {
+        showError(error.message);
+        return;
+      }
+
+      // ✅ safest: check session + user
+      if (!data.session || !data.user) {
+        showError("Login failed. No session returned.");
+        return;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", data.user.id)
+        .maybeSingle<ProfileRow>();
+
+      if (profileError) {
+        showError(profileError.message);
+        return;
+      }
+
+      setToastMsg("Login successful!");
+      setShowToast(true);
+
+      const role = (profile?.role || "").toLowerCase();
+
+      if (role === "staff") history.replace("/staff-menu");
+      else if (role === "admin") history.replace("/admin-menu");
+      else history.replace("/home");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -83,7 +124,11 @@ const Login: React.FC = () => {
         <div className="login-wrapper">
           <div className="login-box">
             <div className="login-header">
-              <img src={studyHubLogo} alt="Study Hub Logo" className="login-logo" />
+              <img
+                src={studyHubLogo}
+                alt="Study Hub Logo"
+                className="login-logo"
+              />
               <h2>Login</h2>
             </div>
 
@@ -94,6 +139,8 @@ const Login: React.FC = () => {
               <IonIcon icon={mailOutline} className="input-icon" />
               <IonInput
                 type="email"
+                inputMode="email"
+                autocomplete="email"
                 placeholder="Enter email"
                 value={email}
                 onIonChange={(e) => setEmail(e.detail.value ?? "")}
@@ -104,11 +151,14 @@ const Login: React.FC = () => {
 
             <IonItem
               lines="none"
-              className={`input-item ${passwordFocused ? "item-has-focus" : ""}`}
+              className={`input-item ${
+                passwordFocused ? "item-has-focus" : ""
+              }`}
             >
               <IonIcon icon={lockClosedOutline} className="input-icon" />
               <IonInput
                 type="password"
+                autocomplete="current-password"
                 placeholder="Enter password"
                 value={password}
                 onIonChange={(e) => setPassword(e.detail.value ?? "")}
@@ -117,8 +167,13 @@ const Login: React.FC = () => {
               />
             </IonItem>
 
-            <IonButton expand="block" className="login-btn" onClick={() => void handleLogin()}>
-              Login
+            <IonButton
+              expand="block"
+              className="login-btn"
+              disabled={isLoading}
+              onClick={() => void handleLogin()}
+            >
+              {isLoading ? "Logging in..." : "Login"}
             </IonButton>
           </div>
         </div>
