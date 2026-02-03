@@ -5278,7 +5278,7 @@ ion-content.aao-content{
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(0,0,0,.08);
-  background: rgba(0,0,0,.04);
+  background: rgba(181, 162, 162, 0.04);
 }
 
 /* POPOVER (fix “natatabunan yung words”) */
@@ -5375,3 +5375,302 @@ ion-content.aao-content{
   }
 }
 
+/* src/theme/admin_restock_record.css */
+
+/* =========================
+   Smooth entrance animation
+========================= */
+.restock-wrap {
+  animation: restockFadeUp 260ms ease-out both;
+}
+
+@keyframes restockFadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* =========================
+   TOPBAR tweaks
+========================= */
+.restock-topbar {
+  align-items: flex-start;
+}
+
+.restock-actions {
+  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* =========================
+   FILTER ROW
+========================= */
+.restock-filters {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+.restock-left,
+.restock-right {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+}
+
+.restock-right {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.restock-label {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+
+/* Search input (custom para consistent) */
+.restock-search {
+  width: 100%;
+}
+
+.restock-input {
+  width: 100%;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,0.12);
+  padding: 0 12px;
+  outline: none;
+  background: rgba(255,255,255,0.70);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.restock-input:focus {
+  border-color: rgba(0,0,0,0.22);
+  box-shadow: 0 8px 22px rgba(0,0,0,0.08);
+  transform: translateY(-1px);
+}
+
+/* IonItem select wrapper (no heavy border) */
+.restock-ionitem {
+  --background: rgba(255,255,255,0.70);
+  --border-radius: 12px;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 12px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+/* =========================
+   Date pill (button style)
+========================= */
+.restock-datepill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 6px;
+}
+
+.restock-datebtn {
+  border: none;
+  background: transparent;
+  font-weight: 800;
+  opacity: 0.9;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.restock-datebtn:hover {
+  background: rgba(0,0,0,0.06);
+  transform: translateY(-1px);
+}
+
+.restock-iconbtn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.restock-iconbtn:hover {
+  background: rgba(0,0,0,0.06);
+  transform: translateY(-1px);
+}
+
+.restock-iconbtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* =========================
+   Table styles / Images
+========================= */
+.restock-tablewrap {
+  margin-top: 14px;
+}
+
+.restock-table td,
+.restock-table th {
+  vertical-align: top;
+}
+
+.restock-row {
+  animation: rowPop 200ms ease-out both;
+}
+
+@keyframes rowPop {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.restock-img {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid rgba(0,0,0,0.12);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.7);
+}
+
+.restock-imgFallback {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.75;
+  border: 1px dashed rgba(0,0,0,0.18);
+  background: rgba(255,255,255,0.55);
+}
+
+/* reuse pills from previous css if you already have them */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.65);
+}
+
+.pill--dark {
+  background: #fffcfc;
+  color: #040404;
+  border-color: rgba(0,0,0,0.35);
+}
+
+/* actions row */
+.action-stack--row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.receipt-btn.btn-danger {
+  border: 1px solid rgba(220, 38, 38, 0.55);
+}
+
+/* modal content polish */
+.restock-calendar,
+.restock-edit {
+  animation: restockFadeUp 260ms ease-out both;
+}
+
+.restock-done {
+  margin-top: 12px;
+}
+
+.restock-editInfo {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.70);
+  border: 1px solid rgba(210, 205, 205, 0.1);
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.restock-help {
+  margin-top: 10px;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.restock-editBtns {
+  margin-top: 12px;
+}
+
+/* loading */
+.restock-loading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* =========================
+   Responsive breakpoints
+   - mobile 400
+   - tablet 600
+   - desktop 1200
+========================= */
+
+/* mobile <= 400 */
+@media (max-width: 400px) {
+  .restock-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .restock-right {
+    justify-content: flex-start;
+  }
+
+  .restock-img,
+  .restock-imgFallback {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+  }
+}
+
+/* tablet <= 600 */
+@media (max-width: 600px) {
+  .restock-actions {
+    justify-content: flex-start;
+  }
+
+  .restock-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .action-stack--row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* desktop >= 1200 */
+@media (min-width: 1200px) {
+  .restock-wrap {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}

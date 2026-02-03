@@ -22,15 +22,10 @@ import {
   IonItem,
   IonLabel,
   IonInput,
-  IonGrid,
-  IonRow,
-  IonCol,
   IonSpinner,
-  IonText,
   IonModal,
   IonButtons,
   IonDatetime,
-  IonImg,
   IonAlert,
   IonToast,
   IonSelect,
@@ -302,7 +297,10 @@ const Admin_Restock_Record: React.FC = () => {
 
   const exportCSV = (): void => {
     const csv = buildCSV(filtered);
-    const suffix = filterMode === "day" ? (selectedDate || todayKey()) : (selectedMonth || monthKeyNow());
+    const suffix =
+      filterMode === "day"
+        ? selectedDate || todayKey()
+        : selectedMonth || monthKeyNow();
     downloadCSV(`restock_records_${suffix}.csv`, csv);
   };
 
@@ -373,10 +371,8 @@ const Admin_Restock_Record: React.FC = () => {
     const delta = newQty - oldQty; // ✅ only affects THIS row difference
 
     try {
-      // 1) adjust add_ons.restocked by delta
       await adjustRestocked(editingRow.add_on_id, delta);
 
-      // 2) update this restock record qty
       const { data: upData, error: upErr } = await supabase
         .from("add_on_restocks")
         .update({ qty: newQty })
@@ -390,8 +386,9 @@ const Admin_Restock_Record: React.FC = () => {
         return;
       }
 
-      // 3) update UI instantly
-      setRecords((prev) => prev.map((x) => (x.id === editingRow.id ? { ...x, qty: newQty } : x)));
+      setRecords((prev) =>
+        prev.map((x) => (x.id === editingRow.id ? { ...x, qty: newQty } : x))
+      );
 
       notify("Restock edited.");
       setEditOpen(false);
@@ -444,293 +441,330 @@ const Admin_Restock_Record: React.FC = () => {
         </IonToolbar>
       </IonHeader>
 
-      <IonContent className="ion-padding admin-restock">
+      {/* ✅ SAME BACKGROUND AS OTHERS */}
+      <IonContent className="staff-content" scrollY={false}>
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>
 
-        {/* TOP */}
-        <div className="admin-restock__top">
-          <div className="admin-restock__titleRow">
-            <IonText>
-              <h2 className="admin-restock__title">Admin Restock Record</h2>
-            </IonText>
+        <div className="customer-lists-container restock-wrap">
+          {/* ✅ TOP BAR (same as Customer_Lists) */}
+          <div className="customer-topbar restock-topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Admin Restock Record</h2>
+              <div className="customer-subtext">
+                Showing records for: <strong>{activeDateLabel}</strong>{" "}
+                <span style={{ marginLeft: 8 }}>
+                  (Total: <strong>{filtered.length}</strong>)
+                </span>
+              </div>
+            </div>
 
-            <div className="admin-restock__topBtns">
-              <IonButton fill="outline" onClick={exportCSV}>
+            <div className="customer-topbar-right restock-actions">
+              <IonButton className="receipt-btn" fill="outline" onClick={exportCSV}>
                 <IonIcon icon={downloadOutline} slot="start" />
                 Export Excel
               </IonButton>
 
-              <IonButton color="danger" fill="outline" onClick={() => setShowDeleteFilterAlert(true)}>
+              <IonButton
+                className="receipt-btn"
+                color="danger"
+                fill="outline"
+                onClick={() => setShowDeleteFilterAlert(true)}
+              >
                 <IonIcon icon={trashOutline} slot="start" />
                 Delete By {filterMode === "day" ? "Date" : "Month"}
               </IonButton>
 
-              <IonButton fill="clear" onClick={() => void fetchRecords()}>
+              <IonButton className="receipt-btn" fill="outline" onClick={() => void fetchRecords()}>
                 <IonIcon icon={refreshOutline} slot="start" />
                 Refresh
               </IonButton>
             </div>
           </div>
-        </div>
 
-        {/* FILTERS */}
-        <div className="admin-restock__filtersRow">
-          <IonItem className="admin-restock__filterItem">
-            <IonLabel position="stacked">Search (item / category)</IonLabel>
-            <IonInput
-              value={search}
-              placeholder="Type to search…"
-              onIonChange={(e) => setSearch((e.detail.value ?? "").toString())}
-            />
-          </IonItem>
+          {/* ✅ FILTER ROW */}
+          <div className="restock-filters">
+            <div className="restock-left">
+              <div className="restock-search">
+                <div className="restock-label">Search (item / category)</div>
+                <input
+                  className="restock-input"
+                  value={search}
+                  placeholder="Type to search…"
+                  onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+                />
+              </div>
+            </div>
 
-          <div className="admin-restock__rightFilters">
-            <IonItem className="admin-restock__modeItem">
-              <IonLabel>Mode</IonLabel>
-              <IonSelect value={filterMode} onIonChange={(e) => setFilterMode(String(e.detail.value) as FilterMode)}>
-                <IonSelectOption value="day">Day</IonSelectOption>
-                <IonSelectOption value="month">Month</IonSelectOption>
-              </IonSelect>
-            </IonItem>
-
-            <div className="admin-restock__dateCard">
-              <div className="admin-restock__dateTop">
-                <div className="admin-restock__dateLabel">
-                  {filterMode === "day" ? "Report Date (YYYY-MM-DD)" : "Report Month (YYYY-MM)"}
-                </div>
-
-                <div className="admin-restock__dateBtns">
-                  <IonButton className="admin-restock__dateIconBtn" fill="clear" onClick={openCalendar}>
-                    <IonIcon icon={calendarOutline} />
-                  </IonButton>
-
-                  <IonButton
-                    className="admin-restock__dateIconBtn"
-                    fill="clear"
-                    disabled={filterMode === "day" ? !selectedDate : !selectedMonth}
-                    onClick={clearFilterValue}
+            <div className="restock-right">
+              <div className="restock-mode">
+                <div className="restock-label">Mode</div>
+                <IonItem lines="none" className="restock-ionitem">
+                  <IonSelect
+                    value={filterMode}
+                    interface="popover"
+                    onIonChange={(e) => setFilterMode(String(e.detail.value) as FilterMode)}
                   >
-                    <IonIcon icon={closeCircleOutline} />
-                  </IonButton>
-                </div>
+                    <IonSelectOption value="day">Day</IonSelectOption>
+                    <IonSelectOption value="month">Month</IonSelectOption>
+                  </IonSelect>
+                </IonItem>
               </div>
 
-              <div className="admin-restock__dateValueText">{activeDateLabel}</div>
-              {(filterMode === "day" ? selectedDate : selectedMonth) && (
-                <div className="admin-restock__dateSub">Filter ON</div>
-              )}
+              {/* ✅ DATE PILL (same vibe) */}
+              <label className="date-pill restock-datepill">
+                <span className="date-pill-label">{filterMode === "day" ? "Date" : "Month"}</span>
+
+                {/* display as text, open modal on click */}
+                <button
+                  type="button"
+                  className="restock-datebtn"
+                  onClick={openCalendar}
+                  title="Open calendar"
+                >
+                  {activeDateLabel}
+                </button>
+
+                <button
+                  type="button"
+                  className="restock-iconbtn"
+                  onClick={openCalendar}
+                  title="Calendar"
+                >
+                  <IonIcon icon={calendarOutline} />
+                </button>
+
+                <button
+                  type="button"
+                  className="restock-iconbtn"
+                  disabled={filterMode === "day" ? !selectedDate : !selectedMonth}
+                  onClick={clearFilterValue}
+                  title="Clear filter"
+                >
+                  <IonIcon icon={closeCircleOutline} />
+                </button>
+              </label>
             </div>
           </div>
-        </div>
 
-        {/* TABLE */}
-        {loading ? (
-          <div className="admin-restock__loading">
-            <IonSpinner name="crescent" />
-            <span>Loading records…</span>
-          </div>
-        ) : (
-          <div className="admin-restock__tableWrap">
-            <IonGrid className="admin-restock__grid">
-              <IonRow className="admin-restock__headRow">
-                <IonCol size="2" className="admin-restock__headCell">Image</IonCol>
-                <IonCol size="3" className="admin-restock__headCell">Item Name</IonCol>
-                <IonCol size="2.5" className="admin-restock__headCell">Category</IonCol>
-                <IonCol size="1.5" className="admin-restock__headCell">Restock</IonCol>
-                <IonCol size="3" className="admin-restock__headCell">Restock Date</IonCol>
-                <IonCol size="2" className="admin-restock__headCell">Actions</IonCol>
-              </IonRow>
+          {/* ✅ TABLE */}
+          {loading ? (
+            <div className="customer-note restock-loading">
+              <IonSpinner />
+              <span>Loading records…</span>
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="customer-note">No restock records found.</p>
+          ) : (
+            <div className="customer-table-wrap restock-tablewrap" key={activeDateLabel}>
+              <table className="customer-table restock-table">
+                <thead>
+                  <tr>
+                    <th>Image</th>
+                    <th>Item Name</th>
+                    <th>Category</th>
+                    <th>Restock</th>
+                    <th>Restock Date</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
 
-              {filtered.length > 0 ? (
-                filtered.map((r) => (
-                  <IonRow key={r.id} className="admin-restock__row">
-                    <IonCol size="2" className="admin-restock__cell">
-                      {r.add_ons?.image_url ? (
-                        <IonImg src={r.add_ons.image_url} alt={r.add_ons?.name ?? "item"} className="admin-restock__img" />
-                      ) : (
-                        <div className="admin-restock__imgFallback">No Image</div>
-                      )}
-                    </IonCol>
+                <tbody>
+                  {filtered.map((r) => (
+                    <tr key={r.id} className="restock-row">
+                      <td>
+                        {r.add_ons?.image_url ? (
+                          <img
+                            className="restock-img"
+                            src={r.add_ons.image_url}
+                            alt={r.add_ons?.name ?? "item"}
+                          />
+                        ) : (
+                          <div className="restock-imgFallback">No Image</div>
+                        )}
+                      </td>
 
-                    <IonCol size="3" className="admin-restock__cell">
-                      <div className="admin-restock__item">{r.add_ons?.name ?? "Unknown Item"}</div>
-                    </IonCol>
+                      <td>
+                        <div className="cell-stack">
+                          <span className="cell-strong">{r.add_ons?.name ?? "Unknown Item"}</span>
+                        </div>
+                      </td>
 
-                    <IonCol size="2.5" className="admin-restock__cell">
-                      {r.add_ons?.category ?? "—"}
-                    </IonCol>
+                      <td>{r.add_ons?.category ?? "—"}</td>
 
-                    <IonCol size="1.5" className="admin-restock__cell">
-                      <span className="admin-restock__qty">{r.qty}</span>
-                    </IonCol>
+                      <td>
+                        <span className="pill pill--dark">{r.qty}</span>
+                      </td>
 
-                    <IonCol size="3" className="admin-restock__cell">
-                      <div className="admin-restock__dt">{formatDateTime(r.created_at)}</div>
-                    </IonCol>
+                      <td>{formatDateTime(r.created_at)}</td>
 
-                    <IonCol size="2" className="admin-restock__cell">
-                      <div className="admin-restock__actionBtns">
-                        <IonButton fill="clear" onClick={() => openEdit(r)}>
-                          <IonIcon icon={createOutline} />
-                        </IonButton>
+                      <td>
+                        {/* actions behavior same, css only */}
+                        <div className="action-stack action-stack--row">
+                          <button className="receipt-btn" onClick={() => openEdit(r)} title="Edit">
+                            <IonIcon icon={createOutline} />
+                            <span style={{ marginLeft: 6 }}>Edit</span>
+                          </button>
 
-                        <IonButton fill="clear" color="danger" onClick={() => setVoidRow(r)}>
-                          <IonIcon icon={voidIcon} />
-                        </IonButton>
-                      </div>
-                    </IonCol>
-                  </IonRow>
-                ))
+                          <button
+                            className="receipt-btn btn-danger"
+                            onClick={() => setVoidRow(r)}
+                            title="Void"
+                          >
+                            <IonIcon icon={voidIcon} />
+                            <span style={{ marginLeft: 6 }}>Void</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* CALENDAR MODAL */}
+          <IonModal isOpen={dateModalOpen} onDidDismiss={() => setDateModalOpen(false)}>
+            <IonHeader>
+              <IonToolbar>
+                <IonTitle>{filterMode === "day" ? "Select Date" : "Select Month"}</IonTitle>
+                <IonButtons slot="end">
+                  <IonButton onClick={() => setDateModalOpen(false)}>
+                    <IonIcon icon={closeOutline} />
+                  </IonButton>
+                </IonButtons>
+              </IonToolbar>
+            </IonHeader>
+
+            <IonContent className="ion-padding restock-calendar">
+              {filterMode === "day" ? (
+                <IonDatetime
+                  presentation="date"
+                  value={(selectedDate || todayKey()) + "T00:00:00"}
+                  onIonChange={(e) => {
+                    const val = (e.detail.value ?? "").toString();
+                    if (!val) return;
+                    setSelectedDate(val.split("T")[0]);
+                  }}
+                />
               ) : (
-                <IonRow className="admin-restock__empty">
-                  <IonCol size="12">No restock records found.</IonCol>
-                </IonRow>
+                <IonDatetime
+                  presentation="month-year"
+                  value={(selectedMonth || monthKeyNow()) + "-01T00:00:00"}
+                  onIonChange={(e) => {
+                    const val = (e.detail.value ?? "").toString();
+                    if (!val) return;
+                    setSelectedMonth(normalizeMonthValue(val));
+                  }}
+                />
               )}
-            </IonGrid>
-          </div>
-        )}
 
-        {/* CALENDAR MODAL */}
-        <IonModal isOpen={dateModalOpen} onDidDismiss={() => setDateModalOpen(false)}>
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>Select Date</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setDateModalOpen(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
+              <IonButton expand="block" className="restock-done" onClick={() => setDateModalOpen(false)}>
+                Done
+              </IonButton>
+            </IonContent>
+          </IonModal>
 
-          <IonContent className="ion-padding admin-restock__calendarModal">
-            {filterMode === "day" ? (
-              <IonDatetime
-                presentation="date"
-                value={(selectedDate || todayKey()) + "T00:00:00"}
-                onIonChange={(e) => {
-                  const val = (e.detail.value ?? "").toString();
-                  if (!val) return;
-                  setSelectedDate(val.split("T")[0]);
-                }}
-              />
-            ) : (
-              <IonDatetime
-                presentation="month-year"
-                value={(selectedMonth || monthKeyNow()) + "-01T00:00:00"}
-                onIonChange={(e) => {
-                  const val = (e.detail.value ?? "").toString();
-                  if (!val) return;
-                  setSelectedMonth(normalizeMonthValue(val));
-                }}
-              />
-            )}
+          {/* DELETE BY FILTER */}
+          <IonAlert
+            isOpen={showDeleteFilterAlert}
+            onDidDismiss={() => setShowDeleteFilterAlert(false)}
+            header={`Delete by ${filterMode === "day" ? "Date" : "Month"}?`}
+            message={
+              filterMode === "day"
+                ? `This will DELETE all restock records for ${selectedDate || todayKey()} and REVERT stocks. Continue?`
+                : `This will DELETE all restock records for ${selectedMonth || monthKeyNow()} and REVERT stocks. Continue?`
+            }
+            buttons={[
+              { text: "Cancel", role: "cancel" },
+              { text: "Delete", role: "destructive", handler: () => void deleteByFilter() },
+            ]}
+          />
 
-            <IonButton expand="block" className="admin-restock__doneBtn" onClick={() => setDateModalOpen(false)}>
-              Done
-            </IonButton>
-          </IonContent>
-        </IonModal>
-
-        {/* DELETE BY FILTER CONFIRM */}
-        <IonAlert
-          isOpen={showDeleteFilterAlert}
-          onDidDismiss={() => setShowDeleteFilterAlert(false)}
-          header={`Delete by ${filterMode === "day" ? "Date" : "Month"}?`}
-          message={
-            filterMode === "day"
-              ? `This will DELETE all restock records for ${selectedDate || todayKey()} and REVERT stocks. Continue?`
-              : `This will DELETE all restock records for ${selectedMonth || monthKeyNow()} and REVERT stocks. Continue?`
-          }
-          buttons={[
-            { text: "Cancel", role: "cancel" },
-            { text: "Delete", role: "destructive", handler: () => void deleteByFilter() },
-          ]}
-        />
-
-        {/* VOID CONFIRM */}
-        <IonAlert
-          isOpen={!!voidRow}
-          onDidDismiss={() => setVoidRow(null)}
-          header="VOID this restock?"
-          message="This will revert restock/stocks and delete the record."
-          buttons={[
-            { text: "Cancel", role: "cancel", handler: () => setVoidRow(null) },
-            {
-              text: "VOID",
-              role: "destructive",
-              handler: () => {
-                if (voidRow) void doVoidRow(voidRow);
-                setVoidRow(null);
+          {/* VOID CONFIRM */}
+          <IonAlert
+            isOpen={!!voidRow}
+            onDidDismiss={() => setVoidRow(null)}
+            header="VOID this restock?"
+            message="This will revert restock/stocks and delete the record."
+            buttons={[
+              { text: "Cancel", role: "cancel", handler: () => setVoidRow(null) },
+              {
+                text: "VOID",
+                role: "destructive",
+                handler: () => {
+                  if (voidRow) void doVoidRow(voidRow);
+                  setVoidRow(null);
+                },
               },
-            },
-          ]}
-        />
+            ]}
+          />
 
-        {/* EDIT MODAL (EXACT EDIT) */}
-        <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>Edit Restock</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setEditOpen(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-
-          <IonContent className="ion-padding">
-            {editingRow && (
-              <>
-                <div className="admin-restock__editInfo">
-                  <div><b>Item:</b> {editingRow.add_ons?.name ?? "Unknown"}</div>
-                  <div><b>Category:</b> {editingRow.add_ons?.category ?? "—"}</div>
-                  <div><b>Current Restock:</b> {editingRow.qty}</div>
-                  <div><b>Date:</b> {formatDateTime(editingRow.created_at)}</div>
-                </div>
-
-                <IonItem>
-                  <IonLabel position="stacked">New Restock (Exact Value)</IonLabel>
-                  <IonInput
-                    type="number"
-                    value={editQty}
-                    onIonChange={(e) => setEditQty((e.detail.value ?? "").toString())}
-                  />
-                </IonItem>
-
-                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.8 }}>
-                  Change will affect only this row difference (delta).
-                </div>
-
-                <div className="admin-restock__editBtns">
-                  <IonButton expand="block" onClick={() => void saveEditQty()}>
-                    Save
+          {/* EDIT MODAL */}
+          <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
+            <IonHeader>
+              <IonToolbar>
+                <IonTitle>Edit Restock</IonTitle>
+                <IonButtons slot="end">
+                  <IonButton onClick={() => setEditOpen(false)}>
+                    <IonIcon icon={closeOutline} />
                   </IonButton>
-                  <IonButton
-                    expand="block"
-                    fill="clear"
-                    onClick={() => {
-                      setEditOpen(false);
-                      setEditingRow(null);
-                    }}
-                  >
-                    Cancel
-                  </IonButton>
-                </div>
-              </>
-            )}
-          </IonContent>
-        </IonModal>
+                </IonButtons>
+              </IonToolbar>
+            </IonHeader>
 
-        <IonToast
-          isOpen={toastOpen}
-          message={toastMsg}
-          duration={2500}
-          onDidDismiss={() => setToastOpen(false)}
-        />
+            <IonContent className="ion-padding restock-edit">
+              {editingRow && (
+                <>
+                  <div className="restock-editInfo">
+                    <div><b>Item:</b> {editingRow.add_ons?.name ?? "Unknown"}</div>
+                    <div><b>Category:</b> {editingRow.add_ons?.category ?? "—"}</div>
+                    <div><b>Current Restock:</b> {editingRow.qty}</div>
+                    <div><b>Date:</b> {formatDateTime(editingRow.created_at)}</div>
+                  </div>
+
+                  <IonItem>
+                    <IonLabel position="stacked">New Restock (Exact Value)</IonLabel>
+                    <IonInput
+                      type="number"
+                      value={editQty}
+                      onIonChange={(e) => setEditQty((e.detail.value ?? "").toString())}
+                    />
+                  </IonItem>
+
+                  <div className="restock-help">
+                    Change will affect only this row difference (delta).
+                  </div>
+
+                  <div className="restock-editBtns">
+                    <IonButton expand="block" onClick={() => void saveEditQty()}>
+                      Save
+                    </IonButton>
+
+                    <IonButton
+                      expand="block"
+                      fill="clear"
+                      onClick={() => {
+                        setEditOpen(false);
+                        setEditingRow(null);
+                      }}
+                    >
+                      Cancel
+                    </IonButton>
+                  </div>
+                </>
+              )}
+            </IonContent>
+          </IonModal>
+
+          <IonToast
+            isOpen={toastOpen}
+            message={toastMsg}
+            duration={2500}
+            onDidDismiss={() => setToastOpen(false)}
+          />
+        </div>
       </IonContent>
     </IonPage>
   );
