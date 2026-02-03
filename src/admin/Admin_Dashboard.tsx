@@ -390,7 +390,7 @@ const Admin_Dashboard: React.FC = () => {
                         isAnimationActive={true}
                         animationDuration={700}
                       />
-                    </LineChart>
+                    </LineChart>  
                   </ResponsiveContainer>
                 </div>
               )}
