@@ -1,4 +1,3 @@
-// src/staff/Staff_menu.tsx
 import React, { useMemo, useState } from "react";
 import {
   IonButtons,
@@ -18,7 +17,7 @@ import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 
-/* ===================== PAGES ===================== */
+/* pages */
 import Staff_Dashboard from "./Staff_Dashboard";
 import Customer_Lists from "./Customer_Lists";
 import Customer_Reservations from "./Customer_Reservations";
@@ -28,7 +27,7 @@ import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Discount_List";
 import Staff_Sales_Report from "./staff_sales_report";
 
-/* ===================== ASSETS ===================== */
+/* assets */
 import dashboardIcon from "../assets/add_user.png";
 import studyHubLogo from "../assets/study_hub.png";
 import listIcon from "../assets/list.png";
@@ -38,8 +37,6 @@ import foodIcon from "../assets/food.png";
 import onsIcon from "../assets/hamburger.png";
 import discountIcon from "../assets/discount.png";
 import salesIcon from "../assets/sales.png";
-
-/* 🌼 STATIC flower background */
 import flowerImg from "../assets/flower.png";
 
 type FlowerStatic = {
@@ -122,11 +119,10 @@ const Staff_menu: React.FC = () => {
   };
 
   return (
-    <IonPage className="staff-shell">
-      {/* ✅ desktop only split. phone/tablet = overlay menu + full width content */}
-      <IonSplitPane contentId="main" when="(min-width: 1200px)">
-        {/* ================= SIDEBAR ================= */}
-        <IonMenu contentId="main" className="staff-menu" type="overlay">
+    <IonPage className="staff-shell-page">
+      <IonSplitPane contentId="main" when="(min-width: 768px)">
+        {/* SIDEBAR */}
+        <IonMenu contentId="main" className="staff-menu">
           <IonHeader className="staff-menu-header">
             <IonToolbar>
               <div className="menu-brand">
@@ -137,7 +133,6 @@ const Staff_menu: React.FC = () => {
           </IonHeader>
 
           <IonContent className="staff-menu-content">
-            {/* flowers background */}
             <div className="menu-flowers" aria-hidden="true">
               {flowers.map((f) => (
                 <img
@@ -158,7 +153,6 @@ const Staff_menu: React.FC = () => {
               ))}
             </div>
 
-            {/* menu items */}
             <motion.div className="menu-items-layer" variants={listVariants} initial="hidden" animate="show">
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
@@ -176,7 +170,6 @@ const Staff_menu: React.FC = () => {
                 </IonMenuToggle>
               ))}
 
-              {/* logout */}
               <IonMenuToggle autoHide={false}>
                 <motion.div variants={itemVariants}>
                   <IonButton className="logout-btn" onClick={handleLogout}>
@@ -189,8 +182,8 @@ const Staff_menu: React.FC = () => {
           </IonContent>
         </IonMenu>
 
-        {/* ================= MAIN ================= */}
-        <IonPage id="main" className="staff-main-shell">
+        {/* MAIN */}
+        <div id="main" className="staff-main-shell">
           <IonHeader>
             <IonToolbar>
               <IonButtons slot="start">
@@ -213,7 +206,7 @@ const Staff_menu: React.FC = () => {
               </motion.div>
             </AnimatePresence>
           </IonContent>
-        </IonPage>
+        </div>
       </IonSplitPane>
     </IonPage>
   );

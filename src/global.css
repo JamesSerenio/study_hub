@@ -12,6 +12,36 @@ ion-item {
   --highlight-color-invalid: transparent;
 }
 
+/* Make the whole page fill screen */
+.staff-shell-page {
+  height: 100%;
+}
+
+/* Main content must stretch */
+.staff-main-shell {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ensure IonContent can grow */
+.staff-main-shell > ion-content {
+  flex: 1;
+  min-height: 0;
+}
+
+/* IMPORTANT: if you have any max-width on main, remove/override */
+@media (max-width: 767px) {
+  .staff-main-shell,
+  .custom-bg,
+  .staff-main-shell > ion-content {
+    max-width: none !important;
+    width: 100% !important;
+  }
+}
+
 /* =========================
    GLOBAL FONT
 ========================= */
