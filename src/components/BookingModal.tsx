@@ -6,7 +6,6 @@
 // ✅ Reservation auto-blocks seats in seat_blocked_times (source="reserved")
 // ✅ Seat buttons DISABLED until date+time+duration ready (prevents stale summary seat)
 // ✅ Auto refresh seats when date/time changes
-// ✅ 1-TAP date refresh (IonDatetime inline calendar fix)
 // ✅ Auto-delete expired reserved blocks (end_at < now) so seats come back
 // ✅ FIX: Reservation "Open Time" will NOT use 2999 anymore
 //    - reservation openTime => end_at = end of the selected reservation date (23:59:59.999)
@@ -15,6 +14,7 @@
 // ✅ NEW: If Reservation Time Started is earlier than CURRENT TIME -> show modal + block saving
 // ✅ FIX: DB `date` ALWAYS saves CURRENT DATE (local) even for reservation
 // ✅ NO any
+// ✅ NEW UI: Reservation Date uses scroll/wheel picker (IonDatetimeButton + modal)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -33,6 +33,7 @@ import {
   IonSelectOption,
   IonToggle,
   IonDatetime,
+  IonDatetimeButton,
   IonAlert,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
@@ -833,9 +834,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 setRefreshSeatsTick((x) => x + 1);
 
                 if (checked) {
-                  commitReservationTime(
-                    timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am"
-                  );
+                  commitReservationTime(timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am");
                 }
               }}
             />
@@ -844,22 +843,26 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           {form.reservation && (
             <>
+              {/* ✅ NEW: scroll/wheel date picker (not inline calendar) */}
               <IonItem className="form-item">
                 <IonLabel position="stacked">Reservation Date</IonLabel>
 
-                <IonDatetime
-                  ref={dateRef}
-                  presentation="date"
-                  min={todayLocalYYYYMMDD()}
-                  value={form.reservation_date}
-                  onIonChange={(e) => applyPickedDate(e.detail.value)}
-                  onClickCapture={() => {
-                    setTimeout(() => {
-                      const v = dateRef.current?.value;
-                      applyPickedDate(v);
-                    }, 0);
-                  }}
-                />
+                <div style={{ marginTop: 8, width: "100%" }}>
+                  <IonDatetimeButton datetime="reservation-date" />
+                </div>
+
+                <IonModal keepContentsMounted>
+                  <IonDatetime
+                    id="reservation-date"
+                    ref={dateRef}
+                    presentation="date"
+                    preferWheel={true}
+                    showDefaultButtons={true}
+                    min={todayLocalYYYYMMDD()}
+                    value={form.reservation_date}
+                    onIonChange={(e) => applyPickedDate(e.detail.value)}
+                  />
+                </IonModal>
               </IonItem>
 
               <IonItem className="form-item">
@@ -890,7 +893,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               </IonItem>
 
               {!!seatPickHint && (
-                <p className="summary-text" style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}>
+                <p
+                  className="summary-text"
+                  style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}
+                >
                   {seatPickHint}
                 </p>
               )}
@@ -943,7 +949,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               placeholder="Examples: 0:45 / 2 / 2:30 / 100:30 / 230"
               value={timeAvailInput}
               disabled={openTime}
-              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => setTimeAvailInput(e.detail.value ?? "")}
+              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
+                setTimeAvailInput(e.detail.value ?? "")
+              }
               onIonBlur={() => {
                 commitTimeAvail(timeAvailInput);
                 setDateTouchTick((x) => x + 1);
@@ -967,7 +975,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           <div className="summary-section">
             <p className="summary-text">
               <strong>Time Started:</strong>{" "}
-              {form.reservation ? (reservationStartIso ? formatPH(new Date(reservationStartIso)) : "—") : timeInDisplay}
+              {form.reservation
+                ? reservationStartIso
+                  ? formatPH(new Date(reservationStartIso))
+                  : "—"
+                : timeInDisplay}
             </p>
 
             <p className="summary-text">
@@ -984,7 +996,12 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
             {form.reservation && (
               <p className="summary-text">
-                <strong>Seat:</strong> {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
+                <strong>Seat:</strong>{" "}
+                {isSeatPickReady
+                  ? form.seat_number.length
+                    ? form.seat_number.join(", ")
+                    : "None"
+                  : "—"}
               </p>
             )}
           </div>

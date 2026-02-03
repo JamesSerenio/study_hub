@@ -2172,6 +2172,109 @@ ion-modal.booking-modal {
   background: rgba(0, 0, 0, 0.45);
 }
 
+/* =========================
+   BOOKING MODAL - DATE PICKER (SCROLL/WHEEL)
+   Works with: IonDatetimeButton + IonModal + IonDatetime(preferWheel)
+========================= */
+
+/* Button ng date (yung lalabas na clickable field) */
+.booking-modal ion-datetime-button::part(native) {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  padding: 12px 14px;
+  border-radius: 12px;
+
+  background: #ffffff;
+  border: 2px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.06);
+
+  font-weight: 800;
+  color: rgba(31, 41, 55, 0.92);
+}
+
+/* hover */
+.booking-modal ion-datetime-button::part(native):hover {
+  border-color: rgba(0, 0, 0, 0.16);
+}
+
+/* text color inside */
+.booking-modal ion-datetime-button::part(text) {
+  font-weight: 800;
+}
+
+/* icon arrow/calendar */
+.booking-modal ion-datetime-button::part(icon) {
+  opacity: 0.85;
+}
+
+/* Modal container ng IonDatetime */
+.booking-modal ion-modal {
+  --width: min(94vw, 420px);
+  --height: auto;
+  --border-radius: 18px;
+}
+
+/* Datetime popup body */
+.booking-modal ion-datetime {
+  --background: #ffffff;
+  --wheel-highlight-background: rgba(0, 0, 0, 0.06);
+
+  border-radius: 18px;
+}
+
+/* OK / Cancel buttons area */
+.booking-modal ion-datetime::part(buttons) {
+  padding: 10px 12px;
+}
+
+/* OK/Cancel buttons style */
+.booking-modal ion-datetime::part(button) {
+  font-weight: 800;
+  border-radius: 12px;
+}
+
+/* Title / header sa loob ng wheel picker */
+.booking-modal ion-datetime::part(title) {
+  font-weight: 900;
+  letter-spacing: 0.3px;
+  color: rgba(31, 41, 55, 0.92);
+}
+
+/* Wheel columns (month/day/year) */
+.booking-modal ion-datetime::part(wheel) {
+  padding: 8px 10px 14px;
+}
+
+/* Wheel item text */
+.booking-modal ion-datetime::part(wheel-item) {
+  font-weight: 800;
+  color: rgba(31, 41, 55, 0.9);
+}
+
+/* Selected wheel item */
+.booking-modal ion-datetime::part(wheel-item-active) {
+  color: #111827;
+  font-weight: 900;
+}
+
+/* =========================
+   MOBILE polish
+========================= */
+@media (max-width: 420px) {
+  .booking-modal ion-modal {
+    --width: 94vw;
+  }
+
+  .booking-modal ion-datetime-button::part(native) {
+    padding: 11px 12px;
+    border-radius: 12px;
+  }
+}
+
+
 /* -------------------------
    Animations
 -------------------------- */
