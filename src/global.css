@@ -79,12 +79,12 @@ ion-content,
 }
 
 /* ✅ Extra small phones */
-@media (max-width: 400px) {
+@media (max-width: 360px) {
   .login-g {
     z-index: 5;
     width: 250px;
-    right:70px;
-    bottom: 546px;
+    right:50px;
+    bottom: 420px;
     opacity: 0.9;
   }
 }
@@ -95,7 +95,7 @@ ion-content,
     z-index: 5;
     width: clamp(300px, 26vw, 480px);
     right: 145px;
-    bottom: 540px;
+    bottom: 415px;
   }
 }
 
@@ -1385,11 +1385,10 @@ ion-content,
    RESPONSIVE BREAKPOINTS
 ========================= */
 
-
 /* ✅ tablet 600 */
-@media (max-width: 600px) {
+@media (max-width: 360px) and (max-width: 600px) {
   .customer-calendar-page {
-    padding: 300px 50px; /* ✅ fixed */
+    padding: 100px 1px 250px; /* ✅ fixed */
   }
 
   .customer-calendar-card {
@@ -1399,7 +1398,7 @@ ion-content,
   .customer-calendar-s {
     z-index: 5;
     left: -28px;
-    bottom: 240px;
+    bottom: 120px;
     width: 150px;
     opacity: 0.92;
   }
@@ -1407,6 +1406,24 @@ ion-content,
 
 /* ✅ desktop 1200 */
 @media (min-width: 1200px) {
+  .customer-calendar-page {
+    padding: 140px;
+  }
+
+  .react-calendar {
+    width: min(1160px, 100%);
+  }
+
+  .customer-calendar-s {
+    z-index: 5;
+    left: px;
+    bottom: 50px;
+    width: 200px;
+  }
+}
+
+/* ✅ desktop 1200 */
+@media (min-width: 600px) {
   .customer-calendar-page {
     padding: 140px;
   }
@@ -1758,93 +1775,100 @@ ion-content,
 /* =========================
    MOBILE — EXTRA SMALL FORM
 ========================= */
-@media (max-width: 420px) {
+/* =========================
+   MOBILE — 360px (CAMON-LIKE)
+   MAS COMPACT / MAS MALIIT
+========================= */
+@media (max-width: 360px) {
 
   /* wrapper spacing */
-  .bookadd-wrapper {
-    padding: 8px !important;
+  .bookadd-wrapper{
+    padding: 6px !important;
   }
 
-  /* MAIN CARD */
-  .bookadd-hero-card {
+  /* MAIN CARD (MAS MALIIT PA) */
+  .bookadd-hero-card{
     width: 100% !important;
-    max-width: 330px !important;   /* ✅ MAS MALIIT */
-    padding: 10px !important;
-    border-radius: 12px !important;
-
+    max-width: 300px !important;   /* ✅ from 330 -> 300 */
+    padding: 8px !important;       /* ✅ from 10 -> 8 */
+    border-radius: 10px !important;
     height: auto !important;
   }
 
   /* HEADER */
-  .bookadd-hero-header {
-    padding: 8px !important;
-    gap: 8px !important;
+  .bookadd-hero-header{
+    padding: 6px !important;
+    gap: 6px !important;
   }
 
-  .bookadd-hero-logo {
-    width: 36px !important;
-    height: 36px !important;
+  .bookadd-hero-logo{
+    width: 32px !important;
+    height: 32px !important;
   }
 
-  .bookadd-hero-title {
-    font-size: 13px !important;
+  .bookadd-hero-title{
+    font-size: 12px !important;
   }
 
-  .bookadd-hero-subtitle {
-    font-size: 10px !important;
-    line-height: 1.3;
+  .bookadd-hero-subtitle{
+    font-size: 9.5px !important;
+    line-height: 1.25 !important;
   }
 
   /* READY CHIP */
-  .bookadd-hero-chip {
-    padding: 6px 8px !important;
+  .bookadd-hero-chip{
+    padding: 5px 7px !important;
+    border-radius: 999px !important;
   }
 
-  .bookadd-hero-chip-text {
-    font-size: 11px !important;
+  .bookadd-hero-chip-text{
+    font-size: 10px !important;
   }
 
   /* TOPBAR */
-  .bookadd-topbar {
-    padding: 8px !important;
-    margin-bottom: 8px !important;
+  .bookadd-topbar{
+    padding: 6px !important;
+    margin-bottom: 6px !important;
   }
 
-  .bookadd-topbar-title {
-    font-size: 16px !important;
-  }
-
-  .bookadd-topbar-subtitle {
-    font-size: 11px !important;
-  }
-
-  /* ACTION GRID */
-  .bookadd-actions {
-    grid-template-columns: 1fr !important;
-    gap: 8px !important;
-  }
-
-  .bookadd-btn-card {
-    padding: 10px !important;
-  }
-
-  .bookadd-btn-label {
+  .bookadd-topbar-title{
     font-size: 14px !important;
   }
 
-  .bookadd-btn-desc {
+  .bookadd-topbar-subtitle{
+    font-size: 10px !important;
+  }
+
+  /* ACTION GRID */
+  .bookadd-actions{
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
+  }
+
+  .bookadd-btn-card{
+    padding: 8px !important;
+    border-radius: 12px !important;
+  }
+
+  .bookadd-btn-label{
+    font-size: 13px !important;
+  }
+
+  .bookadd-btn-desc{
+    font-size: 10px !important;
+    margin-bottom: 6px !important;
+    line-height: 1.25 !important;
+  }
+
+  /* BUTTON (MAS NIPIS) */
+  .bookadd-btn-card ion-button{
+    height: 34px !important;       /* ✅ from 38 -> 34 */
     font-size: 11px !important;
-    margin-bottom: 8px !important;
+    --border-radius: 10px;
   }
-
-  /* BUTTON */
-  .bookadd-btn-card ion-button {
-    height: 38px !important;
-    font-size: 12px !important;
-    --border-radius: 12px;
-  }
-
 }
+
+
 
 
 /* =========================
@@ -2093,27 +2117,27 @@ ion-content,
 }
 
 /* ✅ On very small phones: make it smaller + tuck more */
-@media (max-width: 420px) {
+@media (max-width: 360px) {
   .bookadd-bear {
-    left: 108px;
-    bottom: 795px;
+    left: 100px;
+    bottom: 670px;
   }
   .bookadd-bear-img {
-    width: 200px;
+    width: 150px;
     max-width: 52vw;
     opacity: 0.92;
   }
 }
 
 /* ✅ On tablets: slightly bigger */
-@media (min-width: 600px) {
+@media screen and (min-width: 600px) and (max-width: 768px) {
   .bookadd-bear-img {
     width: clamp(180px, 50vw, 280px);
     max-width: 32vw;
   }
   .bookadd-bear {
     left: 205px;
-    bottom: 795px;
+    bottom: 670px;
   }
 
 }
@@ -2880,10 +2904,10 @@ ion-modal.booking-modal {
 ===================================================== */
 
 /* phones */
-@media (max-width: 420px) {
+@media (max-width: 360px) {
   .booking-modal::part(content) {
-    max-width: 70vw;
-    max-height: 20vh;
+    max-width: 100vw;
+    max-height: 30vh;
     border-radius: 18px;
   }
 
@@ -6266,3 +6290,4 @@ ion-content.aao-content{
   text-align: center;
   padding: 18px;
 }
+  
