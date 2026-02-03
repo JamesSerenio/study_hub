@@ -596,9 +596,6 @@ const totalTimeAmount =
   return (
     <IonPage>
       <IonHeader>
-        <IonToolbar>
-          <IonTitle>Daily Sales Report</IonTitle>
-        </IonToolbar>
       </IonHeader>
 
       <IonContent className="ion-padding ssr-page">

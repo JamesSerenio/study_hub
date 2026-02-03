@@ -24,7 +24,12 @@ import {
   IonDatetime,
   IonAlert,
 } from "@ionic/react";
-import { calendarOutline, closeOutline, downloadOutline, trashOutline } from "ionicons/icons";
+import {
+  calendarOutline,
+  closeOutline,
+  downloadOutline,
+  trashOutline,
+} from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
 /* =========================
@@ -93,9 +98,9 @@ interface SalesTotalsRow {
 }
 
 type ConsignmentState = {
-  gross: number; // total sales for CONSIGNMENT category
-  fee15: number; // 15% fee
-  net: number; // gross - fee15
+  gross: number;
+  fee15: number;
+  net: number;
 };
 
 /* =========================
@@ -123,7 +128,10 @@ const todayYMD = (): string => {
 const isYMD = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 const peso = (n: number): string =>
-  `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  `₱${n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 
 /* =========================
    SAFE EVENT VALUE HELPERS (NO any)
@@ -173,8 +181,10 @@ const isoToYMD = (iso: string): string => {
 
 const buildZeroLines = (reportId: string): CashLine[] => {
   const merged: CashLine[] = [];
-  for (const d of CASH_DENOMS) merged.push({ report_id: reportId, money_kind: "cash", denomination: d, qty: 0 });
-  for (const d of COIN_DENOMS) merged.push({ report_id: reportId, money_kind: "coin", denomination: d, qty: 0 });
+  for (const d of CASH_DENOMS)
+    merged.push({ report_id: reportId, money_kind: "cash", denomination: d, qty: 0 });
+  for (const d of COIN_DENOMS)
+    merged.push({ report_id: reportId, money_kind: "coin", denomination: d, qty: 0 });
   return merged;
 };
 
@@ -192,10 +202,12 @@ const AdminSalesReport: React.FC = () => {
   const [lines, setLines] = useState<CashLine[]>([]);
   const [totals, setTotals] = useState<SalesTotalsRow | null>(null);
 
-  // ✅ CONSIGNMENT SUMMARY
-  const [consignment, setConsignment] = useState<ConsignmentState>({ gross: 0, fee15: 0, net: 0 });
+  const [consignment, setConsignment] = useState<ConsignmentState>({
+    gross: 0,
+    fee15: 0,
+    net: 0,
+  });
 
-  // ✅ ADD-ONS (PAID ONLY) for "Other Totals" + PDF
   const [addonsPaid, setAddonsPaid] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
@@ -309,11 +321,6 @@ const AdminSalesReport: React.FC = () => {
     setTotals(res.data);
   };
 
-  /**
-   * ✅ CONSIGNMENT: PAID ONLY
-   * IMPORTANT: use paid_at date (NOT created_at),
-   * so unpaid rows never count, and paid rows count on the day they were paid.
-   */
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setConsignment({ gross: 0, fee15: 0, net: 0 });
@@ -346,10 +353,6 @@ const AdminSalesReport: React.FC = () => {
     setConsignment({ gross, fee15, net });
   };
 
-  /**
-   * ✅ ADD-ONS: PAID ONLY (for "Other Totals" and PDF)
-   * uses paid_at date so it records on the day paid.
-   */
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setAddonsPaid(0);
@@ -482,7 +485,7 @@ const AdminSalesReport: React.FC = () => {
     await loadReport(selectedDate);
     await loadTotals(selectedDate);
     await loadConsignment(selectedDate);
-    await loadAddonsPaid(selectedDate); // ✅ keep paid add-ons fresh
+    await loadAddonsPaid(selectedDate);
 
     setToast({ open: true, msg: `Saved for ${selectedDate}.`, color: "success" });
     setSubmitting(false);
@@ -566,7 +569,6 @@ const AdminSalesReport: React.FC = () => {
     const cashSales = totals ? toNumber(totals.cash_sales) : 0;
     const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
-    // ✅ PAID ONLY add-ons for PDF too
     const addons = addonsPaid;
 
     const discount = totals ? toNumber(totals.discount_total) : 0;
@@ -659,11 +661,7 @@ const AdminSalesReport: React.FC = () => {
         </thead>
         <tbody>
           <tr><td>Starting Balance</td><td class="t-right">${peso(toNumber(report.starting_cash))}</td><td class="t-right">${peso(toNumber(report.starting_gcash))}</td></tr>
-          <tr>
-              <td>COH / Total of the Day</td>
-              <td class="t-right">${peso(cashTotalLocal + coinTotalLocal)}</td>
-              <td class="t-right">${peso(gcashSales)}</td>
-            </tr>
+          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cashTotalLocal + coinTotalLocal)}</td><td class="t-right">${peso(gcashSales)}</td></tr>
           <tr><td>Expenses</td><td class="t-right">${peso(expenses)}</td><td class="t-right">—</td></tr>
           <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCash)}</td><td class="t-right">${peso(paidResGcash)}</td></tr>
           <tr><td>New Advance Payments</td><td class="t-right">${peso(advCash)}</td><td class="t-right">${peso(advGcash)}</td></tr>
@@ -677,16 +675,8 @@ const AdminSalesReport: React.FC = () => {
       <h3>CASH COUNT</h3>
       <table>
         <thead>
-          <tr>
-            <th colspan="3">CASH</th>
-            <th class="gap"></th>
-            <th colspan="3">COINS</th>
-          </tr>
-          <tr>
-            <th>DENOM</th><th>QTY</th><th>AMOUNT</th>
-            <th class="gap"></th>
-            <th>DENOM</th><th>QTY</th><th>AMOUNT</th>
-          </tr>
+          <tr><th colspan="3">CASH</th><th class="gap"></th><th colspan="3">COINS</th></tr>
+          <tr><th>DENOM</th><th>QTY</th><th>AMOUNT</th><th class="gap"></th><th>DENOM</th><th>QTY</th><th>AMOUNT</th></tr>
         </thead>
         <tbody>
           ${rowsHtml}
@@ -744,7 +734,7 @@ const AdminSalesReport: React.FC = () => {
   useEffect(() => {
     void loadReport(selectedDate);
     void loadConsignment(selectedDate);
-    void loadAddonsPaid(selectedDate); // ✅ PAID ONLY add-ons
+    void loadAddonsPaid(selectedDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
@@ -780,9 +770,7 @@ const AdminSalesReport: React.FC = () => {
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
-  // ✅ IMPORTANT: Other Totals Add-ons uses PAID ONLY
   const addons = addonsPaid;
-
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const systemSale = totals ? toNumber(totals.system_sale) : 0;
 
@@ -807,9 +795,7 @@ const AdminSalesReport: React.FC = () => {
   return (
     <IonPage>
       <IonHeader>
-        <IonToolbar>
-          <IonTitle>Daily Sales Report (Admin)</IonTitle>
-        </IonToolbar>
+        {/* optional: leave blank */}
       </IonHeader>
 
       <IonContent className="ion-padding ssr-page">
@@ -835,8 +821,8 @@ const AdminSalesReport: React.FC = () => {
         {/* DATE + BUTTONS */}
         <IonCard className="ssr-card">
           <IonCardContent className="ssr-card-body">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <div style={{ flex: 1 }}>
+            <div className="ssr-topbar">
+              <div className="ssr-top-left">
                 <IonItem lines="none" className="ssr-date-item">
                   <IonLabel position="stacked">Report Date (YYYY-MM-DD)</IonLabel>
 
@@ -857,37 +843,55 @@ const AdminSalesReport: React.FC = () => {
                       }}
                     />
 
-                    <IonButton className="ssr-cal-btn" fill="clear" disabled={submitting} onClick={() => setDatePickerOpen(true)}>
+                    <IonButton
+                      className="ssr-cal-btn"
+                      fill="clear"
+                      disabled={submitting}
+                      onClick={() => setDatePickerOpen(true)}
+                    >
                       <IonIcon icon={calendarOutline} />
                     </IonButton>
                   </div>
                 </IonItem>
 
-                <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
+                <div className="ssr-status">
                   Status: <b>{report?.is_submitted ? "SUBMITTED" : "DRAFT"}</b>
                   {report?.submitted_at ? (
-                    <span style={{ marginLeft: 8 }}>(last submit: {new Date(report.submitted_at).toLocaleString()})</span>
+                    <span className="ssr-status-sub">
+                      (last submit: {new Date(report.submitted_at).toLocaleString()})
+                    </span>
                   ) : null}
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <IonButton color="medium" fill="outline" disabled={submitting || !report} onClick={() => exportToPDF()}>
+              {/* ✅ PRETTY ACTION BUTTONS */}
+              <div className="ssr-actions">
+                <IonButton
+                  className="ssr-btn ssr-btn--ghost"
+                  fill="outline"
+                  disabled={submitting || !report}
+                  onClick={() => exportToPDF()}
+                >
                   <IonIcon slot="start" icon={downloadOutline} />
                   Export PDF
                 </IonButton>
 
                 <IonButton
-                  color="danger"
+                  className="ssr-btn ssr-btn--danger"
                   fill="outline"
                   disabled={submitting || !isYMD(selectedDate)}
                   onClick={() => setDeleteAlertOpen(true)}
                 >
                   <IonIcon slot="start" icon={trashOutline} />
-                  Delete by Date
+                  Delete
                 </IonButton>
 
-                <IonButton strong disabled={submitting || !report} onClick={() => void onSubmitDone()}>
+                <IonButton
+                  className="ssr-btn ssr-btn--primary"
+                  strong
+                  disabled={submitting || !report}
+                  onClick={() => void onSubmitDone()}
+                >
                   {submitting ? "Saving..." : submitLabel}
                 </IonButton>
               </div>
@@ -948,7 +952,9 @@ const AdminSalesReport: React.FC = () => {
                           inputmode="decimal"
                           disabled={submitting}
                           value={report ? String(toNumber(report.starting_cash)) : "0"}
-                          onIonChange={(ev) => updateReportField("starting_cash", valueToNonNegMoney(getDetailValue(ev)))}
+                          onIonChange={(ev) =>
+                            updateReportField("starting_cash", valueToNonNegMoney(getDetailValue(ev)))
+                          }
                         />
                       </IonItem>
                     </div>
@@ -962,17 +968,19 @@ const AdminSalesReport: React.FC = () => {
                           inputmode="decimal"
                           disabled={submitting}
                           value={report ? String(toNumber(report.starting_gcash)) : "0"}
-                          onIonChange={(ev) => updateReportField("starting_gcash", valueToNonNegMoney(getDetailValue(ev)))}
+                          onIonChange={(ev) =>
+                            updateReportField("starting_gcash", valueToNonNegMoney(getDetailValue(ev)))
+                          }
                         />
                       </IonItem>
                     </div>
                   </div>
 
                   <div className="ssr-left-row">
-                  <div className="ssr-left-label">COH / Total of the Day</div>
-                  <div className="ssr-left-value ssr-left-value--cash">{peso(cashTotal + coinTotal)}</div>
-                  <div className="ssr-left-value ssr-left-value--gcash">{peso(gcashSales)}</div>
-                </div>
+                    <div className="ssr-left-label">COH / Total of the Day</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(cashTotal + coinTotal)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(gcashSales)}</div>
+                  </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Expenses</div>
@@ -992,14 +1000,22 @@ const AdminSalesReport: React.FC = () => {
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">New Advance Payments</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.advance_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.advance_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">
+                      {peso(totals ? toNumber(totals.advance_cash) : 0)}
+                    </div>
+                    <div className="ssr-left-value ssr-left-value--gcash">
+                      {peso(totals ? toNumber(totals.advance_gcash) : 0)}
+                    </div>
                   </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Down payments within this day only</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.walkin_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.walkin_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">
+                      {peso(totals ? toNumber(totals.walkin_cash) : 0)}
+                    </div>
+                    <div className="ssr-left-value ssr-left-value--gcash">
+                      {peso(totals ? toNumber(totals.walkin_gcash) : 0)}
+                    </div>
                   </div>
 
                   <div className="ssr-left-row ssr-left-row--system">
@@ -1019,7 +1035,7 @@ const AdminSalesReport: React.FC = () => {
                   </div>
 
                   {/* CONSIGNMENT */}
-                  <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
+                  <div className="ssr-sales-boxes ssr-sales-boxes--consign">
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
                       <span className="ssr-sales-box-value">{peso(consignment.gross)}</span>
@@ -1069,7 +1085,9 @@ const AdminSalesReport: React.FC = () => {
                                 inputmode="numeric"
                                 disabled={submitting}
                                 value={String(line.qty)}
-                                onIonChange={(ev) => upsertQty(line, valueToNonNegInt(getDetailValue(ev)))}
+                                onIonChange={(ev) =>
+                                  upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
+                                }
                               />
                             </div>
                             <div className="ssr-ca">{peso(amount)}</div>
@@ -1104,7 +1122,9 @@ const AdminSalesReport: React.FC = () => {
                                 inputmode="numeric"
                                 disabled={submitting}
                                 value={String(line.qty)}
-                                onIonChange={(ev) => upsertQty(line, valueToNonNegInt(getDetailValue(ev)))}
+                                onIonChange={(ev) =>
+                                  upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
+                                }
                               />
                             </div>
                             <div className="ssr-ca">{peso(amount)}</div>
@@ -1132,17 +1152,17 @@ const AdminSalesReport: React.FC = () => {
                         inputmode="decimal"
                         disabled={submitting}
                         value={report ? String(toNumber(report.bilin_amount)) : "0"}
-                        onIonChange={(ev) => updateReportField("bilin_amount", valueToNonNegMoney(getDetailValue(ev)))}
+                        onIonChange={(ev) =>
+                          updateReportField("bilin_amount", valueToNonNegMoney(getDetailValue(ev)))
+                        }
                       />
                     </div>
 
-                    {/* ✅ Renamed: Net -> Sales Collected (and old Sales Collected removed) */}
                     <div className="ssr-collected-box ssr-collected-box--net">
                       <div className="ssr-collected-label">Sales Collected</div>
                       <div className="ssr-collected-value">{peso(netCollected)}</div>
                     </div>
                   </div>
-
                 </IonCardContent>
               </IonCard>
 

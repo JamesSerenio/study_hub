@@ -4,6 +4,7 @@
 // ✅ Expense Amount AUTO = qty * add_ons.expenses_cost (UNIT COST)
 // ✅ If expenses_cost is 0 => fallback to price
 // ✅ Sort by Category OR Stock (asc/desc)
+// ✅ SEARCH (name/category) + classnames for CSS
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -39,6 +40,7 @@ import {
   closeOutline,
   addCircleOutline,
   swapVerticalOutline,
+  searchOutline,
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 import type {
@@ -121,7 +123,6 @@ const getUnitCost = (addOn: AddOn | null): { unit: number; source: UnitSource } 
   const cost = toNumber(addOn.expenses_cost);
   if (cost > 0) return { unit: cost, source: "cost" };
 
-  // ✅ fallback to price if cost is not set
   const price = toNumber(addOn.price);
   if (price > 0) return { unit: price, source: "price" };
 
@@ -150,6 +151,9 @@ const Product_Item_Lists: React.FC = () => {
   // sort controls
   const [sortKey, setSortKey] = useState<SortKey>("category");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+
+  // ✅ search
+  const [search, setSearch] = useState<string>("");
 
   // modal
   const [isExpenseOpen, setIsExpenseOpen] = useState<boolean>(false);
@@ -209,6 +213,18 @@ const Product_Item_Lists: React.FC = () => {
     return list;
   }, [addOns, sortKey, sortOrder]);
 
+  // ✅ filter by search (name/category)
+  const filteredAddOns = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sortedAddOns;
+
+    return sortedAddOns.filter((a) => {
+      const name = (a.name ?? "").toString().toLowerCase();
+      const cat = (a.category ?? "").toString().toLowerCase();
+      return name.includes(q) || cat.includes(q);
+    });
+  }, [sortedAddOns, search]);
+
   const toggleSortOrder = (): void => {
     setSortOrder((p) => (p === "asc" ? "desc" : "asc"));
   };
@@ -254,7 +270,6 @@ const Product_Item_Lists: React.FC = () => {
       if (q > stock) return `Not enough stock. Available: ${stock}`;
     }
 
-    // ✅ prevent saving if both cost and price are 0 (no basis)
     if (selectedAddOn) {
       const { unit, source } = getUnitCost(selectedAddOn);
       if (unit <= 0 || source === "none") return "Set expenses_cost (unit cost) or price first (cannot compute).";
@@ -309,30 +324,29 @@ const Product_Item_Lists: React.FC = () => {
   };
 
   const unitInfo = useMemo(() => getUnitCost(selectedAddOn), [selectedAddOn?.id]);
+  const sortLabel = `${sortKey === "category" ? "category" : "stocks"} (${sortOrder})`;
 
   return (
-    <IonPage>
-      <IonHeader>
-        <IonToolbar>
-          <IonTitle>Product Item Lists</IonTitle>
-        </IonToolbar>
+    <IonPage className="pil-page">
+      <IonHeader className="pil-header">
       </IonHeader>
 
-      <IonContent className="ion-padding">
+      <IonContent className="pil-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>
 
         {/* TOP ACTIONS */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-          <IonButton onClick={openExpenseModal}>
+        <div className="pil-actions">
+          <IonButton className="pil-btn pil-btn--primary" onClick={openExpenseModal}>
             <IonIcon slot="start" icon={addCircleOutline} />
             Add Expenses
           </IonButton>
 
-          <IonItem lines="none" style={{ maxWidth: 260 }}>
-            <IonLabel>Sort</IonLabel>
+          <IonItem lines="none" className="pil-sort-item">
+            <IonLabel className="pil-sort-label">Sort</IonLabel>
             <IonSelect
+              className="pil-sort-select"
               value={sortKey}
               onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
                 setSortKey(String(e.detail.value) as SortKey)
@@ -343,210 +357,276 @@ const Product_Item_Lists: React.FC = () => {
             </IonSelect>
           </IonItem>
 
-          <IonButton fill="clear" onClick={toggleSortOrder}>
+          <IonButton className="pil-btn pil-btn--ghost" fill="clear" onClick={toggleSortOrder}>
             <IonIcon slot="start" icon={swapVerticalOutline} />
-            {sortOrder === "asc" ? (
-              <>
-                Asc <IonIcon icon={arrowUp} />
-              </>
-            ) : (
-              <>
-                Desc <IonIcon icon={arrowDown} />
-              </>
-            )}
+            <span className="pil-sort-order">{sortOrder === "asc" ? "Asc" : "Desc"}</span>
+            <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
           </IonButton>
+
+          {/* ✅ SEARCH BAR */}
+          <div className="pil-search">
+            <IonItem lines="none" className="pil-search-item">
+              <IonIcon className="pil-search-ico" icon={searchOutline} />
+              <IonInput
+                className="pil-search-input"
+                value={search}
+                placeholder="Search name or category..."
+                clearInput
+                onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
+                  setSearch(String(e.detail.value ?? ""))
+                }
+              />
+            </IonItem>
+
+            {search.trim() && (
+              <div className="pil-search-hint">
+                Showing <b>{filteredAddOns.length}</b> result(s)
+              </div>
+            )}
+          </div>
         </div>
 
-        {loading ? (
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <IonSpinner />
-            <IonLabel>Loading products...</IonLabel>
+        <div className="pil-card">
+          <div className="pil-card-head">
+            <div>
+              <div className="pil-card-title">Products</div>
+              <div className="pil-card-sub">
+                Sorted by <b>{sortLabel}</b>
+              </div>
+            </div>
           </div>
-        ) : (
-          <IonGrid>
-            <IonRow>
-              <IonCol>Image</IonCol>
-              <IonCol>Name</IonCol>
-              <IonCol>Category</IonCol>
-              <IonCol>Price</IonCol>
-              <IonCol>Restocked</IonCol>
-              <IonCol>Sold</IonCol>
-              <IonCol>Expired</IonCol>
-              <IonCol>Staff Used</IonCol>
-              <IonCol>Stocks</IonCol>
-              <IonCol>Expenses (count)</IonCol>
-              <IonCol>Unit Cost</IonCol>
-              <IonCol>Overall Sales</IonCol>
-              <IonCol>Expected Sales</IonCol>
-            </IonRow>
 
-            {sortedAddOns.length > 0 ? (
-              sortedAddOns.map((a) => (
-                <IonRow key={a.id}>
-                  <IonCol>
-                    {a.image_url ? (
-                      <IonImg
-                        src={a.image_url}
-                        alt={a.name}
-                        style={{ width: "50px", height: "50px", objectFit: "cover" }}
-                      />
-                    ) : (
-                      <IonLabel>No Image</IonLabel>
-                    )}
-                  </IonCol>
-
-                  <IonCol>{a.name}</IonCol>
-                  <IonCol>{a.category}</IonCol>
-                  <IonCol>{money2(toNumber(a.price))}</IonCol>
-                  <IonCol>{toNumber(a.restocked)}</IonCol>
-                  <IonCol>{toNumber(a.sold)}</IonCol>
-                  <IonCol>{toNumber(a.expired)}</IonCol>
-                  <IonCol>{toNumber(a.staff_consumed)}</IonCol>
-                  <IonCol>{toNumber(a.stocks)}</IonCol>
-                  <IonCol>{toNumber(a.expenses)}</IonCol>
-                  <IonCol>{money2(toNumber(a.expenses_cost))}</IonCol>
-                  <IonCol>{money2(toNumber(a.overall_sales))}</IonCol>
-                  <IonCol>{money2(toNumber(a.expected_sales))}</IonCol>
+          {loading ? (
+            <div className="pil-loading">
+              <IonSpinner />
+              <IonLabel>Loading products...</IonLabel>
+            </div>
+          ) : filteredAddOns.length === 0 ? (
+            <div className="pil-empty">
+              <IonLabel>No products found.</IonLabel>
+            </div>
+          ) : (
+            <div className="pil-table-wrap">
+              <IonGrid className="pil-grid">
+                {/* HEAD */}
+                <IonRow className="pil-row pil-row--head">
+                  <IonCol className="pil-col pil-col--img">Image</IonCol>
+                  <IonCol className="pil-col pil-col--strong">Name</IonCol>
+                  <IonCol className="pil-col">Category</IonCol>
+                  <IonCol className="pil-col">Price</IonCol>
+                  <IonCol className="pil-col">Restocked</IonCol>
+                  <IonCol className="pil-col">Sold</IonCol>
+                  <IonCol className="pil-col">Expired</IonCol>
+                  <IonCol className="pil-col">Staff Used</IonCol>
+                  <IonCol className="pil-col">Stocks</IonCol>
+                  <IonCol className="pil-col">Expenses</IonCol>
+                  <IonCol className="pil-col">Unit Cost</IonCol>
+                  <IonCol className="pil-col">Overall</IonCol>
+                  <IonCol className="pil-col">Expected</IonCol>
                 </IonRow>
-              ))
-            ) : (
-              <IonRow>
-                <IonCol size="12">No products found.</IonCol>
-              </IonRow>
-            )}
-          </IonGrid>
-        )}
+
+                {/* BODY */}
+                {filteredAddOns.map((a) => (
+                  <IonRow className="pil-row" key={a.id}>
+                    <IonCol className="pil-col pil-col--img">
+                      {a.image_url ? (
+                        <IonImg className="pil-img" src={a.image_url} alt={a.name} />
+                      ) : (
+                        <span className="pil-muted">No image</span>
+                      )}
+                    </IonCol>
+
+                    <IonCol className="pil-col pil-col--strong">{a.name}</IonCol>
+                    <IonCol className="pil-col">{a.category}</IonCol>
+                    <IonCol className="pil-col">{money2(toNumber(a.price))}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.restocked)}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.sold)}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.expired)}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.staff_consumed)}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.stocks)}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.expenses)}</IonCol>
+                    <IonCol className="pil-col">{money2(toNumber(a.expenses_cost))}</IonCol>
+                    <IonCol className="pil-col">{money2(toNumber(a.overall_sales))}</IonCol>
+                    <IonCol className="pil-col">{money2(toNumber(a.expected_sales))}</IonCol>
+                  </IonRow>
+                ))}
+              </IonGrid>
+            </div>
+          )}
+        </div>
 
         {/* ADD EXPENSES MODAL */}
-        <IonModal isOpen={isExpenseOpen} onDidDismiss={closeExpenseModal}>
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>Add Expenses</IonTitle>
+        <IonModal isOpen={isExpenseOpen} onDidDismiss={closeExpenseModal} className="pil-modal">
+          <IonHeader className="pil-modal-header">
+            <IonToolbar className="pil-modal-toolbar">
+              <IonTitle className="pil-modal-title">Add Expenses</IonTitle>
               <IonButtons slot="end">
-                <IonButton onClick={closeExpenseModal} disabled={savingExpense}>
+                <IonButton className="pil-btn" onClick={closeExpenseModal} disabled={savingExpense}>
                   <IonIcon icon={closeOutline} />
                 </IonButton>
               </IonButtons>
             </IonToolbar>
           </IonHeader>
 
-          <IonContent className="ion-padding">
-            <IonList>
-              <IonItem>
-                <IonLabel position="stacked">Full Name (staff)</IonLabel>
-                <IonInput
-                  value={fullName}
-                  placeholder="Enter staff full name"
-                  onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
-                    setFullName(String(e.detail.value ?? ""))
-                  }
-                />
-              </IonItem>
+          <IonContent className="pil-modal-content">
+            <div className="pil-modal-card">
+              <IonList className="pil-form">
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Full Name (staff)
+                  </IonLabel>
+                  <IonInput
+                    className="pil-input"
+                    value={fullName}
+                    placeholder="Enter staff full name"
+                    onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
+                      setFullName(String(e.detail.value ?? ""))
+                    }
+                  />
+                </IonItem>
 
-              <IonItem>
-                <IonLabel position="stacked">Product</IonLabel>
-                <IonSelect
-                  value={selectedAddOnId}
-                  placeholder="Select product"
-                  onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
-                    setSelectedAddOnId(String(e.detail.value ?? ""))
-                  }
-                >
-                  {addOns.map((a) => (
-                    <IonSelectOption key={a.id} value={a.id}>
-                      {a.category} — {a.name} (Stock: {toNumber(a.stocks)})
-                    </IonSelectOption>
-                  ))}
-                </IonSelect>
-              </IonItem>
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Product
+                  </IonLabel>
+                  <IonSelect
+                    className="pil-select"
+                    value={selectedAddOnId}
+                    placeholder="Select product"
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
+                      setSelectedAddOnId(String(e.detail.value ?? ""))
+                    }
+                  >
+                    {addOns.map((a) => (
+                      <IonSelectOption key={a.id} value={a.id}>
+                        {a.category} — {a.name} (Stock: {toNumber(a.stocks)})
+                      </IonSelectOption>
+                    ))}
+                  </IonSelect>
+                </IonItem>
 
-              <IonItem>
-                <IonLabel position="stacked">Type</IonLabel>
-                <IonSelect
-                  value={expenseType}
-                  onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
-                    setExpenseType(e.detail.value as ExpenseType)
-                  }
-                >
-                  <IonSelectOption value="expired">Expired / Damaged</IonSelectOption>
-                  <IonSelectOption value="staff_consumed">Staff Consumed</IonSelectOption>
-                </IonSelect>
-              </IonItem>
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Type
+                  </IonLabel>
+                  <IonSelect
+                    className="pil-select"
+                    value={expenseType}
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
+                      setExpenseType(e.detail.value as ExpenseType)
+                    }
+                  >
+                    <IonSelectOption value="expired">Expired / Damaged</IonSelectOption>
+                    <IonSelectOption value="staff_consumed">Staff Consumed</IonSelectOption>
+                  </IonSelect>
+                </IonItem>
 
-              <IonItem>
-                <IonLabel position="stacked">Quantity</IonLabel>
-                <IonInput
-                  inputMode="numeric"
-                  value={qty}
-                  placeholder="1"
-                  onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
-                    setQty(String(e.detail.value ?? ""))
-                  }
-                />
-              </IonItem>
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Quantity
+                  </IonLabel>
+                  <IonInput
+                    className="pil-input"
+                    inputMode="numeric"
+                    value={qty}
+                    placeholder="1"
+                    onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
+                      setQty(String(e.detail.value ?? ""))
+                    }
+                  />
+                </IonItem>
 
-              <IonItem>
-                <IonLabel position="stacked">Expense Amount (auto)</IonLabel>
-                <IonInput inputMode="decimal" value={expenseAmount} readonly />
-              </IonItem>
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Expense Amount (auto)
+                  </IonLabel>
+                  <IonInput className="pil-input" inputMode="decimal" value={expenseAmount} readonly />
+                </IonItem>
 
-              <IonItem>
-                <IonLabel position="stacked">Description / Reason</IonLabel>
-                <IonTextarea
-                  value={description}
-                  placeholder="Example: expired date reached / staff snack / damaged packaging"
-                  autoGrow
-                  onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) =>
-                    setDescription(String(e.detail.value ?? ""))
-                  }
-                />
-              </IonItem>
-            </IonList>
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Description / Reason
+                  </IonLabel>
+                  <IonTextarea
+                    className="pil-textarea"
+                    value={description}
+                    placeholder="Example: expired date reached / staff snack / damaged packaging"
+                    autoGrow
+                    onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) =>
+                      setDescription(String(e.detail.value ?? ""))
+                    }
+                  />
+                </IonItem>
+              </IonList>
 
-            {selectedAddOn && (
-              <div
-                style={{
-                  marginTop: 12,
-                  padding: 12,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  borderRadius: 12,
-                }}
-              >
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>Selected Product</div>
-                <div>Name: {selectedAddOn.name}</div>
-                <div>Category: {selectedAddOn.category}</div>
-                <div>Current Stock: {toNumber(selectedAddOn.stocks)}</div>
+              {selectedAddOn && (
+                <div className="pil-summary">
+                  <div className="pil-summary-title">Selected Product</div>
 
-                <div style={{ marginTop: 8 }}>
-                  Unit Source:{" "}
-                  <b>
-                    {unitInfo.source === "cost"
-                      ? "expenses_cost"
-                      : unitInfo.source === "price"
-                      ? "price (fallback)"
-                      : "none"}
-                  </b>
-                </div>
-                <div>Unit Used: <b>{money2(unitInfo.unit)}</b></div>
-                <div>
-                  Total: <b>{money2(computeExpenseAmount(selectedAddOn, qty))}</b>
-                </div>
-
-                {unitInfo.source === "price" && (
-                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                    Note: expenses_cost is 0, so we used price as fallback. Set expenses_cost to match your real unit cost.
+                  <div className="pil-summary-row">
+                    <span>Name</span>
+                    <b>{selectedAddOn.name}</b>
                   </div>
-                )}
-              </div>
-            )}
 
-            <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-              <IonButton expand="block" onClick={submitExpense} disabled={savingExpense}>
-                {savingExpense ? "Saving..." : "Save Expense"}
-              </IonButton>
-              <IonButton expand="block" fill="outline" onClick={closeExpenseModal} disabled={savingExpense}>
-                Cancel
-              </IonButton>
+                  <div className="pil-summary-row">
+                    <span>Category</span>
+                    <b>{selectedAddOn.category}</b>
+                  </div>
+
+                  <div className="pil-summary-row">
+                    <span>Current Stock</span>
+                    <b>{toNumber(selectedAddOn.stocks)}</b>
+                  </div>
+
+                  <div className="pil-summary-note">
+                    Unit Source:{" "}
+                    <b>
+                      {unitInfo.source === "cost"
+                        ? "expenses_cost"
+                        : unitInfo.source === "price"
+                        ? "price (fallback)"
+                        : "none"}
+                    </b>
+                  </div>
+
+                  <div className="pil-summary-row">
+                    <span>Unit Used</span>
+                    <b>{money2(unitInfo.unit)}</b>
+                  </div>
+
+                  <div className="pil-summary-row">
+                    <span>Total</span>
+                    <b>{money2(computeExpenseAmount(selectedAddOn, qty))}</b>
+                  </div>
+
+                  {unitInfo.source === "price" && (
+                    <div className="pil-summary-warn">
+                      Note: expenses_cost is 0, so we used price as fallback. Set expenses_cost to match your real unit cost.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="pil-modal-actions">
+                <IonButton
+                  className="pil-btn pil-btn--primary"
+                  expand="block"
+                  onClick={submitExpense}
+                  disabled={savingExpense}
+                >
+                  {savingExpense ? "Saving..." : "Save Expense"}
+                </IonButton>
+
+                <IonButton
+                  className="pil-btn"
+                  expand="block"
+                  fill="outline"
+                  onClick={closeExpenseModal}
+                  disabled={savingExpense}
+                >
+                  Cancel
+                </IonButton>
+              </div>
             </div>
           </IonContent>
         </IonModal>
