@@ -389,20 +389,10 @@ const Admin_Packages: React.FC = () => {
   return (
     <IonPage>
       <IonHeader>
-        <IonToolbar>
-          <IonTitle>Admin Packages</IonTitle>
-
-          <IonButtons slot="end">
-            <IonButton onClick={openCreatePackage}>
-              <IonIcon icon={addOutline} slot="start" />
-              New
-            </IonButton>
-          </IonButtons>
-        </IonToolbar>
       </IonHeader>
 
       {/* ✅ SAME BACKGROUND AS OTHER PAGES */}
-      <IonContent className="staff-content" scrollY={false}>
+      <IonContent className="staff-content">
         <div className="customer-lists-container adminpkg adminpkg__wrap">
           {/* ✅ SAME TOP BAR VIBE */}
           <div className="customer-topbar adminpkg__topbar">

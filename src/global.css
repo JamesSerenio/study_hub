@@ -2916,10 +2916,6 @@ ion-modal.booking-modal {
 ========================= */
 .staff-content {
   background: #b2c197 !important;
-
-  /* ✅ Ionic: totally disable scrolling inside IonContent */
-  --overflow: hidden;
-  overflow: hidden !important;
 }
 
 /* ✅ Make sure the seat card always fits the screen (no scroll) */
