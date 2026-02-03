@@ -514,147 +514,373 @@ ion-content,
 
 
 /* =========================
-   CUSTOMER LISTS (RESPONSIVE)
+   PAGE WRAP
+   NOTE: background comes from .staff-content (same as seat map page)
 ========================= */
-
-.customer-lists-container {
+.customer-lists-container{
+  height: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
   padding: clamp(12px, 3vw, 20px);
-  max-width: 100%;
-  overflow-x: auto;                 /* ✅ allow scroll on small screens */
-  -webkit-overflow-scrolling: touch;/* ✅ smooth mobile scroll */
+  background: transparent !important;
+
+  animation: fadeInUp 280ms ease both;
 }
 
-.customer-table {
+/* =========================
+   TOP BAR
+========================= */
+.customer-topbar{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:14px;
+  flex-wrap:wrap;
+}
+
+.customer-topbar-left{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.customer-lists-title{
+  margin:0;
+  font-weight:900;
+  font-size: clamp(18px, 2.2vw, 28px);
+  letter-spacing:.2px;
+}
+
+.customer-subtext{
+  opacity:.85;
+  font-size: clamp(12px, 1.2vw, 14px);
+}
+
+.customer-note{
+  margin-top: 12px;
+  font-weight: 700;
+  opacity: .85;
+}
+
+/* =========================
+   DATE PILL (designed calendar)
+========================= */
+.date-pill{
+  display:flex;
+  align-items:center;
+  gap:10px;
+
+  padding: 10px 12px;
+  border-radius: 12px;
+
+  background: rgba(248, 238, 220, 0.96);
+  border: 1px solid rgba(0,0,0,.12);
+  box-shadow: 0 10px 22px rgba(0,0,0,.10);
+
+  animation: fadeIn 220ms ease both;
+}
+
+.date-pill-label{
+  font-weight:900;
+  font-size: 12px;
+  opacity:.75;
+}
+
+.date-pill-input{
+  border:none;
+  outline:none;
+  background: transparent;
+
+  font-weight:900;
+  font-size: 14px;
+
+  padding: 6px 8px;
+  border-radius: 10px;
+
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+}
+
+.date-pill-input:focus{
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.25);
+}
+
+.date-pill-icon{
+  font-size: 16px;
+  opacity:.75;
+}
+
+/* =========================
+   TABLE CARD WRAPPER
+========================= */
+.customer-table-wrap{
+  margin-top: 14px;
+  border-radius: 14px;
+
+  background: rgba(248, 238, 220, 0.96) !important;
+  border: 1px solid rgba(0,0,0,.12);
+  box-shadow: 0 12px 26px rgba(0,0,0,.12);
+
+  overflow-x: auto;
+  overflow-y: hidden;
+
+  -webkit-overflow-scrolling: touch;
+
+  animation: fadeIn 220ms ease both;
+}
+
+.customer-table{
   width: 100%;
   border-collapse: collapse;
 
-  /* ✅ prevents breaking on phones */
-  min-width: 720px;                 /* adjust if you have fewer columns */
+  /* default desktop width (scrollable if too many columns) */
+  min-width: 980px;
 }
 
 .customer-table th,
-.customer-table td {
-  border: 1px solid #ddd;
-  padding: 8px;
-  font-size: clamp(12px, 2.8vw, 13px);
+.customer-table td{
+  border: 1px solid rgba(0,0,0,.12);
+  padding: 10px 10px;
+
+  font-size: clamp(12px, 1.2vw, 13px);
   text-align: center;
-  white-space: nowrap;              /* ✅ keep values aligned */
-}
-
-.customer-table th {
-  background: #f4f4f4;
-  position: sticky;                 /* ✅ optional: header stays */
-  top: 0;
-  z-index: 1;
-}
-
-/* Optional: tighter table on very small phones */
-@media (max-width: 360px) {
-  .customer-table th,
-  .customer-table td {
-    padding: 6px;
-  }
-}
-
-/* =========================
-   BUTTON (RESPONSIVE)
-========================= */
-.receipt-btn {
-  background: #222;
-  color: #fff;
-  border: none;
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-
-  max-width: 100%;
   white-space: nowrap;
+  background: transparent;
+}
+
+.customer-table th{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+
+  background: rgba(248, 238, 220, 0.98) !important;
+  font-weight: 900;
+}
+
+.customer-table tbody tr:hover td{
+  background: rgba(255,255,255,.35);
 }
 
 /* =========================
-   MODAL OVERLAY (SAFE)
+   CELL HELPERS
 ========================= */
-.receipt-overlay {
+.cell-stack{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.cell-center{
+  align-items:center;
+}
+.cell-strong{
+  font-weight: 900;
+}
+
+/* action buttons column */
+.action-stack{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  align-items:center;
+}
+
+/* =========================
+   BUTTONS
+========================= */
+.receipt-btn{
+  background:#222;
+  color:#fff;
+  border:none;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor:pointer;
+  font-size: 12px;
+  white-space: nowrap;
+
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+.receipt-btn:active{ transform: scale(.98); }
+.receipt-btn:disabled{
+  opacity:.6;
+  cursor:not-allowed;
+}
+
+/* paid badge colors (no inline style) */
+.pay-badge{ width: 100%; }
+.pay-badge--paid{ background:#1b5e20; }
+.pay-badge--unpaid{ background:#b00020; }
+
+/* =========================
+   MODALS
+========================= */
+.receipt-overlay{
   position: fixed;
-  inset: 0; /* ✅ replaces top/left/width/height */
-  background: rgba(0, 0, 0, 0.45);
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  display:flex;
+  align-items:center;
+  justify-content:center;
   z-index: 999;
+  padding: 16px;
 
-  padding: 16px; /* ✅ prevents edge clipping on phones */
+  animation: overlayFade 160ms ease both;
 }
 
-/* =========================
-   RECEIPT CONTAINER (RESPONSIVE)
-========================= */
-.receipt-container {
-  width: min(92vw, 340px); /* ✅ fit to any device */
-  background: #fff;
+.receipt-container{
+  width: min(92vw, 380px);
+  background: rgba(248, 238, 220, 0.98) !important;
   padding: clamp(14px, 4vw, 20px);
-  border-radius: 10px;
+  border-radius: 12px;
   font-family: monospace;
 
-  max-height: min(80vh, 620px); /* ✅ avoid overflow */
-  overflow: auto;               /* ✅ scroll if long */
+  max-height: min(80vh, 620px);
+  overflow: auto;
+
+  box-shadow: 0 16px 38px rgba(0,0,0,.22);
+  animation: modalPop 180ms ease both;
 }
 
-/* LOGO */
-.receipt-logo {
-  display: block;
+.receipt-logo{
+  display:block;
   margin: 0 auto 6px;
   width: clamp(64px, 18vw, 80px);
 }
 
-.receipt-title {
-  text-align: center;
+.receipt-title{
+  text-align:center;
   font-size: clamp(16px, 4.5vw, 18px);
-  margin-bottom: 2px;
+  margin: 0 0 2px 0;
 }
 
-.receipt-subtitle {
-  text-align: center;
+.receipt-subtitle{
+  text-align:center;
   font-size: clamp(11px, 3.2vw, 12px);
-  margin-bottom: 10px;
+  margin: 0 0 10px 0;
 }
 
-.receipt-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px; /* ✅ prevent overlap */
-  font-size: clamp(12px, 3.2vw, 13px);
-  margin: 4px 0;
-}
-
-.receipt-total {
-  display: flex;
+.receipt-row{
+  display:flex;
   justify-content: space-between;
   gap: 10px;
-  font-weight: bold;
+  font-size: clamp(12px, 3.2vw, 13px);
+  margin: 6px 0;
+}
+
+.receipt-total{
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-weight: 900;
   font-size: clamp(14px, 4vw, 16px);
   margin-top: 10px;
 }
 
-.receipt-footer {
-  text-align: center;
+.receipt-footer{
+  text-align:center;
   font-size: clamp(11px, 3.2vw, 12px);
   margin-top: 15px;
 }
 
-.close-btn {
+.receipt-status{
+  font-weight: 900;
+}
+
+.close-btn{
   width: 100%;
   margin-top: 10px;
   padding: 10px;
-  background: #222;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
+  background:#222;
+  color:#fff;
+  border:none;
+  border-radius: 10px;
+  cursor:pointer;
+  transition: transform 120ms ease, opacity 120ms ease;
 }
+.close-btn:active{ transform: scale(.98); }
+
+/* modal inputs */
+.inline-input{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.inline-input-prefix{
+  font-weight: 900;
+}
+.small-input{
+  width: 140px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,.18);
+  outline: none;
+  background: rgba(255,255,255,.65);
+}
+.reason-input{
+  width: 220px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,.18);
+  outline: none;
+  background: rgba(255,255,255,.65);
+}
+.money-input{
+  width: 160px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,.18);
+  outline: none;
+  background: rgba(255,255,255,.65);
+}
+
+.modal-actions{
+  display:flex;
+  gap:10px;
+  margin-top: 12px;
+}
+.modal-actions .receipt-btn{
+  flex:1;
+}
+
+/* helpers */
+.block-top{ margin-top: 12px; }
+.btn-full{ width: 100%; }
+
+/* =========================
+   RESPONSIVE (400 / 600 / 1200)
+========================= */
+@media (max-width: 400px){
+  .customer-table{ min-width: 900px; }
+  .date-pill{ width: 100%; justify-content: space-between; }
+}
+
+@media (max-width: 600px){
+  .date-pill{ width: 100%; justify-content: space-between; }
+}
+
+@media (min-width: 1200px){
+  .customer-lists-container{ padding: 22px; }
+  .customer-table{ min-width: 1100px; }
+}
+
+/* =========================
+   ANIMATIONS (fade)
+========================= */
+@keyframes fadeIn{
+  from{ opacity:0; }
+  to{ opacity:1; }
+}
+@keyframes fadeInUp{
+  from{ opacity:0; transform: translateY(10px); }
+  to{ opacity:1; transform: translateY(0); }
+}
+@keyframes overlayFade{
+  from{ opacity:0; }
+  to{ opacity:1; }
+}
+@keyframes modalPop{
+  from{ opacity:0; transform: translateY(8px) scale(.98); }
+  to{ opacity:1; transform: translateY(0) scale(1); }
+}
+
 
 /* =========================
    TimeAlertModal (RESPONSIVE)

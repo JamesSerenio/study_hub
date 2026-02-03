@@ -13,6 +13,7 @@
 //    - so when you pick NEXT DAY, seats are FREE automatically
 // ✅ Non-reservation openTime can stay FAR_FUTURE (seat is "N/A" so no seat blocking)
 // ✅ NEW: If Reservation Time Started is earlier than CURRENT TIME -> show modal + block saving
+// ✅ FIX: DB `date` ALWAYS saves CURRENT DATE (local) even for reservation
 // ✅ NO any
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -86,6 +87,9 @@ const toYYYYMMDD = (v: string): string | null => {
   const m = v.trim().match(/^(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : null;
 };
+
+// ✅ LOCAL current date in YYYY-MM-DD (no red, no UTC issue)
+const todayLocalYYYYMMDD = (): string => new Date().toLocaleDateString("en-CA");
 
 const normalizeTimeAvail = (value: string): string | null => {
   const raw = value
@@ -281,14 +285,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [timeSnapshotIso, setTimeSnapshotIso] = useState(new Date().toISOString());
 
-  // ✅ 1-tap IonDatetime refresh support
   const dateRef = useRef<HTMLIonDatetimeElement | null>(null);
   const [dateTouchTick, setDateTouchTick] = useState(0);
 
-  // ✅ NEW: local refresh tick so occupied seats re-fetch after external stop-time changes
   const [refreshSeatsTick, setRefreshSeatsTick] = useState(0);
 
-  // ✅ NEW: modal for invalid reservation time
   const [timeAlertOpen, setTimeAlertOpen] = useState(false);
   const [timeAlertMsg, setTimeAlertMsg] = useState("");
 
@@ -342,7 +343,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     return addDuration(startIso, timeAvail);
   };
 
-  // ✅ IMPORTANT: delete expired reserved blocks so seat returns automatically
   const cleanupExpiredReserved = async (): Promise<void> => {
     const nowIso = new Date().toISOString();
     const { error } = await supabase
@@ -351,12 +351,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       .eq("source", "reserved")
       .lt("end_at", nowIso);
 
-    if (error) {
-      console.warn("cleanupExpiredReserved:", error.message);
-    }
+    if (error) console.warn("cleanupExpiredReserved:", error.message);
   };
 
-  // ✅ NEW: always fetch active overlaps for the window you are checking
   const fetchOccupiedSeats = async (startIso: string, endIso: string): Promise<void> => {
     await cleanupExpiredReserved();
 
@@ -377,7 +374,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setOccupiedSeats(Array.from(new Set(seats)));
   };
 
-  // ✅ realtime subscription so seats update when someone stops time (updates end_at)
   useEffect(() => {
     if (!isOpen) return;
 
@@ -477,7 +473,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     else if (Array.isArray(raw) && typeof raw[0] === "string") pick(raw[0]);
   };
 
-  // ✅ Reset modal
   useEffect(() => {
     if (!isOpen) return;
 
@@ -502,7 +497,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  // ✅ IMPORTANT: Whenever date/time/duration changes, clear selected seats and refresh occupiedSeats
   useEffect(() => {
     if (!isOpen) return;
 
@@ -585,7 +579,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const timeOutDisplay = openTime ? "OPEN TIME" : formatPH(new Date(summaryEndIso));
 
   const handleSubmitBooking = async (): Promise<void> => {
-    // ✅ NEW: block reservation save if Time Started < current time
     if (form.reservation && reservationStartIso) {
       if (isReservationStartInPast(reservationStartIso)) {
         setTimeAlertMsg(
@@ -626,10 +619,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const startIsoToStore =
       form.reservation && reservationStartIso ? reservationStartIso : new Date().toISOString();
 
-    const dateToStore =
-      form.reservation && form.reservation_date
-        ? form.reservation_date
-        : new Date().toISOString().split("T")[0];
+    // ✅ FIX: ALWAYS current date saved to DB
+    const dateToStore = todayLocalYYYYMMDD();
 
     const timeEndedToStore = (() => {
       if (form.reservation && openTime) {
@@ -689,7 +680,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
       const { error: sessionErr } = await supabase.from("customer_sessions").insert({
         staff_id: auth.user.id,
-        date: dateToStore,
+        date: dateToStore, // ✅ current date always
         full_name: trimmedName,
         customer_type: form.customer_type,
         customer_field: form.customer_field,
@@ -702,7 +693,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         total_amount: timeAmount,
         seat_number: seatToStore,
         reservation: form.reservation ? "yes" : "no",
-        reservation_date: form.reservation_date ?? null,
+        reservation_date: form.reservation_date ?? null, // ✅ selected reservation date stays here
       });
 
       if (sessionErr) {
@@ -755,7 +746,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         </IonToolbar>
       </IonHeader>
 
-      {/* ✅ NEW: modal alert for invalid reservation time */}
       <IonAlert
         isOpen={timeAlertOpen}
         header="Invalid Time Started"
@@ -860,7 +850,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 <IonDatetime
                   ref={dateRef}
                   presentation="date"
-                  min={new Date().toISOString().split("T")[0]}
+                  min={todayLocalYYYYMMDD()}
                   value={form.reservation_date}
                   onIonChange={(e) => applyPickedDate(e.detail.value)}
                   onClickCapture={() => {
@@ -900,10 +890,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               </IonItem>
 
               {!!seatPickHint && (
-                <p
-                  className="summary-text"
-                  style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}
-                >
+                <p className="summary-text" style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}>
                   {seatPickHint}
                 </p>
               )}
@@ -956,9 +943,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               placeholder="Examples: 0:45 / 2 / 2:30 / 100:30 / 230"
               value={timeAvailInput}
               disabled={openTime}
-              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
-                setTimeAvailInput(e.detail.value ?? "")
-              }
+              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => setTimeAvailInput(e.detail.value ?? "")}
               onIonBlur={() => {
                 commitTimeAvail(timeAvailInput);
                 setDateTouchTick((x) => x + 1);
@@ -982,11 +967,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           <div className="summary-section">
             <p className="summary-text">
               <strong>Time Started:</strong>{" "}
-              {form.reservation
-                ? reservationStartIso
-                  ? formatPH(new Date(reservationStartIso))
-                  : "—"
-                : timeInDisplay}
+              {form.reservation ? (reservationStartIso ? formatPH(new Date(reservationStartIso)) : "—") : timeInDisplay}
             </p>
 
             <p className="summary-text">
@@ -1003,12 +984,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
             {form.reservation && (
               <p className="summary-text">
-                <strong>Seat:</strong>{" "}
-                {isSeatPickReady
-                  ? form.seat_number.length
-                    ? form.seat_number.join(", ")
-                    : "None"
-                  : "—"}
+                <strong>Seat:</strong> {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
               </p>
             )}
           </div>
