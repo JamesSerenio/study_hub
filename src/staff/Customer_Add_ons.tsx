@@ -1,5 +1,6 @@
 // src/pages/Customer_Add_ons.tsx
-// ✅ Same className + UI style as Customer_Lists (customer-lists-container, customer-table, receipt-overlay, etc.)
+// ✅ UI MATCHES Customer_Lists (TOPBAR + DATE PILL CALENDAR + TABLE WRAP + NOTES)
+// ✅ Same className + UI style as Customer_Lists (customer-lists-container, customer-topbar, date-pill, customer-table-wrap, customer-table, receipt-overlay, etc.)
 // ✅ Payment modal: GCash/Cash auto updates to match Due
 // ✅ Save Payment auto sets PAID/UNPAID (paid >= due) + paid_at
 // ✅ Manual PAID/UNPAID toggle works (can return to UNPAID even if fully paid)
@@ -7,7 +8,7 @@
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
-import { IonPage, IonContent, IonButton, IonText, IonSpinner } from "@ionic/react";
+import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
@@ -146,6 +147,7 @@ const Customer_Add_ons: React.FC = () => {
   const [records, setRecords] = useState<CustomerAddOnMerged[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
+  // Date filter (same behavior as Customer_Lists)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   // receipt modal
@@ -190,6 +192,7 @@ const Customer_Add_ons: React.FC = () => {
       .returns<CustomerSessionAddOnRow[]>();
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error("Error fetching add-ons:", error);
       setRecords([]);
       setLoading(false);
@@ -211,7 +214,10 @@ const Customer_Add_ons: React.FC = () => {
       .in("id", addOnIds)
       .returns<AddOnInfo[]>();
 
-    if (addOnErr) console.error("Error fetching add_ons:", addOnErr);
+    if (addOnErr) {
+      // eslint-disable-next-line no-console
+      console.error("Error fetching add_ons:", addOnErr);
+    }
 
     const addOnMap = new Map<string, AddOnInfo>();
     (addOnRows ?? []).forEach((a) => addOnMap.set(a.id, a));
@@ -382,6 +388,7 @@ const Customer_Add_ons: React.FC = () => {
       setPaymentTarget(null);
       await fetchAddOns();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
@@ -415,6 +422,7 @@ const Customer_Add_ons: React.FC = () => {
 
       await fetchAddOns();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -424,139 +432,152 @@ const Customer_Add_ons: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent className="ion-padding">
+      {/* ✅ SAME BACKGROUND as Customer_Lists */}
+      <IonContent scrollY={false} className="staff-content">
         <div className="customer-lists-container">
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <h2 className="customer-lists-title" style={{ margin: 0 }}>
-              Customer Add-Ons Records
-            </h2>
+          {/* ✅ SAME TOPBAR + SAME DATE PILL CALENDAR as Customer_Lists */}
+          <div className="customer-topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Customer Add-Ons Records</h2>
+              <div className="customer-subtext">
+                Showing records for: <strong>{selectedDate}</strong>
+              </div>
+            </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-              />
-              <IonButton size="small" onClick={() => void fetchAddOns()}>
+            <div className="customer-topbar-right">
+              <label className="date-pill">
+                <span className="date-pill-label">Date</span>
+                <input
+                  className="date-pill-input"
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                />
+                <span className="date-pill-icon" aria-hidden="true">
+                  📅
+                </span>
+              </label>
+
+              {/* ✅ refresh button (kept) but uses SAME button class as tables */}
+              <button className="receipt-btn" onClick={() => void fetchAddOns()} style={{ whiteSpace: "nowrap" }}>
                 Refresh
-              </IonButton>
+              </button>
             </div>
           </div>
 
-          <div style={{ marginTop: 10, opacity: 0.85 }}>
-            Showing records for: <strong>{selectedDate}</strong>
-          </div>
-
+          {/* TABLE */}
           {loading ? (
-            <div style={{ textAlign: "center", marginTop: 30 }}>
-              <IonSpinner name="crescent" />
-            </div>
+            <p className="customer-note">Loading...</p>
           ) : groupedOrders.length === 0 ? (
-            <p>No add-ons found for this date</p>
+            <p className="customer-note">No add-ons found for this date</p>
           ) : (
-            <table className="customer-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Full Name</th>
-                  <th>Seat</th>
-                  <th>Items</th>
-                  <th>Grand Total</th>
-                  <th>Payment</th>
-                  <th>Paid?</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
+            <div className="customer-table-wrap" key={selectedDate}>
+              <table className="customer-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Full Name</th>
+                    <th>Seat</th>
+                    <th>Items</th>
+                    <th>Grand Total</th>
+                    <th>Payment</th>
+                    <th>Paid?</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
 
-              <tbody>
-                {groupedOrders.map((o) => {
-                  const due = round2(o.grand_total);
-                  const totalPaid = round2(o.gcash_amount + o.cash_amount);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                <tbody>
+                  {groupedOrders.map((o) => {
+                    const due = round2(o.grand_total);
+                    const totalPaid = round2(o.gcash_amount + o.cash_amount);
+                    const remaining = round2(Math.max(0, due - totalPaid));
 
-                  // ✅ IMPORTANT: show PAID based on manual is_paid only
-                  const paid = toBool(o.is_paid);
+                    // ✅ IMPORTANT: show PAID based on manual is_paid only
+                    const paid = toBool(o.is_paid);
 
-                  return (
-                    <tr key={o.key}>
-                      <td>{new Date(o.created_at).toLocaleString("en-PH")}</td>
-                      <td>{o.full_name || "-"}</td>
-                      <td>{o.seat_number || "-"}</td>
+                    return (
+                      <tr key={o.key}>
+                        <td>{new Date(o.created_at).toLocaleString("en-PH")}</td>
+                        <td>{o.full_name || "-"}</td>
+                        <td>{o.seat_number || "-"}</td>
 
-                      <td>
-                        <div style={{ display: "grid", gap: 6, minWidth: 260 }}>
-                          {o.items.map((it) => (
-                            <div
-                              key={it.id}
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                gap: 10,
-                                borderBottom: "1px solid rgba(0,0,0,0.08)",
-                                paddingBottom: 6,
-                              }}
-                            >
-                              <div style={{ minWidth: 0 }}>
-                                <div style={{ fontWeight: 900 }}>
-                                  {it.item_name}{" "}
-                                  <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                        <td>
+                          <div style={{ display: "grid", gap: 6, minWidth: 260 }}>
+                            {o.items.map((it) => (
+                              <div
+                                key={it.id}
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  gap: 10,
+                                  borderBottom: "1px solid rgba(0,0,0,0.08)",
+                                  paddingBottom: 6,
+                                }}
+                              >
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontWeight: 900 }}>
+                                    {it.item_name}{" "}
+                                    <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                                  </div>
+                                  <div style={{ opacity: 0.85, fontSize: 13 }}>
+                                    Qty: {it.quantity} • {moneyText(it.price)}
+                                  </div>
                                 </div>
-                                <div style={{ opacity: 0.85, fontSize: 13 }}>
-                                  Qty: {it.quantity} • {moneyText(it.price)}
-                                </div>
+                                <div style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
                               </div>
-                              <div style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-
-                      <td style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(due)}</td>
-
-                      <td>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <span style={{ fontWeight: 800 }}>
-                            GCash {moneyText(o.gcash_amount)} / Cash {moneyText(o.cash_amount)}
-                          </span>
-                          <button
-                            className="receipt-btn"
-                            onClick={() => openPaymentModal(o)}
-                            disabled={due <= 0}
-                            title={due <= 0 ? "No amount due" : "Set GCash/Cash payment"}
-                          >
-                            Payment
-                          </button>
-                        </div>
-                      </td>
-
-                      <td>
-                        <button
-                          className="receipt-btn"
-                          onClick={() => void togglePaid(o)}
-                          disabled={togglingPaidKey === o.key}
-                          style={{ background: paid ? "#1b5e20" : "#b00020" }}
-                          title={paid ? "Tap to set UNPAID" : "Tap to set PAID"}
-                        >
-                          {togglingPaidKey === o.key ? "Updating..." : paid ? "PAID" : "UNPAID"}
-                        </button>
-
-                        {remaining > 0 && (
-                          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                            Remaining: <strong>{moneyText(remaining)}</strong>
+                            ))}
                           </div>
-                        )}
-                      </td>
+                        </td>
 
-                      <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button className="receipt-btn" onClick={() => setSelectedOrder(o)}>
-                          View Receipt
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        <td style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(due)}</td>
+
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">
+                              GCash {moneyText(o.gcash_amount)} / Cash {moneyText(o.cash_amount)}
+                            </span>
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openPaymentModal(o)}
+                              disabled={due <= 0}
+                              title={due <= 0 ? "No amount due" : "Set GCash/Cash payment"}
+                            >
+                              Payment
+                            </button>
+                          </div>
+                        </td>
+
+                        <td>
+                          {/* ✅ SAME PAID BADGE STYLE as Customer_Lists */}
+                          <button
+                            className={`receipt-btn pay-badge ${paid ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            onClick={() => void togglePaid(o)}
+                            disabled={togglingPaidKey === o.key}
+                            title={paid ? "Tap to set UNPAID" : "Tap to set PAID"}
+                          >
+                            {togglingPaidKey === o.key ? "Updating..." : paid ? "PAID" : "UNPAID"}
+                          </button>
+
+                          {remaining > 0 && (
+                            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+                              Remaining: <strong>{moneyText(remaining)}</strong>
+                            </div>
+                          )}
+                        </td>
+
+                        <td>
+                          <div className="action-stack">
+                            <button className="receipt-btn" onClick={() => setSelectedOrder(o)}>
+                              View Receipt
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
 
           {/* PAYMENT MODAL */}
@@ -586,24 +607,24 @@ const Customer_Add_ons: React.FC = () => {
                       <div className="receipt-row">
                         <span>GCash</span>
                         <input
+                          className="money-input"
                           type="number"
                           min="0"
                           step="0.01"
                           value={gcashInput}
                           onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
-                          style={{ width: 160 }}
                         />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
                         <input
+                          className="money-input"
                           type="number"
                           min="0"
                           step="0.01"
                           value={cashInput}
                           onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
-                          style={{ width: 160 }}
                         />
                       </div>
 
@@ -619,16 +640,12 @@ const Customer_Add_ons: React.FC = () => {
                         <span>{moneyText(remaining)}</span>
                       </div>
 
-                      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} style={{ flex: 1 }}>
+                      {/* ✅ SAME modal actions layout as Customer_Lists */}
+                      <div className="modal-actions">
+                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)}>
                           Cancel
                         </button>
-                        <button
-                          className="receipt-btn"
-                          onClick={() => void savePayment()}
-                          disabled={savingPayment}
-                          style={{ flex: 1 }}
-                        >
+                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment}>
                           {savingPayment ? "Saving..." : "Save"}
                         </button>
                       </div>
@@ -668,10 +685,7 @@ const Customer_Add_ons: React.FC = () => {
                 <hr />
 
                 {selectedOrder.items.map((it) => (
-                  <div
-                    key={it.id}
-                    style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}
-                  >
+                  <div key={it.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 900 }}>
                         {it.item_name} <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
@@ -727,15 +741,13 @@ const Customer_Add_ons: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Status</span>
-                        <span style={{ fontWeight: 900 }}>{paid ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">{paid ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       {paid && (
                         <div className="receipt-row">
                           <span>Paid at</span>
-                          <span>
-                            {selectedOrder.paid_at ? new Date(selectedOrder.paid_at).toLocaleString("en-PH") : "-"}
-                          </span>
+                          <span>{selectedOrder.paid_at ? new Date(selectedOrder.paid_at).toLocaleString("en-PH") : "-"}</span>
                         </div>
                       )}
 

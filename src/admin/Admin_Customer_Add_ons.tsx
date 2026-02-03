@@ -1,23 +1,5 @@
-// src/pages/Admin_Customer_Add_ons.tsx
-// ✅ Calendar (date) filter
-// ✅ Export to Excel (CSV) by selected date (UTF-8 BOM + force Date as TEXT)
-// ✅ VOID (single row): reverses by decrementing add_ons.sold then deletes record
-// ✅ DELETE (single row): deletes record ONLY (no reversal)
-// ✅ DELETE BY DATE: deletes records on selected date ONLY (no reversal)
-// ✅ + SAME UI/Grouping/Receipt/Payment/Paid Toggle style as Customer_Add_ons (customer-lists-container, customer-table, receipt-overlay, etc.)
-// ✅ Payment modal: GCash/Cash auto updates to match Due
-// ✅ Save Payment auto sets PAID/UNPAID (paid >= due) + paid_at
-// ✅ Manual PAID/UNPAID toggle works (can return to UNPAID even if fully paid)
-// ✅ Receipt status follows manual is_paid
-// ✅ No "any"
-//
-// ✅ CHANGE REQUEST (YOU): Void + Delete moved to ACTION (per order/group), removed from ITEMS
-//
-// NOTE: add_ons.stocks and add_ons.overall_sales are GENERATED ALWAYS,
-// so we must update add_ons.sold to "return stock / reverse sales".
-
 import React, { useEffect, useMemo, useState } from "react";
-import { IonPage, IonContent, IonSpinner, IonText, IonButton } from "@ionic/react";
+import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
@@ -90,7 +72,6 @@ type OrderGroup = {
   gcash_amount: number;
   cash_amount: number;
 
-  // ✅ manual from DB
   is_paid: boolean;
   paid_at: string | null;
 };
@@ -154,7 +135,6 @@ const formatTimeText = (iso: string): string => {
 
 const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
 
-// local-day range [start,end] for timestamptz filtering
 const localDayRangeIso = (yyyyMmDd: string): { startIso: string; endIso: string } => {
   const [y, m, d] = yyyyMmDd.split("-").map((x) => Number(x));
   const start = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
@@ -162,7 +142,6 @@ const localDayRangeIso = (yyyyMmDd: string): { startIso: string; endIso: string 
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 };
 
-// keep gcash (clamp to due), cash = remaining
 const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
   const d = round2(Math.max(0, due));
   if (d <= 0) return { gcash: 0, cash: 0 };
@@ -172,7 +151,6 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
   return { gcash: g, cash: c };
 };
 
-// group window: rows created within 10s = one order
 const GROUP_WINDOW_MS = 10_000;
 
 const samePersonSeat = (a: CustomerAddOnMerged, b: CustomerAddOnMerged): boolean =>
@@ -186,21 +164,17 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
-  // keep old features
-  const [voidingId, setVoidingId] = useState<string | null>(null); // used for ORDER key now
-  const [deletingId, setDeletingId] = useState<string | null>(null); // used for ORDER key now
+  const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingDate, setDeletingDate] = useState<string | null>(null);
 
-  // receipt modal
   const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
 
-  // payment modal
   const [paymentTarget, setPaymentTarget] = useState<OrderGroup | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
-  // paid toggle busy
   const [togglingPaidKey, setTogglingPaidKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -233,6 +207,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       .returns<CustomerSessionAddOnRow[]>();
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error("Error fetching customer_session_add_ons:", error);
       setRecords([]);
       setLoading(false);
@@ -254,7 +229,10 @@ const Admin_Customer_Add_ons: React.FC = () => {
       .in("id", addOnIds)
       .returns<AddOnLookup[]>();
 
-    if (addOnErr) console.error("Error fetching add_ons:", addOnErr);
+    if (addOnErr) {
+      // eslint-disable-next-line no-console
+      console.error("Error fetching add_ons:", addOnErr);
+    }
 
     const addOnMap = new Map<string, AddOnLookup>();
     (addOnRows ?? []).forEach((a) => addOnMap.set(a.id, a));
@@ -288,7 +266,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
   const filteredRecords = useMemo(() => {
     return records
       .filter((r) => extractLocalDate(r.created_at) === selectedDate)
-      .sort((a, b) => ms(a.created_at) - ms(b.created_at)); // ascending for grouping window
+      .sort((a, b) => ms(a.created_at) - ms(b.created_at));
   }, [records, selectedDate]);
 
   const groupedOrders = useMemo<OrderGroup[]>(() => {
@@ -336,11 +314,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       current.grand_total = round2(current.grand_total + row.total);
 
-      // aggregate payment
       current.gcash_amount = round2(current.gcash_amount + row.gcash_amount);
       current.cash_amount = round2(current.cash_amount + row.cash_amount);
 
-      // manual status from DB (if any row paid => show paid)
       current.is_paid = current.is_paid || row.is_paid;
       current.paid_at = current.paid_at ?? row.paid_at;
 
@@ -350,7 +326,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
   }, [filteredRecords]);
 
-  // ✅ VOID ORDER (all items): reverse sold per item then delete rows
   const voidOrder = async (o: OrderGroup): Promise<void> => {
     const ok = window.confirm(
       `VOID this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
@@ -368,7 +343,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
         const qty = Number.isFinite(mergedRow.quantity) ? mergedRow.quantity : 0;
 
-        // 1) read current sold
         const { data: addOn, error: addOnErr } = await supabase
           .from("add_ons")
           .select("id, sold")
@@ -383,20 +357,13 @@ const Admin_Customer_Add_ons: React.FC = () => {
         const currentSold = toNumber(addOn.sold);
         const nextSold = Math.max(0, currentSold - qty);
 
-        // 2) update sold ONLY (stocks + overall_sales are generated)
-        const { error: updErr } = await supabase
-          .from("add_ons")
-          .update({ sold: nextSold })
-          .eq("id", mergedRow.add_on_id);
-
+        const { error: updErr } = await supabase.from("add_ons").update({ sold: nextSold }).eq("id", mergedRow.add_on_id);
         if (updErr) {
           alert(`VOID error: failed to reverse sold. ${updErr.message}`);
           return;
         }
 
-        // 3) delete record row
         const { error: delErr } = await supabase.from("customer_session_add_ons").delete().eq("id", mergedRow.id);
-
         if (delErr) {
           alert(`VOID error: reversed sold but failed to delete record. ${delErr.message}`);
           return;
@@ -405,6 +372,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       await fetchAddOns();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("VOID order failed.");
     } finally {
@@ -412,7 +380,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
   };
 
-  // ✅ DELETE ORDER (all items): delete rows only (no reversal)
   const deleteOrder = async (o: OrderGroup): Promise<void> => {
     const ok = window.confirm(
       `DELETE this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
@@ -434,6 +401,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       await fetchAddOns();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("DELETE order failed.");
     } finally {
@@ -441,9 +409,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
   };
 
-  // ✅ DELETE BY DATE: delete records on selected date ONLY (no reversal)
   const deleteByDate = async (): Promise<void> => {
-    if (!selectedDate) return;
+    if (!selectedDate) {
+      alert("Please select a date first.");
+      return;
+    }
 
     const ok = window.confirm(
       `DELETE ALL add-ons on date: ${selectedDate}?\n\nThis will NOT return stock and NOT reverse sales.`
@@ -468,6 +438,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       await fetchAddOns();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("DELETE by date failed.");
     } finally {
@@ -475,7 +446,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
   };
 
-  // ✅ Export CSV (by selected date only)
   const exportToExcelByDate = (): void => {
     if (!selectedDate) {
       alert("Please select a date.");
@@ -521,9 +491,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  // -----------------------
-  // PAYMENT MODAL (ADMIN)
-  // -----------------------
   const openPaymentModal = (o: OrderGroup): void => {
     const due = round2(Math.max(0, o.grand_total));
 
@@ -556,8 +523,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     setGcashInput(String(gcash));
   };
 
-  // ✅ Save payment updates ALL rows in the order
-  // ✅ Auto set is_paid based on payment vs due
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
@@ -591,6 +556,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       setPaymentTarget(null);
       await fetchAddOns();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
@@ -598,9 +564,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // PAID / UNPAID TOGGLE (manual) — updates ALL rows
-  // -----------------------
   const togglePaid = async (o: OrderGroup): Promise<void> => {
     const itemIds = o.items.map((x) => x.id);
 
@@ -624,6 +587,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       await fetchAddOns();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -633,164 +597,170 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent className="ion-padding">
+      <IonContent scrollY={false} className="staff-content">
         <div className="customer-lists-container">
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <h2 className="customer-lists-title" style={{ margin: 0 }}>
-              Admin Add-Ons Records
-            </h2>
+          {/* TOP BAR (same layout/classes as reservation) */}
+          <div className="customer-topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Admin Add-Ons Records</h2>
+              <div className="customer-subtext">
+                Showing records for: <strong>{selectedDate}</strong> ({groupedOrders.length})
+              </div>
+            </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
+            <div className="customer-topbar-right">
+              <label className="date-pill">
+                <span className="date-pill-label">Date</span>
+                <input
+                  className="date-pill-input"
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                />
+                <span className="date-pill-icon" aria-hidden="true">
+                  📅
+                </span>
+              </label>
 
-              <IonButton size="small" onClick={() => void fetchAddOns()}>
-                Refresh
-              </IonButton>
+              <div className="admin-tools-row">
+                <button className="receipt-btn" onClick={() => void fetchAddOns()}>
+                  Refresh
+                </button>
 
-              <IonButton size="small" onClick={exportToExcelByDate}>
-                Export Excel (Date)
-              </IonButton>
+                <button className="receipt-btn" onClick={exportToExcelByDate} disabled={filteredRecords.length === 0}>
+                  Export to Excel
+                </button>
 
-              <IonButton size="small" color="danger" onClick={deleteByDate} disabled={deletingDate === selectedDate}>
-                {deletingDate === selectedDate ? "Deleting..." : "Delete by Date"}
-              </IonButton>
+                <button
+                  className="receipt-btn admin-danger"
+                  onClick={() => void deleteByDate()}
+                  disabled={filteredRecords.length === 0 || deletingDate === selectedDate}
+                >
+                  {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
+                </button>
+              </div>
             </div>
           </div>
 
-          <div style={{ marginTop: 10, opacity: 0.85 }}>
-            Showing records for: <strong>{selectedDate}</strong>
-          </div>
-
+          {/* TABLE */}
           {loading ? (
-            <div style={{ textAlign: "center", marginTop: 30 }}>
-              <IonSpinner name="crescent" />
-            </div>
+            <p className="customer-note">Loading...</p>
           ) : groupedOrders.length === 0 ? (
-            <p>No add-ons found for this date</p>
+            <p className="customer-note">No add-ons found for this date</p>
           ) : (
-            <table className="customer-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Full Name</th>
-                  <th>Seat</th>
-                  <th>Items</th>
-                  <th>Grand Total</th>
-                  <th>Payment</th>
-                  <th>Paid?</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
+            <div className="customer-table-wrap" key={selectedDate}>
+              <table className="customer-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Full Name</th>
+                    <th>Seat</th>
+                    <th>Items</th>
+                    <th>Grand Total</th>
+                    <th>Payment</th>
+                    <th>Paid?</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
 
-              <tbody>
-                {groupedOrders.map((o) => {
-                  const due = round2(o.grand_total);
-                  const totalPaid = round2(o.gcash_amount + o.cash_amount);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                <tbody>
+                  {groupedOrders.map((o) => {
+                    const due = round2(o.grand_total);
+                    const totalPaid = round2(o.gcash_amount + o.cash_amount);
+                    const remaining = round2(Math.max(0, due - totalPaid));
+                    const paid = toBool(o.is_paid);
+                    const busyOrder = voidingId === o.key || deletingId === o.key;
 
-                  const paid = toBool(o.is_paid);
+                    return (
+                      <tr key={o.key}>
+                        <td>{formatDateTime(o.created_at)}</td>
+                        <td>{o.full_name || "-"}</td>
+                        <td>{o.seat_number || "-"}</td>
 
-                  const busyOrder = voidingId === o.key || deletingId === o.key;
-
-                  return (
-                    <tr key={o.key}>
-                      <td>{new Date(o.created_at).toLocaleString("en-PH")}</td>
-                      <td>{o.full_name || "-"}</td>
-                      <td>{o.seat_number || "-"}</td>
-
-                      {/* ITEMS (display only) */}
-                      <td>
-                        <div style={{ display: "grid", gap: 10, minWidth: 340 }}>
-                          {o.items.map((it) => (
-                            <div
-                              key={it.id}
-                              style={{
-                                display: "grid",
-                                gap: 6,
-                                borderBottom: "1px solid rgba(0,0,0,0.08)",
-                                paddingBottom: 10,
-                              }}
-                            >
-                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                <div style={{ minWidth: 0 }}>
-                                  <div style={{ fontWeight: 900 }}>
-                                    {it.item_name}{" "}
-                                    <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                        {/* ITEMS (class-based, no inline) */}
+                        <td>
+                          <div className="items-list">
+                            {o.items.map((it) => (
+                              <div className="item-row" key={it.id}>
+                                <div className="item-left">
+                                  <div className="item-title">
+                                    {it.item_name} <span className="item-cat">({it.category})</span>
                                   </div>
-                                  <div style={{ opacity: 0.85, fontSize: 13 }}>
+                                  <div className="item-sub">
                                     Qty: {it.quantity} • {moneyText(it.price)}
                                   </div>
                                 </div>
-                                <div style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
+                                <div className="item-total">{moneyText(it.total)}</div>
                               </div>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-
-                      <td style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(due)}</td>
-
-                      <td>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <span style={{ fontWeight: 800 }}>
-                            GCash {moneyText(o.gcash_amount)} / Cash {moneyText(o.cash_amount)}
-                          </span>
-                          <button
-                            className="receipt-btn"
-                            onClick={() => openPaymentModal(o)}
-                            disabled={due <= 0}
-                            title={due <= 0 ? "No amount due" : "Set GCash/Cash payment"}
-                          >
-                            Payment
-                          </button>
-                        </div>
-                      </td>
-
-                      <td>
-                        <button
-                          className="receipt-btn"
-                          onClick={() => void togglePaid(o)}
-                          disabled={togglingPaidKey === o.key}
-                          style={{ background: paid ? "#1b5e20" : "#b00020" }}
-                          title={paid ? "Tap to set UNPAID" : "Tap to set PAID"}
-                        >
-                          {togglingPaidKey === o.key ? "Updating..." : paid ? "PAID" : "UNPAID"}
-                        </button>
-
-                        {remaining > 0 && (
-                          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                            Remaining: <strong>{moneyText(remaining)}</strong>
+                            ))}
                           </div>
-                        )}
-                      </td>
+                        </td>
 
-                      {/* ACTION (View Receipt + Void + Delete) */}
-                      <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button className="receipt-btn" onClick={() => setSelectedOrder(o)}>
-                          View Receipt
-                        </button>
+                        <td>
+                          <div className="cell-stack">
+                            <span className="cell-strong">{moneyText(due)}</span>
+                            {remaining > 0 && <span className="cell-muted">Remaining: {moneyText(remaining)}</span>}
+                          </div>
+                        </td>
 
-                        <button className="receipt-btn" disabled={busyOrder} onClick={() => void voidOrder(o)}>
-                          {voidingId === o.key ? "Voiding..." : "Void"}
-                        </button>
+                        {/* PAYMENT */}
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">
+                              GCash {moneyText(o.gcash_amount)} / Cash {moneyText(o.cash_amount)}
+                            </span>
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openPaymentModal(o)}
+                              disabled={due <= 0}
+                              title={due <= 0 ? "No amount due" : "Set GCash/Cash payment"}
+                            >
+                              Payment
+                            </button>
+                          </div>
+                        </td>
 
-                        <button
-                          className="receipt-btn"
-                          style={{ opacity: 0.9 }}
-                          disabled={busyOrder}
-                          onClick={() => void deleteOrder(o)}
-                        >
-                          {deletingId === o.key ? "Deleting..." : "Delete"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        {/* PAID badge same as reservation */}
+                        <td>
+                          <button
+                            className={`receipt-btn pay-badge ${paid ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            onClick={() => void togglePaid(o)}
+                            disabled={togglingPaidKey === o.key}
+                            title={paid ? "Tap to set UNPAID" : "Tap to set PAID"}
+                          >
+                            {togglingPaidKey === o.key ? "Updating..." : paid ? "PAID" : "UNPAID"}
+                          </button>
+                        </td>
+
+                        {/* ACTION */}
+                        <td>
+                          <div className="action-stack">
+                            <button className="receipt-btn" onClick={() => setSelectedOrder(o)}>
+                              View Receipt
+                            </button>
+
+                            <button className="receipt-btn" disabled={busyOrder} onClick={() => void voidOrder(o)}>
+                              {voidingId === o.key ? "Voiding..." : "Void"}
+                            </button>
+
+                            <button
+                              className="receipt-btn admin-neutral"
+                              disabled={busyOrder}
+                              onClick={() => void deleteOrder(o)}
+                            >
+                              {deletingId === o.key ? "Deleting..." : "Delete"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
 
-          {/* PAYMENT MODAL */}
+          {/* PAYMENT MODAL (same classes as reservation) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -817,24 +787,24 @@ const Admin_Customer_Add_ons: React.FC = () => {
                       <div className="receipt-row">
                         <span>GCash</span>
                         <input
+                          className="money-input"
                           type="number"
                           min="0"
                           step="0.01"
                           value={gcashInput}
                           onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
-                          style={{ width: 160 }}
                         />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
                         <input
+                          className="money-input"
                           type="number"
                           min="0"
                           step="0.01"
                           value={cashInput}
                           onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
-                          style={{ width: 160 }}
                         />
                       </div>
 
@@ -850,16 +820,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
                         <span>{moneyText(remaining)}</span>
                       </div>
 
-                      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} style={{ flex: 1 }}>
+                      <div className="modal-actions">
+                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} disabled={savingPayment}>
                           Cancel
                         </button>
-                        <button
-                          className="receipt-btn"
-                          onClick={() => void savePayment()}
-                          disabled={savingPayment}
-                          style={{ flex: 1 }}
-                        >
+                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment}>
                           {savingPayment ? "Saving..." : "Save"}
                         </button>
                       </div>
@@ -870,7 +835,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL */}
+          {/* RECEIPT MODAL (same classes as reservation) */}
           {selectedOrder && (
             <div className="receipt-overlay" onClick={() => setSelectedOrder(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -883,7 +848,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Date</span>
-                  <span>{new Date(selectedOrder.created_at).toLocaleString("en-PH")}</span>
+                  <span>{formatDateTime(selectedOrder.created_at)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -898,19 +863,21 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
                 <hr />
 
-                {selectedOrder.items.map((it) => (
-                  <div key={it.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 900 }}>
-                        {it.item_name} <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                <div className="items-receipt">
+                  {selectedOrder.items.map((it) => (
+                    <div className="receipt-item-row" key={it.id}>
+                      <div className="receipt-item-left">
+                        <div className="receipt-item-title">
+                          {it.item_name} <span className="item-cat">({it.category})</span>
+                        </div>
+                        <div className="receipt-item-sub">
+                          {it.quantity} × {moneyText(it.price)}
+                        </div>
                       </div>
-                      <div style={{ opacity: 0.8, fontSize: 13 }}>
-                        {it.quantity} × {moneyText(it.price)}
-                      </div>
+                      <div className="receipt-item-total">{moneyText(it.total)}</div>
                     </div>
-                    <div style={{ fontWeight: 1000, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
-                  </div>
-                ))}
+                  ))}
+                </div>
 
                 <hr />
 
@@ -920,7 +887,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
                   const cash = round2(Math.max(0, selectedOrder.cash_amount));
                   const totalPaid = round2(gcash + cash);
                   const remaining = round2(Math.max(0, due - totalPaid));
-
                   const paid = toBool(selectedOrder.is_paid);
 
                   return (
@@ -954,13 +920,13 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Status</span>
-                        <span style={{ fontWeight: 900 }}>{paid ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">{paid ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       {paid && (
                         <div className="receipt-row">
                           <span>Paid at</span>
-                          <span>{selectedOrder.paid_at ? new Date(selectedOrder.paid_at).toLocaleString("en-PH") : "-"}</span>
+                          <span>{selectedOrder.paid_at ? formatDateTime(selectedOrder.paid_at) : "-"}</span>
                         </div>
                       )}
 
