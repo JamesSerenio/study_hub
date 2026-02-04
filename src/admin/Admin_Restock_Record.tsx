@@ -436,9 +436,6 @@ const Admin_Restock_Record: React.FC = () => {
   return (
     <IonPage>
       <IonHeader>
-        <IonToolbar>
-          <IonTitle>Restock Records</IonTitle>
-        </IonToolbar>
       </IonHeader>
 
       {/* ✅ SAME BACKGROUND AS OTHERS */}
