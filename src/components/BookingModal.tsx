@@ -45,7 +45,7 @@ import type {
 } from "@ionic/core";
 
 const HOURLY_RATE = 20;
-const FREE_MINUTES = 5;
+const FREE_MINUTES = 0;
 const SEAT_NA = "N/A";
 const FAR_FUTURE_ISO = new Date("2999-12-31T23:59:59.000Z").toISOString();
 

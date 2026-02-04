@@ -15,7 +15,7 @@ import logo from "../assets/study_hub.png";
 
 
 const HOURLY_RATE = 20;
-const FREE_MINUTES = 5;
+const FREE_MINUTES = 0;
 const DOWN_PAYMENT = 50;
 
 type DiscountKind = "none" | "percent" | "amount";
