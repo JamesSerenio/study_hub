@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   IonButtons,
   IonButton,
@@ -51,6 +51,27 @@ type FlowerStatic = {
 const Staff_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState("dashboard");
+
+  /**
+   * ✅ VERCEL FIRST-LOAD FIX
+   * Some production builds render SplitPane/IonContent with 0/incorrect height
+   * until an interaction happens. We force a layout recalc once after mount.
+   */
+  const [boot, setBoot] = useState(false);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setBoot(true);
+
+      // Force ionic / browser to re-calc layout
+      window.dispatchEvent(new Event("resize"));
+
+      // Extra: trigger a reflow
+      document.body.getBoundingClientRect();
+    }, 0);
+
+    return () => window.clearTimeout(t);
+  }, []);
 
   const menuItems = useMemo(
     () => [
@@ -194,17 +215,20 @@ const Staff_menu: React.FC = () => {
           </IonHeader>
 
           <IonContent className="ion-padding custom-bg">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activePage}
-                initial={{ opacity: 0, y: 18 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -18 }}
-                transition={{ duration: 0.25 }}
-              >
-                {renderContent()}
-              </motion.div>
-            </AnimatePresence>
+            {/* ✅ Render only after boot tick to avoid first-load blank in prod */}
+            {boot && (
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={activePage}
+                  initial={{ opacity: 0, y: 18 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -18 }}
+                  transition={{ duration: 0.25 }}
+                >
+                  {renderContent()}
+                </motion.div>
+              </AnimatePresence>
+            )}
           </IonContent>
         </div>
       </IonSplitPane>

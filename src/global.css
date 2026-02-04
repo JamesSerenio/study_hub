@@ -5,6 +5,13 @@
   font-family: "Poppins", sans-serif;
 }
 
+/* ✅ ROOT HEIGHT FIX (important sa production/Vercel) */
+html,
+body,
+ion-app {
+  height: 100%;
+}
+
 /* REMOVE IONIC BLUE */
 ion-item {
   --highlight-color-focused: transparent;
@@ -12,16 +19,16 @@ ion-item {
   --highlight-color-invalid: transparent;
 }
 
-/* Make the whole page fill screen */
+/* ✅ Make the whole staff page fill viewport */
 .staff-shell-page {
-  height: 100%;
+  min-height: 100vh; /* was height: 100% */
 }
 
 /* Main content must stretch */
 .staff-main-shell {
   width: 100%;
   min-width: 0;
-  height: 100%;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
