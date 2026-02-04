@@ -15,6 +15,7 @@
 // ✅ FIX: DB `date` ALWAYS saves CURRENT DATE (local) even for reservation
 // ✅ NO any
 // ✅ NEW UI: Reservation Date uses scroll/wheel picker (IonDatetimeButton + modal)
+// ✅ NEW FIX: Can save even without login (auto anonymous auth)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -260,6 +261,18 @@ type SeatBlockInsert = {
 };
 
 type SeatBlockInsertResult = { id: string; seat_number: string };
+
+// ✅ NEW: create/get user session automatically (anonymous)
+const ensureAuthUserId = async (): Promise<string> => {
+  const { data: sess } = await supabase.auth.getSession();
+  if (sess?.session?.user?.id) return sess.session.user.id;
+
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error || !data?.user?.id) {
+    throw new Error(error?.message ?? "Anonymous sign-in failed. Enable Anonymous provider in Supabase.");
+  }
+  return data.user.id;
+};
 
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
@@ -614,8 +627,14 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
     }
 
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth?.user) return alert("You must be logged in to save records.");
+    // ✅ NEW: no-login needed; auto anonymous user id
+    let userId: string;
+    try {
+      userId = await ensureAuthUserId();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown auth error";
+      return alert(msg);
+    }
 
     const startIsoToStore =
       form.reservation && reservationStartIso ? reservationStartIso : new Date().toISOString();
@@ -674,14 +693,14 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           form.seat_number,
           startIsoToStore,
           timeEndedToStore,
-          auth.user.id
+          userId
         );
         createdBlockIds = created.map((r) => r.id);
       }
 
       const { error: sessionErr } = await supabase.from("customer_sessions").insert({
-        staff_id: auth.user.id,
-        date: dateToStore, // ✅ current date always
+        staff_id: null, // ✅ allow saving without staff/admin login
+        date: dateToStore,
         full_name: trimmedName,
         customer_type: form.customer_type,
         customer_field: form.customer_field,
@@ -694,7 +713,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         total_amount: timeAmount,
         seat_number: seatToStore,
         reservation: form.reservation ? "yes" : "no",
-        reservation_date: form.reservation_date ?? null, // ✅ selected reservation date stays here
+        reservation_date: form.reservation_date ?? null,
       });
 
       if (sessionErr) {
@@ -703,7 +722,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error";
-      return alert(`Error blocking seat(s): ${msg}`);
+      return alert(`Error saving: ${msg}`);
     }
 
     const wasReservation = form.reservation;
@@ -834,7 +853,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 setRefreshSeatsTick((x) => x + 1);
 
                 if (checked) {
-                  commitReservationTime(timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am");
+                  commitReservationTime(
+                    timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am"
+                  );
                 }
               }}
             />
@@ -843,7 +864,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           {form.reservation && (
             <>
-              {/* ✅ NEW: scroll/wheel date picker (not inline calendar) */}
               <IonItem className="form-item">
                 <IonLabel position="stacked">Reservation Date</IonLabel>
 
@@ -997,11 +1017,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             {form.reservation && (
               <p className="summary-text">
                 <strong>Seat:</strong>{" "}
-                {isSeatPickReady
-                  ? form.seat_number.length
-                    ? form.seat_number.join(", ")
-                    : "None"
-                  : "—"}
+                {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
               </p>
             )}
           </div>
