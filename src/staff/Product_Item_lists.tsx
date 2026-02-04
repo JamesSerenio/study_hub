@@ -5,6 +5,10 @@
 // ✅ If expenses_cost is 0 => fallback to price
 // ✅ Sort by Category OR Stock (asc/desc)
 // ✅ SEARCH (name/category) + classnames for CSS
+// ✅ NEW: Add Cash Outs modal (logs to cash_outs)
+// ✅ Cash Outs fields: type, description, amount
+// ✅ Uses SAME pil-* classnames for styling
+// ✅ FIX: Cash outs now checks Supabase Auth session + shows real error
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -41,6 +45,7 @@ import {
   addCircleOutline,
   swapVerticalOutline,
   searchOutline,
+  cashOutline,
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 import type {
@@ -89,6 +94,12 @@ interface AddOnExpenseInsert {
   description: string;
 }
 
+interface CashOutInsert {
+  type: string;
+  description: string | null;
+  amount: number;
+}
+
 /* =========================
    SAFE PARSE HELPERS
 ========================= */
@@ -109,7 +120,27 @@ const clampInt = (raw: string, fallback = 0): number => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const clampMoney = (raw: string, fallback = 0): number => {
+  const cleaned = raw.replace(/,/g, "").trim();
+  if (!cleaned) return fallback;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : fallback;
+};
+
 const money2 = (n: number): string => `₱${n.toFixed(2)}`;
+
+/* =========================
+   AUTH HELPERS
+========================= */
+
+const getAuthedUserId = async (): Promise<string | null> => {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) {
+    console.error("getUser error:", error);
+    return null;
+  }
+  return data.user?.id ?? null;
+};
 
 /* =========================
    AUTO COMPUTE
@@ -155,17 +186,26 @@ const Product_Item_Lists: React.FC = () => {
   // ✅ search
   const [search, setSearch] = useState<string>("");
 
-  // modal
+  // EXPENSES modal
   const [isExpenseOpen, setIsExpenseOpen] = useState<boolean>(false);
   const [savingExpense, setSavingExpense] = useState<boolean>(false);
 
-  // form
+  // EXPENSES form
   const [fullName, setFullName] = useState<string>("");
   const [selectedAddOnId, setSelectedAddOnId] = useState<string>("");
   const [expenseType, setExpenseType] = useState<ExpenseType>("expired");
   const [qty, setQty] = useState<string>("1");
   const [expenseAmount, setExpenseAmount] = useState<string>("0"); // auto
   const [description, setDescription] = useState<string>("");
+
+  // CASH OUTS modal
+  const [isCashOutOpen, setIsCashOutOpen] = useState<boolean>(false);
+  const [savingCashOut, setSavingCashOut] = useState<boolean>(false);
+
+  // CASH OUTS form
+  const [cashOutType, setCashOutType] = useState<string>("");
+  const [cashOutDesc, setCashOutDesc] = useState<string>("");
+  const [cashOutAmount, setCashOutAmount] = useState<string>("");
 
   const fetchAddOns = async (): Promise<void> => {
     setLoading(true);
@@ -190,6 +230,11 @@ const Product_Item_Lists: React.FC = () => {
 
   useEffect(() => {
     void fetchAddOns();
+
+    // ✅ optional debug: check session
+    void supabase.auth.getSession().then(({ data }) => {
+      console.log("SESSION:", data.session);
+    });
   }, []);
 
   const handleRefresh = (event: CustomEvent<RefresherEventDetail>): void => {
@@ -213,7 +258,6 @@ const Product_Item_Lists: React.FC = () => {
     return list;
   }, [addOns, sortKey, sortOrder]);
 
-  // ✅ filter by search (name/category)
   const filteredAddOns = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return sortedAddOns;
@@ -233,11 +277,14 @@ const Product_Item_Lists: React.FC = () => {
     return addOns.find((a) => a.id === selectedAddOnId) ?? null;
   }, [addOns, selectedAddOnId]);
 
-  // ✅ AUTO recompute when product or qty changes
   useEffect(() => {
     const total = computeExpenseAmount(selectedAddOn, qty);
     setExpenseAmount(String(total));
   }, [selectedAddOn?.id, qty]);
+
+  /* =========================
+     EXPENSES MODAL CONTROLS
+  ========================= */
 
   const openExpenseModal = (): void => {
     setFullName("");
@@ -307,19 +354,98 @@ const Product_Item_Lists: React.FC = () => {
     setSavingExpense(true);
     try {
       const { error } = await supabase.from("add_on_expenses").insert(payload);
-      if (error) throw error;
+      if (error) {
+        console.error("add_on_expenses insert error:", error);
+        setToastMessage(error.message);
+        setShowToast(true);
+        return;
+      }
 
       setToastMessage("Expense recorded.");
       setShowToast(true);
 
       setIsExpenseOpen(false);
       await fetchAddOns();
-    } catch (e) {
-      console.error("Error saving expense:", e);
-      setToastMessage("Failed to save expense. Please try again.");
-      setShowToast(true);
     } finally {
       setSavingExpense(false);
+    }
+  };
+
+  /* =========================
+     CASH OUTS MODAL CONTROLS
+  ========================= */
+
+  const openCashOutModal = (): void => {
+    setCashOutType("");
+    setCashOutDesc("");
+    setCashOutAmount("");
+    setIsCashOutOpen(true);
+  };
+
+  const closeCashOutModal = (): void => {
+    if (savingCashOut) return;
+    setIsCashOutOpen(false);
+  };
+
+  const validateCashOut = (): string | null => {
+    const t = cashOutType.trim();
+    if (!t) return "Type is required.";
+
+    const amt = clampMoney(cashOutAmount, -1);
+    if (amt < 0) return "Amount must be 0 or higher.";
+    if (amt === 0) return "Amount must be greater than 0.";
+
+    return null;
+  };
+
+  // ✅ FIXED: checks auth session + shows real supabase error
+  const submitCashOut = async (): Promise<void> => {
+    const err = validateCashOut();
+    if (err) {
+      setToastMessage(err);
+      setShowToast(true);
+      return;
+    }
+
+    const uid = await getAuthedUserId();
+    if (!uid) {
+      setToastMessage("Walang Supabase session. Mag-login ulit (Supabase Auth).");
+      setShowToast(true);
+      return;
+    }
+
+    const payload: CashOutInsert = {
+      type: cashOutType.trim(),
+      description: cashOutDesc.trim() ? cashOutDesc.trim() : null,
+      amount: clampMoney(cashOutAmount, 0),
+    };
+
+    setSavingCashOut(true);
+    try {
+      const { data, error } = await supabase
+        .from("cash_outs")
+        .insert(payload)
+        .select("id, created_by, created_at")
+        .single();
+
+      if (error) {
+        console.error("cash_outs insert error:", error);
+        setToastMessage(error.message);
+        setShowToast(true);
+        return;
+      }
+
+      console.log("cash_out saved:", data);
+
+      setToastMessage("Cash out saved.");
+      setShowToast(true);
+
+      setIsCashOutOpen(false);
+      setCashOutType("");
+      setCashOutDesc("");
+      setCashOutAmount("");
+    } finally {
+      setSavingCashOut(false);
     }
   };
 
@@ -329,6 +455,9 @@ const Product_Item_Lists: React.FC = () => {
   return (
     <IonPage className="pil-page">
       <IonHeader className="pil-header">
+        <IonToolbar className="pil-toolbar">
+          <IonTitle className="pil-title">Product Item Lists</IonTitle>
+        </IonToolbar>
       </IonHeader>
 
       <IonContent className="pil-content">
@@ -341,6 +470,11 @@ const Product_Item_Lists: React.FC = () => {
           <IonButton className="pil-btn pil-btn--primary" onClick={openExpenseModal}>
             <IonIcon slot="start" icon={addCircleOutline} />
             Add Expenses
+          </IonButton>
+
+          <IonButton className="pil-btn pil-btn--primary" onClick={openCashOutModal}>
+            <IonIcon slot="start" icon={cashOutline} />
+            Add Cash Outs
           </IonButton>
 
           <IonItem lines="none" className="pil-sort-item">
@@ -363,7 +497,7 @@ const Product_Item_Lists: React.FC = () => {
             <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
           </IonButton>
 
-          {/* ✅ SEARCH BAR */}
+          {/* SEARCH */}
           <div className="pil-search">
             <IonItem lines="none" className="pil-search-item">
               <IonIcon className="pil-search-ico" icon={searchOutline} />
@@ -408,7 +542,6 @@ const Product_Item_Lists: React.FC = () => {
           ) : (
             <div className="pil-table-wrap">
               <IonGrid className="pil-grid">
-                {/* HEAD */}
                 <IonRow className="pil-row pil-row--head">
                   <IonCol className="pil-col pil-col--img">Image</IonCol>
                   <IonCol className="pil-col pil-col--strong">Name</IonCol>
@@ -425,7 +558,6 @@ const Product_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col">Expected</IonCol>
                 </IonRow>
 
-                {/* BODY */}
                 {filteredAddOns.map((a) => (
                   <IonRow className="pil-row" key={a.id}>
                     <IonCol className="pil-col pil-col--img">
@@ -601,7 +733,8 @@ const Product_Item_Lists: React.FC = () => {
 
                   {unitInfo.source === "price" && (
                     <div className="pil-summary-warn">
-                      Note: expenses_cost is 0, so we used price as fallback. Set expenses_cost to match your real unit cost.
+                      Note: expenses_cost is 0, so we used price as fallback. Set expenses_cost to match your real unit
+                      cost.
                     </div>
                   )}
                 </div>
@@ -631,10 +764,98 @@ const Product_Item_Lists: React.FC = () => {
           </IonContent>
         </IonModal>
 
+        {/* ADD CASH OUTS MODAL */}
+        <IonModal isOpen={isCashOutOpen} onDidDismiss={closeCashOutModal} className="pil-modal">
+          <IonHeader className="pil-modal-header">
+            <IonToolbar className="pil-modal-toolbar">
+              <IonTitle className="pil-modal-title">Add Cash Outs</IonTitle>
+              <IonButtons slot="end">
+                <IonButton className="pil-btn" onClick={closeCashOutModal} disabled={savingCashOut}>
+                  <IonIcon icon={closeOutline} />
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+
+          <IonContent className="pil-modal-content">
+            <div className="pil-modal-card">
+              <IonList className="pil-form">
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Type
+                  </IonLabel>
+                  <IonInput
+                    className="pil-input"
+                    value={cashOutType}
+                    placeholder="Example: Water / Food / Transportation / Personal"
+                    onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
+                      setCashOutType(String(e.detail.value ?? ""))
+                    }
+                  />
+                </IonItem>
+
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Description
+                  </IonLabel>
+                  <IonTextarea
+                    className="pil-textarea"
+                    value={cashOutDesc}
+                    placeholder="Example: refill 2 gal / allowance"
+                    autoGrow
+                    onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) =>
+                      setCashOutDesc(String(e.detail.value ?? ""))
+                    }
+                  />
+                </IonItem>
+
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Amount
+                  </IonLabel>
+                  <IonInput
+                    className="pil-input"
+                    inputMode="decimal"
+                    value={cashOutAmount}
+                    placeholder="0.00"
+                    onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
+                      setCashOutAmount(String(e.detail.value ?? ""))
+                    }
+                  />
+                  <div className="pil-hint" style={{ padding: "10px 14px 0" }}>
+                    Preview: <b>{money2(clampMoney(cashOutAmount, 0))}</b>
+                  </div>
+                </IonItem>
+              </IonList>
+
+              <div className="pil-modal-actions">
+                <IonButton
+                  className="pil-btn pil-btn--primary"
+                  expand="block"
+                  onClick={submitCashOut}
+                  disabled={savingCashOut}
+                >
+                  {savingCashOut ? "Saving..." : "Save Cash Outs"}
+                </IonButton>
+
+                <IonButton
+                  className="pil-btn"
+                  expand="block"
+                  fill="outline"
+                  onClick={closeCashOutModal}
+                  disabled={savingCashOut}
+                >
+                  Cancel
+                </IonButton>
+              </div>
+            </div>
+          </IonContent>
+        </IonModal>
+
         <IonToast
           isOpen={showToast}
           message={toastMessage}
-          duration={3000}
+          duration={3500}
           onDidDismiss={() => setShowToast(false)}
         />
       </IonContent>

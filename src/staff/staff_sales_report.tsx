@@ -171,11 +171,6 @@ const valueToNonNegMoney = (v: unknown): number => {
 };
 
 /* =========================
-   TIME DISPLAY (hours -> hr/min)
-========================= */
-
-
-/* =========================
    DATE HELPERS
 ========================= */
 
@@ -213,14 +208,17 @@ const StaffSalesReport: React.FC = () => {
   // ✅ ADD-ONS (PAID ONLY)
   const [addonsPaid, setAddonsPaid] = useState<number>(0);
 
+  // ✅ CASH OUTS TOTAL (cashout_date)
+  const [cashOutsTotal, setCashOutsTotal] = useState<number>(0);
+
   const [submitting, setSubmitting] = useState(false);
-  const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>([
+  const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(
     {
       open: false,
       msg: "",
       color: "success",
-    },
-  ][0]);
+    }
+  );
 
   /* =========================
      LOAD / ENSURE REPORT
@@ -229,7 +227,10 @@ const StaffSalesReport: React.FC = () => {
   const ensureReportRow = async (dateYMD: string): Promise<void> => {
     const upsertRes = await supabase
       .from("daily_sales_reports")
-      .upsert({ report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 }, { onConflict: "report_date", ignoreDuplicates: true });
+      .upsert(
+        { report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 },
+        { onConflict: "report_date", ignoreDuplicates: true }
+      );
 
     if (upsertRes.error) {
       console.error("daily_sales_reports ensure(upsert) error:", upsertRes.error.message);
@@ -245,6 +246,7 @@ const StaffSalesReport: React.FC = () => {
       setTotals(null);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       setAddonsPaid(0);
+      setCashOutsTotal(0);
       setLoading(false);
       return;
     }
@@ -264,6 +266,7 @@ const StaffSalesReport: React.FC = () => {
       setTotals(null);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       setAddonsPaid(0);
+      setCashOutsTotal(0);
       setLoading(false);
       return;
     }
@@ -274,6 +277,9 @@ const StaffSalesReport: React.FC = () => {
       setReport({ ...r, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 });
       setLines(buildZeroLines(r.id));
       setTotals(null);
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      setAddonsPaid(0);
+      setCashOutsTotal(0); // ✅ IMPORTANT: hide cash outs when submitted (same behavior)
       setLoading(false);
       return;
     }
@@ -283,7 +289,10 @@ const StaffSalesReport: React.FC = () => {
   };
 
   const loadCashLines = async (reportId: string): Promise<void> => {
-    const res = await supabase.from("daily_cash_count_lines").select("report_id, money_kind, denomination, qty").eq("report_id", reportId);
+    const res = await supabase
+      .from("daily_cash_count_lines")
+      .select("report_id, money_kind, denomination, qty")
+      .eq("report_id", reportId);
 
     if (res.error) {
       console.error("daily_cash_count_lines select error:", res.error.message);
@@ -312,7 +321,11 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("v_daily_sales_report_totals").select("*").eq("report_date", dateYMD).single<SalesTotalsRow>();
+    const res = await supabase
+      .from("v_daily_sales_report_totals")
+      .select("*")
+      .eq("report_date", dateYMD)
+      .single<SalesTotalsRow>();
 
     if (res.error) {
       console.error("v_daily_sales_report_totals error:", res.error.message);
@@ -325,6 +338,7 @@ const StaffSalesReport: React.FC = () => {
 
   /**
    * ✅ CONSIGNMENT: PAID ONLY (paid_at date)
+   * ✅ BUT if submitted => show zero (handled by caller)
    */
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -360,6 +374,7 @@ const StaffSalesReport: React.FC = () => {
 
   /**
    * ✅ ADD-ONS: PAID ONLY (paid_at date)
+   * ✅ BUT if submitted => show zero (handled by caller)
    */
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -389,6 +404,29 @@ const StaffSalesReport: React.FC = () => {
     setAddonsPaid(gross);
   };
 
+  /**
+   * ✅ CASH OUTS: TOTAL (cashout_date = selected date)
+   * ✅ BUT if submitted => show zero (handled by caller)
+   */
+  const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setCashOutsTotal(0);
+      return;
+    }
+
+    const res = await supabase.from("cash_outs").select("amount, cashout_date").eq("cashout_date", dateYMD);
+
+    if (res.error) {
+      console.error("cash_outs query error:", res.error.message);
+      setCashOutsTotal(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as Array<{ amount: number | string | null }>;
+    const total = rows.reduce((sum, r) => sum + toNumber(r.amount), 0);
+    setCashOutsTotal(total);
+  };
+
   const upsertQty = async (line: CashLine, qty: number): Promise<void> => {
     if (submitting) return;
 
@@ -402,7 +440,10 @@ const StaffSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("daily_cash_count_lines")
-      .upsert({ report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty }, { onConflict: "report_id,money_kind,denomination" });
+      .upsert(
+        { report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty },
+        { onConflict: "report_id,money_kind,denomination" }
+      );
 
     if (res.error) {
       console.error("daily_cash_count_lines upsert error:", res.error.message);
@@ -416,7 +457,10 @@ const StaffSalesReport: React.FC = () => {
     await loadTotals(selectedDate);
   };
 
-  const updateReportField = async (field: "starting_cash" | "starting_gcash" | "bilin_amount", valueNum: number): Promise<void> => {
+  const updateReportField = async (
+    field: "starting_cash" | "starting_gcash" | "bilin_amount",
+    valueNum: number
+  ): Promise<void> => {
     if (!report || submitting) return;
 
     const safe = Math.max(0, valueNum);
@@ -449,6 +493,7 @@ const StaffSalesReport: React.FC = () => {
     setTotals(null);
     setConsignment({ gross: 0, fee15: 0, net: 0 });
     setAddonsPaid(0);
+    setCashOutsTotal(0);
     setSelectedDate(next);
   };
 
@@ -479,7 +524,9 @@ const StaffSalesReport: React.FC = () => {
     }));
 
     if (payload.length > 0) {
-      const r2 = await supabase.from("daily_cash_count_lines").upsert(payload, { onConflict: "report_id,money_kind,denomination" });
+      const r2 = await supabase
+        .from("daily_cash_count_lines")
+        .upsert(payload, { onConflict: "report_id,money_kind,denomination" });
       if (r2.error) return r2.error.message;
     }
 
@@ -503,13 +550,21 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("daily_sales_reports").update({ is_submitted: true, submitted_at: new Date().toISOString() }).eq("id", report.id);
+    const res = await supabase
+      .from("daily_sales_reports")
+      .update({ is_submitted: true, submitted_at: new Date().toISOString() })
+      .eq("id", report.id);
 
     if (res.error) {
       setToast({ open: true, msg: `Submit failed: ${res.error.message}`, color: "danger" });
       setSubmitting(false);
       return;
     }
+
+    // ✅ make UI behave like others: after submit, totals hidden/zero
+    setConsignment({ gross: 0, fee15: 0, net: 0 });
+    setAddonsPaid(0);
+    setCashOutsTotal(0);
 
     setToast({ open: true, msg: `DONE saved for ${selectedDate}. Moving to next day…`, color: "success" });
 
@@ -522,9 +577,39 @@ const StaffSalesReport: React.FC = () => {
   ========================= */
 
   useEffect(() => {
-    void loadReport(selectedDate);
-    void loadConsignment(selectedDate);
-    void loadAddonsPaid(selectedDate);
+    void (async () => {
+      // loadReport will set report/is_submitted state
+      await loadReport(selectedDate);
+
+      // IMPORTANT: after loadReport, we need the current report status,
+      // but setState is async, so we re-check directly from DB to decide
+      // whether to show totals or zero.
+      if (!isYMD(selectedDate)) {
+        setConsignment({ gross: 0, fee15: 0, net: 0 });
+        setAddonsPaid(0);
+        setCashOutsTotal(0);
+        return;
+      }
+
+      const check = await supabase
+        .from("daily_sales_reports")
+        .select("is_submitted")
+        .eq("report_date", selectedDate)
+        .single<{ is_submitted: boolean }>();
+
+      const isSubmitted = Boolean(check.data?.is_submitted);
+
+      if (isSubmitted) {
+        // ✅ same behavior as others: once submitted, show 0 even if you go back
+        setConsignment({ gross: 0, fee15: 0, net: 0 });
+        setAddonsPaid(0);
+        setCashOutsTotal(0);
+      } else {
+        void loadConsignment(selectedDate);
+        void loadAddonsPaid(selectedDate);
+        void loadCashOutsTotal(selectedDate);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
@@ -554,7 +639,6 @@ const StaffSalesReport: React.FC = () => {
     return lines.filter((l) => l.money_kind === "coin").reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
-  // still computed but not shown (we removed "Sales Collected" box)
   const coh = totals ? toNumber(totals.coh_total) : 0;
   const salesCollected = totals ? toNumber(totals.sales_collected) : coh;
 
@@ -565,18 +649,13 @@ const StaffSalesReport: React.FC = () => {
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
-  // ✅ paid-only add-ons
   const addons = addonsPaid;
 
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const systemSale = totals ? toNumber(totals.system_sale) : 0;
 
-  // ✅ FIXED TOTAL TIME: use totals.total_time (hours)
-  // same as admin — AMOUNT not hours
-const totalTimeAmount =
-  (totals ? toNumber(totals.walkin_cash) : 0) +
-  (totals ? toNumber(totals.walkin_gcash) : 0);
-
+  const totalTimeAmount =
+    (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
 
   if (loading) {
     return (
@@ -595,8 +674,7 @@ const totalTimeAmount =
 
   return (
     <IonPage>
-      <IonHeader>
-      </IonHeader>
+      <IonHeader></IonHeader>
 
       <IonContent className="ion-padding ssr-page">
         <IonToast
@@ -632,7 +710,12 @@ const totalTimeAmount =
                       }}
                     />
 
-                    <IonButton className="ssr-cal-btn" fill="clear" disabled={submitting} onClick={() => setDatePickerOpen(true)}>
+                    <IonButton
+                      className="ssr-cal-btn"
+                      fill="clear"
+                      disabled={submitting}
+                      onClick={() => setDatePickerOpen(true)}
+                    >
                       <IonIcon icon={calendarOutline} />
                     </IonButton>
                   </div>
@@ -740,8 +823,12 @@ const totalTimeAmount =
 
                   <div className="ssr-left-row ssr-left-row--tint">
                     <div className="ssr-left-label">Paid reservations for this date</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.paid_reservation_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.paid_reservation_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">
+                      {peso(totals ? toNumber(totals.paid_reservation_cash) : 0)}
+                    </div>
+                    <div className="ssr-left-value ssr-left-value--gcash">
+                      {peso(totals ? toNumber(totals.paid_reservation_gcash) : 0)}
+                    </div>
                   </div>
 
                   <div className="ssr-left-row">
@@ -772,7 +859,7 @@ const totalTimeAmount =
                     </div>
                   </div>
 
-                  {/* CONSIGNMENT like Admin */}
+                  {/* CONSIGNMENT + CASH OUTS (hidden when submitted by state values) */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
@@ -785,6 +872,10 @@ const totalTimeAmount =
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Net</span>
                       <span className="ssr-sales-box-value">{peso(consignment.net)}</span>
+                    </div>
+                    <div className="ssr-sales-box">
+                      <span className="ssr-sales-box-label">Cash Outs</span>
+                      <span className="ssr-sales-box-value">{peso(cashOutsTotal)}</span>
                     </div>
                   </div>
                 </IonCardContent>
@@ -890,7 +981,6 @@ const totalTimeAmount =
                       />
                     </div>
 
-                    {/* ✅ Renamed: Net -> Sales Collected (and old Sales Collected removed) */}
                     <div className="ssr-collected-box ssr-collected-box--net">
                       <div className="ssr-collected-label">Sales Collected</div>
                       <div className="ssr-collected-value">{peso(netCollected)}</div>
