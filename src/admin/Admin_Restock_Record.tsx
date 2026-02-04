@@ -442,7 +442,7 @@ const Admin_Restock_Record: React.FC = () => {
       </IonHeader>
 
       {/* ✅ SAME BACKGROUND AS OTHERS */}
-      <IonContent className="staff-content" scrollY={false}>
+      <IonContent className="staff-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>
