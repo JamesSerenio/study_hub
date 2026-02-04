@@ -1,10 +1,10 @@
 // src/admin/Admin_menu.tsx
-// ✅ SAME CLASSNAMES AS Staff_menu (staff-menu / staff-menu-header / staff-menu-content / menu-flowers / menu-flower / menu-items-layer)
-// ✅ Added STATIC flowers (NO appear/disappear)
-// ✅ Keeps your existing pages/files/menu items (WALANG papalitan sa files)
-// ✅ FIX: Wrap in ONE IonPage so mobile widths (360-767) won't become "half" on local + Vercel
+// ✅ SAME CLASSNAMES AS Staff_menu
+// ✅ STATIC flowers
+// ✅ Keeps your existing pages/files/menu items
+// ✅ VERCEL FIX: boot + resize/reflow so dashboard shows immediately after login
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   IonButtons,
   IonButton,
@@ -17,7 +17,7 @@ import {
   IonSplitPane,
   IonToolbar,
   IonIcon,
-  IonPage, // ✅ ADD
+  IonPage,
 } from "@ionic/react";
 import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
@@ -51,8 +51,6 @@ import hamburgerIcon from "../assets/hamburger.png";
 import salesIcon from "../assets/sales.png";
 import restockIcon from "../assets/restock.png";
 import studyHubLogo from "../assets/study_hub.png";
-
-/* 🌼 STATIC flower background */
 import flowerImg from "../assets/flower.png";
 
 type MenuKey =
@@ -87,6 +85,19 @@ type FlowerStatic = {
 const Admin_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState<MenuKey>("dashboard");
+
+  // ✅ VERCEL FIRST-LOAD FIX (same as staff)
+  const [boot, setBoot] = useState(false);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setBoot(true);
+      window.dispatchEvent(new Event("resize"));
+      document.body.getBoundingClientRect(); // reflow
+    }, 0);
+
+    return () => window.clearTimeout(t);
+  }, []);
 
   const menuItems: MenuItem[] = useMemo(
     () => [
@@ -233,9 +244,7 @@ const Admin_menu: React.FC = () => {
           </IonContent>
         </IonMenu>
 
-        {/* ================= MAIN =================
-            ✅ Keep real DOM element with id="main"
-        */}
+        {/* ================= MAIN ================= */}
         <div id="main" className="staff-main-shell">
           <IonHeader>
             <IonToolbar>
@@ -247,17 +256,20 @@ const Admin_menu: React.FC = () => {
           </IonHeader>
 
           <IonContent className="ion-padding custom-bg">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activePage}
-                initial={{ opacity: 0, y: 18 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -18 }}
-                transition={{ duration: 0.25 }}
-              >
-                {renderContent()}
-              </motion.div>
-            </AnimatePresence>
+            {/* ✅ render after boot so Vercel shows immediately */}
+            {boot && (
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={activePage}
+                  initial={{ opacity: 0, y: 18 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -18 }}
+                  transition={{ duration: 0.25 }}
+                >
+                  {renderContent()}
+                </motion.div>
+              </AnimatePresence>
+            )}
           </IonContent>
         </div>
       </IonSplitPane>
