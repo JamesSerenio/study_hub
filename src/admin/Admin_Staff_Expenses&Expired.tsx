@@ -209,7 +209,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
   return (
     <IonPage>
       {/* ✅ SAME BACKGROUND as other pages */}
-      <IonContent className="staff-content" scrollY={false}>
+      <IonContent className="staff-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>

@@ -767,7 +767,7 @@ const Admin_customer_reservation: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent scrollY={false} className="staff-content">
+      <IonContent className="staff-content">
         <div className="customer-lists-container">
           {/* TOP BAR (same layout/classes as Admin_customer_list) */}
           <div className="customer-topbar">

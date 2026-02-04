@@ -234,7 +234,7 @@ const Admin_Dashboard: React.FC = () => {
     <IonPage>
       <IonHeader>{/* keep your toolbar if meron ka */}</IonHeader>
 
-      <IonContent className="admin-dash-content" scrollY={true}>
+      <IonContent className="admin-dash-content">
         <div className="dash-wrap">
           {/* ✅ TOTALS */}
           <div className="dash-totals-wrap">

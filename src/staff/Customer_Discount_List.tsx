@@ -606,7 +606,7 @@ const Customer_Discount_List: React.FC = () => {
   return (
     <IonPage>
       {/* ✅ SAME PAGE BACKGROUND setup as Customer_Lists */}
-      <IonContent scrollY={false} className="staff-content">
+      <IonContent className="staff-content">
         <div className="customer-lists-container">
           {/* TOP BAR (same classes as Customer_Lists) */}
           <div className="customer-topbar">

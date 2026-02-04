@@ -800,7 +800,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
   return (
     <IonPage>
-      <IonContent scrollY={false} className="staff-content">
+      <IonContent className="staff-content">
         <div className="customer-lists-container">
           {/* TOP BAR (same layout) */}
           <div className="customer-topbar">

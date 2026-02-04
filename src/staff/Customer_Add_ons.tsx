@@ -433,7 +433,7 @@ const Customer_Add_ons: React.FC = () => {
   return (
     <IonPage>
       {/* ✅ SAME BACKGROUND as Customer_Lists */}
-      <IonContent scrollY={false} className="staff-content">
+      <IonContent className="staff-content">
         <div className="customer-lists-container">
           {/* ✅ SAME TOPBAR + SAME DATE PILL CALENDAR as Customer_Lists */}
           <div className="customer-topbar">

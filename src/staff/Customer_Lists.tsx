@@ -493,7 +493,7 @@ const Customer_Lists: React.FC = () => {
   return (
     <IonPage>
       {/* ✅ SAME BACKGROUND as Seat Map page: use staff-content */}
-      <IonContent scrollY={false} className="staff-content">
+      <IonContent className="staff-content">
         <div className="customer-lists-container">
           {/* TOP BAR */}
           <div className="customer-topbar">

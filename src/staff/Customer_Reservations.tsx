@@ -625,7 +625,7 @@ const Customer_Reservations: React.FC = () => {
   return (
     <IonPage>
       {/* ✅ SAME BACKGROUND as other pages */}
-      <IonContent scrollY={false} className="staff-content">
+      <IonContent className="staff-content">
         <div className="customer-lists-container">
           {/* TOP BAR (same as Customer_Lists) */}
           <div className="customer-topbar">
