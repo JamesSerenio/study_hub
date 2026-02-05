@@ -3,6 +3,10 @@ import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
+// ✅ Excel export (REAL XLSX + images)
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
+
 type NumericLike = number | string;
 
 interface AddOnInfo {
@@ -30,6 +34,7 @@ interface AddOnLookup {
   id: string;
   name: string;
   category: string;
+  image_url: string | null; // ✅ NEW (for excel image)
 }
 
 interface CustomerAddOnMerged {
@@ -43,6 +48,7 @@ interface CustomerAddOnMerged {
   seat_number: string;
   item_name: string;
   category: string;
+  image_url: string | null; // ✅ NEW
 
   gcash_amount: number;
   cash_amount: number;
@@ -133,8 +139,6 @@ const formatTimeText = (iso: string): string => {
   return d.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
 };
 
-const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
-
 const localDayRangeIso = (yyyyMmDd: string): { startIso: string; endIso: string } => {
   const [y, m, d] = yyyyMmDd.split("-").map((x) => Number(x));
   const start = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
@@ -155,6 +159,105 @@ const GROUP_WINDOW_MS = 10_000;
 
 const samePersonSeat = (a: CustomerAddOnMerged, b: CustomerAddOnMerged): boolean =>
   norm(a.full_name) === norm(b.full_name) && norm(a.seat_number) === norm(b.seat_number);
+
+/* =========================
+   ✅ Excel helpers
+========================= */
+
+const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
+
+const cellText = (v: ExcelJS.Cell["value"]): string => {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  if (v instanceof Date) return v.toLocaleString();
+  return String(v);
+};
+
+const autoFitColumns = (
+  ws: ExcelJS.Worksheet,
+  startRow: number,
+  endRow: number,
+  cols: number[],
+  minMap: Record<number, number>,
+  maxMap: Record<number, number>
+): void => {
+  for (const c of cols) {
+    let maxLen = 0;
+    for (let r = startRow; r <= endRow; r++) {
+      const t = cellText(ws.getRow(r).getCell(c).value).trim();
+      if (!t) continue;
+      maxLen = Math.max(maxLen, t.length);
+    }
+    const minW = minMap[c] ?? 8;
+    const maxW = maxMap[c] ?? 40;
+    ws.getColumn(c).width = clamp(Math.ceil(maxLen + 2), minW, maxW);
+  }
+};
+
+const applyHeaderStyle = (row: ExcelJS.Row, startCol: number, endCol: number): void => {
+  row.font = { bold: true };
+  row.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  row.height = 20;
+
+  for (let c = startCol; c <= endCol; c++) {
+    const cell = row.getCell(c);
+    cell.border = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEFEF" } };
+  }
+};
+
+const applyBorders = (row: ExcelJS.Row, startCol: number, endCol: number): void => {
+  for (let c = startCol; c <= endCol; c++) {
+    row.getCell(c).border = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+  }
+};
+
+// ✅ fetch image -> base64 (ExcelJS addImage)
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+};
+
+const guessImageExtension = (url: string, contentType: string | null): "png" | "jpeg" => {
+  const ct = (contentType ?? "").toLowerCase();
+  if (ct.includes("png")) return "png";
+  if (ct.includes("jpg") || ct.includes("jpeg")) return "jpeg";
+
+  const u = url.toLowerCase();
+  if (u.endsWith(".png")) return "png";
+  return "jpeg";
+};
+
+const fetchImageBase64 = async (url: string): Promise<{ base64: string; extension: "png" | "jpeg" } | null> => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const ct = res.headers.get("content-type");
+    const buf = await res.arrayBuffer();
+    const base64 = arrayBufferToBase64(buf);
+    const extension = guessImageExtension(url, ct);
+    return { base64, extension };
+  } catch {
+    return null;
+  }
+};
 
 /* ---------------- component ---------------- */
 
@@ -223,9 +326,10 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
     const addOnIds = Array.from(new Set(sessionRows.map((r) => r.add_on_id)));
 
+    // ✅ include image_url
     const { data: addOnRows, error: addOnErr } = await supabase
       .from("add_ons")
-      .select("id, name, category")
+      .select("id, name, category, image_url")
       .in("id", addOnIds)
       .returns<AddOnLookup[]>();
 
@@ -251,6 +355,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         seat_number: r.seat_number,
         item_name: addOn?.name ?? "-",
         category: addOn?.category ?? "-",
+        image_url: addOn?.image_url ?? null,
 
         gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
         cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
@@ -324,7 +429,205 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
 
     return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
-  }, [filteredRecords]);
+  }, [filteredRecords, records]);
+
+  /* =========================================================
+     ✅ NEW: Export to EXCEL (.xlsx) with IMAGES + nice UI
+  ========================================================= */
+  const exportToExcelByDate = async (): Promise<void> => {
+    if (!selectedDate) {
+      alert("Please select a date.");
+      return;
+    }
+    if (filteredRecords.length === 0) {
+      alert("No records for selected date.");
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "Admin";
+      wb.created = now;
+
+      const ws = wb.addWorksheet("AddOns", { views: [{ state: "frozen", ySplit: 7 }] });
+
+      // columns
+      // A Image | B Date | C Time | D Full Name | E Seat | F Category | G Item | H Qty | I Price | J Total
+      ws.columns = [
+        { header: "Image", key: "img", width: 12 }, // A
+        { header: "Date", key: "date", width: 12 }, // B
+        { header: "Time", key: "time", width: 10 }, // C
+        { header: "Full Name", key: "name", width: 22 }, // D
+        { header: "Seat", key: "seat", width: 10 }, // E
+        { header: "Category", key: "cat", width: 14 }, // F
+        { header: "Item", key: "item", width: 22 }, // G
+        { header: "Qty", key: "qty", width: 6 }, // H
+        { header: "Price", key: "price", width: 12 }, // I
+        { header: "Total", key: "total", width: 12 }, // J
+      ];
+
+      // Title block
+      ws.mergeCells(1, 1, 1, 10);
+      ws.mergeCells(2, 1, 2, 10);
+      ws.mergeCells(3, 1, 3, 10);
+      ws.mergeCells(4, 1, 4, 10);
+
+      ws.getCell("A1").value = "ADMIN ADD-ONS REPORT";
+      ws.getCell("A2").value = `Date: ${selectedDate}`;
+      ws.getCell("A3").value = `Generated: ${now.toLocaleString()}`;
+      ws.getCell("A4").value = `Rows: ${filteredRecords.length}`;
+
+      ws.getCell("A1").font = { bold: true, size: 16 };
+      ws.getCell("A2").font = { size: 11 };
+      ws.getCell("A3").font = { size: 11 };
+      ws.getCell("A4").font = { size: 11, bold: true };
+
+      ws.getRow(1).height = 22;
+      ws.getRow(5).height = 8;
+
+      // blank row 5
+      ws.addRow([]);
+
+      // Header row 6
+      const headerRowIndex = 6;
+      const h = ws.getRow(headerRowIndex);
+      h.values = ["Image", "Date", "Time", "Full Name", "Seat", "Category", "Item", "Qty", "Price", "Total"];
+      applyHeaderStyle(h, 1, 10);
+      h.commit();
+
+      // Data starts row 7
+      let rIdx = 7;
+
+      // cache images (avoid re-fetch for same url)
+      const imageCache = new Map<string, { imageId: number; ext: "png" | "jpeg" }>();
+
+      for (const r of filteredRecords) {
+        const row = ws.getRow(rIdx);
+
+        const d = extractLocalDate(r.created_at);
+        const t = formatTimeText(r.created_at);
+
+        row.getCell(2).value = d || "-";
+        row.getCell(3).value = t || "-";
+        row.getCell(4).value = r.full_name || "-";
+        row.getCell(5).value = r.seat_number || "-";
+        row.getCell(6).value = r.category || "-";
+        row.getCell(7).value = r.item_name || "-";
+        row.getCell(8).value = Number(r.quantity ?? 0);
+
+        row.getCell(9).value = Number(r.price ?? 0);
+        row.getCell(9).numFmt = '"₱"#,##0.00';
+
+        row.getCell(10).value = Number(r.total ?? 0);
+        row.getCell(10).numFmt = '"₱"#,##0.00';
+
+        row.height = 46;
+
+        // alignments
+        for (let c = 1; c <= 10; c++) {
+          const cell = row.getCell(c);
+          cell.alignment =
+            c === 7 || c === 4
+              ? { vertical: "middle", horizontal: "left", wrapText: true }
+              : { vertical: "middle", horizontal: c === 8 ? "center" : "left", wrapText: true };
+        }
+
+        // borders
+        applyBorders(row, 1, 10);
+
+        // ✅ IMAGE in column A
+        const url = (r.image_url ?? "").trim();
+        if (url) {
+          // try use cache
+          const cached = imageCache.get(url);
+          if (cached) {
+            ws.addImage(cached.imageId, {
+              tl: { col: 0.15, row: rIdx - 0.85 }, // A cell area
+              ext: { width: 52, height: 52 },
+            });
+          } else {
+            const img = await fetchImageBase64(url);
+            if (img) {
+              const imageId = wb.addImage({ base64: `data:image/${img.extension};base64,${img.base64}`, extension: img.extension });
+              imageCache.set(url, { imageId, ext: img.extension });
+
+              ws.addImage(imageId, {
+                tl: { col: 0.15, row: rIdx - 0.85 },
+                ext: { width: 52, height: 52 },
+              });
+            }
+          }
+        }
+
+        row.commit();
+        rIdx++;
+      }
+
+      // TOTAL row
+      const totalRowIndex = rIdx + 1;
+      const totalRow = ws.getRow(totalRowIndex);
+      totalRow.getCell(9).value = "TOTAL:";
+      totalRow.getCell(9).font = { bold: true };
+      totalRow.getCell(9).alignment = { vertical: "middle", horizontal: "right" };
+
+      // sum totals in column J (10)
+      totalRow.getCell(10).value = { formula: `SUM(J7:J${rIdx - 1})` };
+      totalRow.getCell(10).numFmt = '"₱"#,##0.00';
+      totalRow.getCell(10).font = { bold: true };
+      totalRow.height = 20;
+
+      applyBorders(totalRow, 1, 10);
+      totalRow.commit();
+
+      // ✅ auto-fit columns (except image col A)
+      autoFitColumns(
+        ws,
+        6,
+        totalRowIndex,
+        [2, 3, 4, 5, 6, 7, 8, 9, 10],
+        {
+          2: 10,
+          3: 8,
+          4: 16,
+          5: 8,
+          6: 10,
+          7: 14,
+          8: 6,
+          9: 10,
+          10: 10,
+        },
+        {
+          2: 14,
+          3: 12,
+          4: 28,
+          5: 12,
+          6: 18,
+          7: 30,
+          8: 8,
+          9: 14,
+          10: 14,
+        }
+      );
+
+      // keep image col fixed
+      ws.getColumn(1).width = 12;
+
+      // Download
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      saveAs(blob, `admin_addons_${selectedDate}.xlsx`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Export failed. (If images are blocked, check CORS or use public URLs.)");
+    }
+  };
+
+  /* ===================== existing logic below (unchanged) ===================== */
 
   const voidOrder = async (o: OrderGroup): Promise<void> => {
     const ok = window.confirm(
@@ -415,9 +718,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       return;
     }
 
-    const ok = window.confirm(
-      `DELETE ALL add-ons on date: ${selectedDate}?\n\nThis will NOT return stock and NOT reverse sales.`
-    );
+    const ok = window.confirm(`DELETE ALL add-ons on date: ${selectedDate}?\n\nThis will NOT return stock and NOT reverse sales.`);
     if (!ok) return;
 
     try {
@@ -444,51 +745,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     } finally {
       setDeletingDate(null);
     }
-  };
-
-  const exportToExcelByDate = (): void => {
-    if (!selectedDate) {
-      alert("Please select a date.");
-      return;
-    }
-    if (filteredRecords.length === 0) {
-      alert("No records for selected date.");
-      return;
-    }
-
-    const headers = ["Date", "Time", "Full Name", "Seat", "Category", "Item", "Qty", "Price", "Total"];
-
-    const rows = filteredRecords.map((r) => {
-      const d = extractLocalDate(r.created_at);
-      const t = formatTimeText(r.created_at);
-      return [
-        `\t${d}`,
-        `\t${t}`,
-        r.full_name ?? "",
-        r.seat_number ?? "",
-        r.category ?? "",
-        r.item_name ?? "",
-        String(r.quantity ?? 0),
-        r.price.toFixed(2),
-        r.total.toFixed(2),
-      ];
-    });
-
-    const csv =
-      "\ufeff" +
-      [headers, ...rows]
-        .map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(","))
-        .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `admin-addons-${selectedDate}.csv`;
-    a.click();
-
-    URL.revokeObjectURL(url);
   };
 
   const openPaymentModal = (o: OrderGroup): void => {
@@ -599,7 +855,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
     <IonPage>
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR (same layout/classes as reservation) */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Add-Ons Records</h2>
@@ -627,7 +882,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
                   Refresh
                 </button>
 
-                <button className="receipt-btn" onClick={exportToExcelByDate} disabled={filteredRecords.length === 0}>
+                <button
+                  className="receipt-btn"
+                  onClick={() => void exportToExcelByDate()}
+                  disabled={filteredRecords.length === 0}
+                >
                   Export to Excel
                 </button>
 
@@ -642,7 +901,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
             </div>
           </div>
 
-          {/* TABLE */}
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : groupedOrders.length === 0 ? (
@@ -677,7 +935,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
                         <td>{o.full_name || "-"}</td>
                         <td>{o.seat_number || "-"}</td>
 
-                        {/* ITEMS (class-based, no inline) */}
                         <td>
                           <div className="items-list">
                             {o.items.map((it) => (
@@ -703,7 +960,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* PAYMENT */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">
@@ -720,7 +976,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* PAID badge same as reservation */}
                         <td>
                           <button
                             className={`receipt-btn pay-badge ${paid ? "pay-badge--paid" : "pay-badge--unpaid"}`}
@@ -732,7 +987,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
                           </button>
                         </td>
 
-                        {/* ACTION */}
                         <td>
                           <div className="action-stack">
                             <button className="receipt-btn" onClick={() => setSelectedOrder(o)}>
@@ -760,7 +1014,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL (same classes as reservation) */}
+          {/* PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -835,7 +1089,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL (same classes as reservation) */}
+          {/* RECEIPT MODAL */}
           {selectedOrder && (
             <div className="receipt-overlay" onClick={() => setSelectedOrder(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
