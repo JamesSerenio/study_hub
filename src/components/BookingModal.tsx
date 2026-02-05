@@ -17,6 +17,7 @@
 // ✅ NEW UI: Reservation Date uses scroll/wheel picker (IonDatetimeButton + modal)
 // ✅ NEW FIX: Can save even without login (auto anonymous auth)
 // ✅ NEW: Phone Number required (both reservation and non-reservation)
+// ✅ NEW: Phone validation MODAL (kulang/sobra/hindi 09)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -94,6 +95,60 @@ const toYYYYMMDD = (v: string): string | null => {
 
 // ✅ LOCAL current date in YYYY-MM-DD (no red, no UTC issue)
 const todayLocalYYYYMMDD = (): string => new Date().toLocaleDateString("en-CA");
+
+/* =========================
+   ✅ PHONE HELPERS (NEW)
+========================= */
+
+// keep digits and optional leading +, normalize +63 to 09, remove spaces/dashes
+const normalizePhonePH = (raw: string): string => {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+
+  // keep digits and +
+  let s = trimmed.replace(/[^\d+]/g, "");
+
+  // if starts with +63XXXXXXXXXX => 0XXXXXXXXXX
+  if (s.startsWith("+63")) s = "0" + s.slice(3);
+
+  // if starts with 63XXXXXXXXXX (no +) => 0XXXXXXXXXX
+  if (s.startsWith("63")) s = "0" + s.slice(2);
+
+  // remove all non-digits now
+  s = s.replace(/[^\d]/g, "");
+
+  return s;
+};
+
+type PhoneValidation =
+  | { ok: true; normalized: string }
+  | { ok: false; message: string };
+
+const validatePhonePH = (raw: string): PhoneValidation => {
+  const normalized = normalizePhonePH(raw);
+
+  if (!normalized) return { ok: false, message: "Phone Number is required." };
+
+  // must start with 09
+  if (!normalized.startsWith("09")) {
+    return { ok: false, message: 'Phone Number must start with "09". Example: 09XXXXXXXXX' };
+  }
+
+  // must be exactly 11 digits (09 + 9 digits)
+  if (normalized.length < 11) {
+    return { ok: false, message: "Phone Number is too short. It must be 11 digits (09XXXXXXXXX)." };
+  }
+  if (normalized.length > 11) {
+    return { ok: false, message: "Phone Number is too long. It must be 11 digits (09XXXXXXXXX)." };
+  }
+
+  // digits only check
+  if (!/^09\d{9}$/.test(normalized)) {
+    return { ok: false, message: "Phone Number must contain digits only. Example: 09XXXXXXXXX" };
+  }
+
+  return { ok: true, normalized };
+};
 
 const normalizeTimeAvail = (value: string): string | null => {
   const raw = value
@@ -279,7 +334,7 @@ const ensureAuthUserId = async (): Promise<string> => {
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
-    phone_number: "", // ✅ NEW
+    phone_number: "",
     customer_type: "",
     customer_field: "",
     has_id: false,
@@ -309,6 +364,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [timeAlertOpen, setTimeAlertOpen] = useState(false);
   const [timeAlertMsg, setTimeAlertMsg] = useState("");
+
+  // ✅ PHONE ERROR MODAL (NEW)
+  const [phoneAlertOpen, setPhoneAlertOpen] = useState(false);
+  const [phoneAlertMsg, setPhoneAlertMsg] = useState("");
 
   const commitReservationTime = (raw: string) => {
     const normalized = normalizeReservationTime(raw);
@@ -598,9 +657,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const handleSubmitBooking = async (): Promise<void> => {
     if (form.reservation && reservationStartIso) {
       if (isReservationStartInPast(reservationStartIso)) {
-        setTimeAlertMsg(
-          "Time Started cannot be earlier than the current time. Please choose a valid future time."
-        );
+        setTimeAlertMsg("Time Started cannot be earlier than the current time. Please choose a valid future time.");
         setTimeAlertOpen(true);
         return;
       }
@@ -609,8 +666,14 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const trimmedName = form.full_name.trim();
     if (!trimmedName) return alert("Full Name is required.");
 
-    const trimmedPhone = form.phone_number.trim();
-    if (!trimmedPhone) return alert("Phone Number is required."); // ✅ NEW required
+    // ✅ PHONE VALIDATION MODAL (NEW)
+    const phoneCheck = validatePhonePH(form.phone_number);
+    if (!phoneCheck.ok) {
+      setPhoneAlertMsg(phoneCheck.message);
+      setPhoneAlertOpen(true);
+      return;
+    }
+    const phoneToStore = phoneCheck.normalized;
 
     if (form.reservation) {
       if (!form.reservation_date) return alert("Please select a reservation date.");
@@ -633,7 +696,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
     }
 
-    // ✅ NEW: no-login needed; auto anonymous user id
+    // ✅ no-login needed; auto anonymous user id
     let userId: string;
     try {
       userId = await ensureAuthUserId();
@@ -645,7 +708,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const startIsoToStore =
       form.reservation && reservationStartIso ? reservationStartIso : new Date().toISOString();
 
-    // ✅ FIX: ALWAYS current date saved to DB
+    // ✅ ALWAYS current date saved to DB
     const dateToStore = todayLocalYYYYMMDD();
 
     const timeEndedToStore = (() => {
@@ -705,10 +768,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
 
       const { error: sessionErr } = await supabase.from("customer_sessions").insert({
-        staff_id: null, // ✅ allow saving without staff/admin login
+        staff_id: null,
         date: dateToStore,
         full_name: trimmedName,
-        phone_number: trimmedPhone, // ✅ NEW
+        phone_number: phoneToStore, // ✅ store normalized phone (passes DB check)
         customer_type: form.customer_type,
         customer_field: form.customer_field,
         has_id: form.has_id,
@@ -736,7 +799,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     setForm({
       full_name: "",
-      phone_number: "", // ✅ NEW reset
+      phone_number: "",
       customer_type: "",
       customer_field: "",
       has_id: false,
@@ -774,12 +837,22 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         </IonToolbar>
       </IonHeader>
 
+      {/* Time Started modal */}
       <IonAlert
         isOpen={timeAlertOpen}
         header="Invalid Time Started"
         message={timeAlertMsg}
         buttons={["OK"]}
         onDidDismiss={() => setTimeAlertOpen(false)}
+      />
+
+      {/* ✅ Phone Number modal */}
+      <IonAlert
+        isOpen={phoneAlertOpen}
+        header="Invalid Phone Number"
+        message={phoneAlertMsg}
+        buttons={["OK"]}
+        onDidDismiss={() => setPhoneAlertOpen(false)}
       />
 
       <IonContent className="ion-padding">
@@ -790,7 +863,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             <IonLabel slot="end">{openTime ? "Yes" : "No"}</IonLabel>
           </IonItem>
 
-          {/* ✅ Full Name (REQUIRED) */}
           <IonItem className="form-item">
             <IonLabel position="stacked">Full Name *</IonLabel>
             <IonInput
@@ -801,7 +873,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             />
           </IonItem>
 
-          {/* ✅ Phone Number BELOW Full Name (REQUIRED, both reservation & non-reservation) */}
           <IonItem className="form-item">
             <IonLabel position="stacked">Phone Number *</IonLabel>
             <IonInput
@@ -839,10 +910,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           <IonItem className="form-item">
             <IonLabel>ID</IonLabel>
-            <IonToggle
-              checked={form.has_id}
-              onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })}
-            />
+            <IonToggle checked={form.has_id} onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })} />
             <IonLabel slot="end">{form.has_id ? "With" : "Without"}</IonLabel>
           </IonItem>
 
@@ -876,9 +944,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 setRefreshSeatsTick((x) => x + 1);
 
                 if (checked) {
-                  commitReservationTime(
-                    timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am"
-                  );
+                  commitReservationTime(timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am");
                 }
               }}
             />
@@ -936,10 +1002,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               </IonItem>
 
               {!!seatPickHint && (
-                <p
-                  className="summary-text"
-                  style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}
-                >
+                <p className="summary-text" style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}>
                   {seatPickHint}
                 </p>
               )}
@@ -992,9 +1055,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               placeholder="Examples: 0:45 / 2 / 2:30 / 100:30 / 230"
               value={timeAvailInput}
               disabled={openTime}
-              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
-                setTimeAvailInput(e.detail.value ?? "")
-              }
+              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => setTimeAvailInput(e.detail.value ?? "")}
               onIonBlur={() => {
                 commitTimeAvail(timeAvailInput);
                 setDateTouchTick((x) => x + 1);
@@ -1018,11 +1079,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           <div className="summary-section">
             <p className="summary-text">
               <strong>Time Started:</strong>{" "}
-              {form.reservation
-                ? reservationStartIso
-                  ? formatPH(new Date(reservationStartIso))
-                  : "—"
-                : timeInDisplay}
+              {form.reservation ? (reservationStartIso ? formatPH(new Date(reservationStartIso)) : "—") : timeInDisplay}
             </p>
 
             <p className="summary-text">
