@@ -5,6 +5,7 @@
 // ✅ Date filter
 // ✅ Export EXCEL (.xlsx) with ExcelJS + file-saver (logo embedded)
 // ✅ Admin delete: single row + delete by date
+// ✅ NEW: Phone # column beside Full Name + included in Excel
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -25,6 +26,10 @@ interface CustomerSession {
   id: string;
   date: string; // YYYY-MM-DD
   full_name: string;
+
+  // ✅ NEW
+  phone_number?: string | null;
+
   customer_type: string;
   customer_field: string | null;
   has_id: boolean;
@@ -55,7 +60,6 @@ const yyyyMmDdLocal = (d: Date): string => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
-
 
 const formatTimeText = (iso: string): string => {
   const d = new Date(iso);
@@ -224,6 +228,11 @@ const Admin_customer_list: React.FC = () => {
   const filteredSessions = useMemo(() => {
     return sessions.filter((s) => (s.date ?? "") === selectedDate);
   }, [sessions, selectedDate]);
+
+  const phoneText = (s: CustomerSession): string => {
+    const p = String(s.phone_number ?? "").trim();
+    return p || "N/A";
+  };
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -575,10 +584,11 @@ const Admin_customer_list: React.FC = () => {
       pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
     });
 
-    // Columns (nice widths)
+    // ✅ Columns (added Phone #)
     ws.columns = [
       { header: "Date", key: "date", width: 12 },
       { header: "Full Name", key: "full_name", width: 26 },
+      { header: "Phone #", key: "phone_number", width: 16 }, // ✅ NEW
       { header: "Type", key: "customer_type", width: 14 },
       { header: "Field", key: "customer_field", width: 18 },
       { header: "Has ID", key: "has_id", width: 10 },
@@ -602,12 +612,12 @@ const Admin_customer_list: React.FC = () => {
     ];
 
     // Top header
-    ws.mergeCells("A1", "V1");
+    ws.mergeCells("A1", "W1"); // ✅ was V1, now W1 because +1 column
     ws.getCell("A1").value = "ME TYME LOUNGE — Admin Customer Lists (Non-Reservation)";
     ws.getCell("A1").font = { bold: true, size: 16 };
     ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
 
-    ws.mergeCells("A2", "V2");
+    ws.mergeCells("A2", "W2");
     ws.getCell("A2").value = `Date: ${selectedDate}    •    Records: ${filteredSessions.length}`;
     ws.getCell("A2").font = { size: 11 };
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
@@ -622,7 +632,7 @@ const Admin_customer_list: React.FC = () => {
         const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
         const imgId = wb.addImage({ buffer: ab, extension: ext });
         ws.addImage(imgId, {
-          tl: { col: 18.2, row: 0.2 }, // top-right
+          tl: { col: 19.2, row: 0.2 },
           ext: { width: 160, height: 60 },
         });
       }
@@ -673,6 +683,7 @@ const Admin_customer_list: React.FC = () => {
       const row = ws.addRow({
         date: s.date,
         full_name: s.full_name,
+        phone_number: phoneText(s), // ✅ NEW
         customer_type: s.customer_type,
         customer_field: s.customer_field ?? "",
         has_id: s.has_id ? "Yes" : "No",
@@ -721,8 +732,9 @@ const Admin_customer_list: React.FC = () => {
         }
       });
 
-      // paid badge coloring (column 20 = Paid?)
-      const paidCell = ws.getCell(rowIndex, 20);
+      // paid badge coloring (Paid? column index updated!)
+      // With Phone # added, Paid? is now column 21
+      const paidCell = ws.getCell(rowIndex, 21);
       if (String(paidCell.value) === "PAID") {
         paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
         paidCell.font = { bold: true, color: { argb: "FF166534" } };
@@ -750,7 +762,7 @@ const Admin_customer_list: React.FC = () => {
     <IonPage>
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR (same as Customer_Lists) */}
+          {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Customer Lists - Non Reservation</h2>
@@ -773,7 +785,6 @@ const Admin_customer_list: React.FC = () => {
                 </span>
               </label>
 
-              {/* admin tools beside date */}
               <div className="admin-tools-row">
                 <button className="receipt-btn" onClick={() => void exportToExcel()} disabled={filteredSessions.length === 0}>
                   Export to Excel
@@ -802,6 +813,7 @@ const Admin_customer_list: React.FC = () => {
                   <tr>
                     <th>Date</th>
                     <th>Full Name</th>
+                    <th>Phone #</th> {/* ✅ NEW */}
                     <th>Type</th>
                     <th>Field</th>
                     <th>Has ID</th>
@@ -833,6 +845,7 @@ const Admin_customer_list: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.date}</td>
                         <td>{session.full_name}</td>
+                        <td>{phoneText(session)}</td> {/* ✅ NEW */}
                         <td>{session.customer_type}</td>
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
@@ -972,8 +985,7 @@ const Admin_customer_list: React.FC = () => {
                 {(() => {
                   const base = getBaseSystemCost(discountTarget);
                   const val = toMoney(discountInput);
-                  const appliedVal =
-                    discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+                  const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
                   const due = round2(Math.max(0, discountedCost - DOWN_PAYMENT));
@@ -1126,6 +1138,11 @@ const Admin_customer_list: React.FC = () => {
                 <div className="receipt-row">
                   <span>Customer</span>
                   <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Phone</span>
+                  <span>{phoneText(selectedSession)}</span>
                 </div>
 
                 <div className="receipt-row">
