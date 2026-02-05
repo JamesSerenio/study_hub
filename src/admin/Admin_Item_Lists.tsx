@@ -393,7 +393,7 @@ const Admin_Item_Lists: React.FC = () => {
   const exportToExcel = async (): Promise<void> => {
     try {
       const now = new Date();
-      const title = "ADD-ONS INVENTORY REPORT";
+      const title = "Item Lists INVENTORY REPORT";
       const generated = `Generated: ${now.toLocaleString()}`;
       const sortInfo = `Sort: ${sortKey} (${sortOrder})   Search: ${search.trim() ? search.trim() : "—"}`;
 
@@ -528,7 +528,9 @@ const Admin_Item_Lists: React.FC = () => {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
-      saveAs(blob, `add_ons_${ymd(now)}.xlsx`);
+      
+
+      saveAs(blob, `Item_List_${ymd(now)}.xlsx`);
 
       setToastMessage("Exported to Excel successfully.");
       setShowToast(true);
