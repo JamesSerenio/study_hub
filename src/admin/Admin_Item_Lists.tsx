@@ -6,6 +6,7 @@
 // ✅ Search bar (name/category)
 // ✅ Sort by Category OR Stock (asc/desc)
 // ✅ Actions kept (Add Stocks / Edit / Delete) — only wrapped with classnames
+// ✅ NEW: Export to Excel (.xlsx) with nicer layout (title row, generated date, widths, number formats)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -43,6 +44,7 @@ import {
   swapVerticalOutline,
   searchOutline,
   closeOutline,
+  downloadOutline,
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 import type {
@@ -52,6 +54,7 @@ import type {
   SelectChangeEventDetail,
 } from "@ionic/core";
 import { IonSelect, IonSelectOption } from "@ionic/react";
+import * as XLSX from "xlsx";
 
 type SortKey = "category" | "stocks";
 
@@ -72,6 +75,13 @@ interface AddOn {
 const BUCKET = "add-ons";
 
 const money2 = (n: number): string => `₱${Number.isFinite(n) ? n.toFixed(2) : "0.00"}`;
+
+const ymd = (d: Date): string => {
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+};
 
 const Admin_Item_Lists: React.FC = () => {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
@@ -104,10 +114,7 @@ const Admin_Item_Lists: React.FC = () => {
   const fetchAddOns = async (): Promise<void> => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("add_ons")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const { data, error } = await supabase.from("add_ons").select("*").order("created_at", { ascending: false });
 
       if (error) throw error;
       setAddOns((data as AddOn[]) || []);
@@ -232,8 +239,7 @@ const Admin_Item_Lists: React.FC = () => {
     if (!editingAddOn) return;
 
     if (!editingAddOn.name.trim()) return void (setToastMessage("Name is required."), setShowToast(true));
-    if (!editingAddOn.category.trim())
-      return void (setToastMessage("Category is required."), setShowToast(true));
+    if (!editingAddOn.category.trim()) return void (setToastMessage("Category is required."), setShowToast(true));
     if (Number.isNaN(editingAddOn.price) || editingAddOn.price < 0)
       return void (setToastMessage("Price must be a valid positive number."), setShowToast(true));
     if (Number.isNaN(editingAddOn.sold) || editingAddOn.sold < 0)
@@ -350,12 +356,133 @@ const Admin_Item_Lists: React.FC = () => {
     setDeleteId(null);
   };
 
+  // ✅ NEW: Export to Excel
+  const exportToExcel = (): void => {
+    try {
+      const now = new Date();
+      const title = "ADD-ONS INVENTORY REPORT";
+      const generated = `Generated: ${now.toLocaleString()}`;
+      const sortInfo = `Sort: ${sortKey} (${sortOrder})   Search: ${search.trim() ? search.trim() : "—"}`;
+
+      // columns count = 11 (same as table)
+      const header = [
+        "Name",
+        "Category",
+        "Price",
+        "Restocked",
+        "Sold",
+        "Stocks",
+        "Expenses",
+        "Overall Sales",
+        "Expected Sales",
+        "Image URL",
+        "ID",
+      ];
+
+      const rows: Array<(string | number | null)>[] = filteredAddOns.map((a) => [
+        a.name ?? "",
+        a.category ?? "",
+        Number.isFinite(a.price) ? Number(a.price) : 0,
+        Number.isFinite(a.restocked) ? Number(a.restocked) : 0,
+        Number.isFinite(a.sold) ? Number(a.sold) : 0,
+        Number.isFinite(a.stocks) ? Number(a.stocks) : 0,
+        Number.isFinite(a.expenses) ? Number(a.expenses) : 0,
+        Number.isFinite(a.overall_sales) ? Number(a.overall_sales) : 0,
+        Number.isFinite(a.expected_sales) ? Number(a.expected_sales) : 0,
+        a.image_url ?? "",
+        a.id ?? "",
+      ]);
+
+      const aoa: Array<Array<string | number | null>> = [
+        [title],
+        [generated],
+        [sortInfo],
+        [],
+        header,
+        ...rows,
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+      // Merge title rows across all columns
+      const lastCol = header.length - 1;
+      ws["!merges"] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: lastCol } },
+      ];
+
+      // Column widths
+      ws["!cols"] = [
+        { wch: 26 }, // Name
+        { wch: 18 }, // Category
+        { wch: 12 }, // Price
+        { wch: 12 }, // Restocked
+        { wch: 10 }, // Sold
+        { wch: 10 }, // Stocks
+        { wch: 12 }, // Expenses
+        { wch: 14 }, // Overall
+        { wch: 14 }, // Expected
+        { wch: 38 }, // Image URL
+        { wch: 38 }, // ID
+      ];
+
+      // Number formats for money columns (Price, Expenses, Overall, Expected)
+      // Table starts at row index 4 (0-based), header row is 4, data begins at row 5
+      const headerRowIndex = 4;
+      const dataStartRow = headerRowIndex + 1;
+
+      const setCellFormat = (r: number, c: number, z: string): void => {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr] as XLSX.CellObject | undefined;
+        if (!cell) return;
+        cell.z = z;
+      };
+
+      // Apply currency format to: Price(2), Expenses(6), Overall(7), Expected(8)
+      for (let r = dataStartRow; r < dataStartRow + rows.length; r++) {
+        setCellFormat(r, 2, '₱#,##0.00'); // Price
+        setCellFormat(r, 6, '₱#,##0.00'); // Expenses
+        setCellFormat(r, 7, '₱#,##0.00'); // Overall
+        setCellFormat(r, 8, '₱#,##0.00'); // Expected
+      }
+
+      // Freeze panes (freeze top 5 rows: title+meta+blank+header)
+      // Note: this is supported by SheetJS in the workbook view metadata.
+      (ws as unknown as { ["!freeze"]?: { xSplit?: number; ySplit?: number } })["!freeze"] = { xSplit: 0, ySplit: 5 };
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Add-ons");
+
+      const fileName = `add_ons_${ymd(now)}.xlsx`;
+      const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([out], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setToastMessage("Exported to Excel successfully.");
+      setShowToast(true);
+    } catch (e: unknown) {
+      console.error("Export Excel error:", e);
+      setToastMessage(`Export failed: ${e instanceof Error ? e.message : "Please try again."}`);
+      setShowToast(true);
+    }
+  };
+
   const sortLabel = `${sortKey === "category" ? "category" : "stocks"} (${sortOrder})`;
 
   return (
     <IonPage className="pil-page">
-      <IonHeader className="pil-header">
-      </IonHeader>
+      <IonHeader className="pil-header"></IonHeader>
 
       <IonContent className="pil-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
@@ -364,10 +491,20 @@ const Admin_Item_Lists: React.FC = () => {
 
         {/* TOP ACTIONS (same layout/classnames as PIL) */}
         <div className="pil-actions">
-          {/* optional: keep a header action button look consistent */}
           <IonButton className="pil-btn pil-btn--primary" fill="solid" onClick={() => void fetchAddOns()}>
             <IonIcon slot="start" icon={addCircleOutline} />
             Refresh
+          </IonButton>
+
+          {/* ✅ NEW: Export Excel */}
+          <IonButton
+            className="pil-btn pil-btn--ghost"
+            fill="outline"
+            disabled={loading || filteredAddOns.length === 0}
+            onClick={exportToExcel}
+          >
+            <IonIcon slot="start" icon={downloadOutline} />
+            Export Excel
           </IonButton>
 
           <IonItem lines="none" className="pil-sort-item">
@@ -399,9 +536,7 @@ const Admin_Item_Lists: React.FC = () => {
                 value={search}
                 placeholder="Search name or category..."
                 clearInput
-                onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
-                  setSearch(String(e.detail.value ?? ""))
-                }
+                onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => setSearch(String(e.detail.value ?? ""))}
               />
             </IonItem>
 
@@ -469,22 +604,13 @@ const Admin_Item_Lists: React.FC = () => {
                     <IonCol className="pil-col">{money2(Number(addOn.overall_sales))}</IonCol>
                     <IonCol className="pil-col">{money2(Number(addOn.expected_sales))}</IonCol>
 
-                    {/* ✅ ACTIONS (not changing logic, only add classnames for style) */}
                     <IonCol className="pil-col">
                       <div className="pil-actions-cell">
-                        <IonButton
-                          className="pil-act-btn pil-act-btn--add"
-                          fill="clear"
-                          onClick={() => openRestock(addOn.id)}
-                        >
+                        <IonButton className="pil-act-btn pil-act-btn--add" fill="clear" onClick={() => openRestock(addOn.id)}>
                           <IonIcon icon={addCircle} />
                         </IonButton>
 
-                        <IonButton
-                          className="pil-act-btn pil-act-btn--edit"
-                          fill="clear"
-                          onClick={() => handleEdit(addOn.id)}
-                        >
+                        <IonButton className="pil-act-btn pil-act-btn--edit" fill="clear" onClick={() => handleEdit(addOn.id)}>
                           <IonIcon icon={create} />
                         </IonButton>
 
@@ -505,12 +631,7 @@ const Admin_Item_Lists: React.FC = () => {
           )}
         </div>
 
-        <IonToast
-          isOpen={showToast}
-          message={toastMessage}
-          duration={3000}
-          onDidDismiss={() => setShowToast(false)}
-        />
+        <IonToast isOpen={showToast} message={toastMessage} duration={3000} onDidDismiss={() => setShowToast(false)} />
 
         <IonAlert
           isOpen={showDeleteAlert}
@@ -523,7 +644,7 @@ const Admin_Item_Lists: React.FC = () => {
           ]}
         />
 
-        {/* ✅ RESTOCK MODAL (use same pil-modal classnames) */}
+        {/* ✅ RESTOCK MODAL */}
         <IonModal isOpen={showRestockModal} onDidDismiss={() => setShowRestockModal(false)} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
@@ -595,7 +716,7 @@ const Admin_Item_Lists: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* EDIT MODAL (use same pil-modal classnames) */}
+        {/* ✅ EDIT MODAL */}
         <IonModal isOpen={showEditModal} onDidDismiss={() => setShowEditModal(false)} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
@@ -644,7 +765,6 @@ const Admin_Item_Lists: React.FC = () => {
                     />
                   </IonItem>
 
-                  {/* ✅ REPLACE IMAGE */}
                   <IonItem className="pil-item">
                     <IonLabel position="stacked" className="pil-label">
                       Replace Image (optional)
@@ -685,8 +805,6 @@ const Admin_Item_Lists: React.FC = () => {
                       }}
                     />
                   </IonItem>
-
-                  {/* ✅ Restocked removed from edit */}
 
                   <IonItem className="pil-item">
                     <IonLabel position="stacked" className="pil-label">

@@ -29,7 +29,8 @@
     "react-router": "^5.3.4",
     "react-router-dom": "^5.3.4",
     "recharts": "^3.7.0",
-    "tailwindcss": "^4.1.17"
+    "tailwindcss": "^4.1.17",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@testing-library/dom": ">=7.21.4",
