@@ -6,6 +6,7 @@
 // ❌ NO Delete
 // ❌ NO Delete by Date
 // ✅ strict TS (NO "any")
+// ✅ ADD: phone_number field (separate column) + Receipt shows Customer Name + Phone #
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -20,6 +21,8 @@ interface PromoBookingRow {
   id: string;
   created_at: string;
   full_name: string;
+  phone_number: string | null;
+
   area: PackageArea;
   seat_number: string | null;
   start_at: string;
@@ -47,6 +50,8 @@ interface PromoBookingDBRow {
   id: string;
   created_at: string;
   full_name: string;
+  phone_number: string | null;
+
   area: PackageArea;
   seat_number: string | null;
   start_at: string;
@@ -116,8 +121,7 @@ const getCreatedDateLocal = (iso: string): string => {
   return yyyyMmDdLocal(d);
 };
 
-const prettyArea = (a: PackageArea): string =>
-  a === "conference_room" ? "Conference Room" : "Common Area";
+const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
 
 const seatLabel = (r: PromoBookingRow): string =>
   r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
@@ -208,6 +212,8 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
     id: row.id,
     created_at: row.created_at,
     full_name: row.full_name,
+    phone_number: row.phone_number ?? null,
+
     area: row.area,
     seat_number: row.seat_number,
     start_at: row.start_at,
@@ -226,6 +232,11 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
     packages: row.packages ?? null,
     package_options: row.package_options ?? null,
   };
+};
+
+const safePhone = (v: string | null | undefined): string => {
+  const p = String(v ?? "").trim();
+  return p ? p : "—";
 };
 
 /* ================= COMPONENT ================= */
@@ -271,6 +282,7 @@ const Customer_Discount_List: React.FC = () => {
         id,
         created_at,
         full_name,
+        phone_number,
         area,
         seat_number,
         start_at,
@@ -394,6 +406,7 @@ const Customer_Discount_List: React.FC = () => {
           id,
           created_at,
           full_name,
+          phone_number,
           area,
           seat_number,
           start_at,
@@ -490,6 +503,7 @@ const Customer_Discount_List: React.FC = () => {
           id,
           created_at,
           full_name,
+          phone_number,
           area,
           seat_number,
           start_at,
@@ -657,7 +671,8 @@ const Customer_Discount_List: React.FC = () => {
                 <thead>
                   <tr>
                     <th>Date</th>
-                    <th>Customer</th>
+                    <th>Customer Name</th>
+                    <th>Phone #</th>
                     <th>Area</th>
                     <th>Seat</th>
                     <th>Package</th>
@@ -696,6 +711,7 @@ const Customer_Discount_List: React.FC = () => {
                       <tr key={r.id}>
                         <td>{new Date(r.created_at).toLocaleString("en-PH")}</td>
                         <td>{r.full_name}</td>
+                        <td>{safePhone(r.phone_number)}</td>
                         <td>{prettyArea(r.area)}</td>
                         <td>{seatLabel(r)}</td>
                         <td>{r.packages?.title || "—"}</td>
@@ -707,9 +723,7 @@ const Customer_Discount_List: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
-                            <span className="cell-strong">
-                              {getDiscountTextFrom(r.discount_kind, r.discount_value)}
-                            </span>
+                            <span className="cell-strong">{getDiscountTextFrom(r.discount_kind, r.discount_value)}</span>
                             <button className="receipt-btn" onClick={() => openDiscountModal(r)}>
                               Discount
                             </button>
@@ -736,9 +750,7 @@ const Customer_Discount_List: React.FC = () => {
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              Remaining ₱{remaining.toFixed(2)}
-                            </span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remaining.toFixed(2)}</span>
                             <button className="receipt-btn" onClick={() => openPaymentModal(r)} disabled={due <= 0}>
                               Payment
                             </button>
@@ -767,7 +779,9 @@ const Customer_Discount_List: React.FC = () => {
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">PAYMENT</h3>
-                <p className="receipt-subtitle">{paymentTarget.full_name}</p>
+                <p className="receipt-subtitle">
+                  {paymentTarget.full_name} • {safePhone(paymentTarget.phone_number)}
+                </p>
 
                 <hr />
 
@@ -851,7 +865,9 @@ const Customer_Discount_List: React.FC = () => {
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">DISCOUNT</h3>
-                <p className="receipt-subtitle">{discountTarget.full_name}</p>
+                <p className="receipt-subtitle">
+                  {discountTarget.full_name} • {safePhone(discountTarget.phone_number)}
+                </p>
 
                 <hr />
 
@@ -979,8 +995,13 @@ const Customer_Discount_List: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Customer</span>
+                  <span>Customer Name</span>
                   <span>{selected.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Phone #</span>
+                  <span>{safePhone(selected.phone_number)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -1009,10 +1030,7 @@ const Customer_Discount_List: React.FC = () => {
                   <div className="receipt-row">
                     <span>Duration</span>
                     <span>
-                      {formatDuration(
-                        Number(selected.package_options.duration_value),
-                        selected.package_options.duration_unit
-                      )}
+                      {formatDuration(Number(selected.package_options.duration_value), selected.package_options.duration_unit)}
                     </span>
                   </div>
                 ) : null}
@@ -1033,11 +1051,7 @@ const Customer_Discount_List: React.FC = () => {
 
                 {(() => {
                   const base = round2(Math.max(0, toNumber(selected.price)));
-                  const { discountedCost, discountAmount } = applyDiscount(
-                    base,
-                    selected.discount_kind,
-                    selected.discount_value
-                  );
+                  const { discountedCost, discountAmount } = applyDiscount(base, selected.discount_kind, selected.discount_value);
                   const due = round2(discountedCost);
 
                   const pi = getPaidInfo(selected);
