@@ -12,6 +12,7 @@
 //    - Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
 //    - Manual PAID/UNPAID toggle still works
 // ✅ Open Time Stop -> ALSO releases seat_blocked_times (end_at = now)
+// ✅ NEW: Phone # beside Full Name + shown in receipt
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -29,6 +30,10 @@ interface CustomerSession {
   id: string;
   date: string;
   full_name: string;
+
+  // ✅ NEW
+  phone_number?: string | null;
+
   customer_type: string;
   customer_field: string | null;
   has_id: boolean;
@@ -186,6 +191,11 @@ const Customer_Reservations: React.FC = () => {
 
   const isPromoType = (t: string | null | undefined): boolean => (t ?? "").trim().toLowerCase() === "promo";
 
+  const phoneText = (s: CustomerSession): string => {
+    const p = String(s.phone_number ?? "").trim();
+    return p || "N/A";
+  };
+
   useEffect(() => {
     void fetchReservations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -225,8 +235,6 @@ const Customer_Reservations: React.FC = () => {
     return sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
   }, [sessions, selectedDate]);
 
-  // ✅ Open Time detection: hour_avail === "OPEN" (primary)
-  // (Optional legacy fallback) if you still have old 2999 rows
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").trim().toUpperCase() === "OPEN") return true;
     const end = new Date(s.time_ended);
@@ -262,7 +270,6 @@ const Customer_Reservations: React.FC = () => {
     return toMoney(s.total_time);
   };
 
-  // base cost before discount
   const getBaseSystemCost = (s: CustomerSession): number => {
     if (isOpenTimeSession(s)) {
       const endIso = new Date(nowTick).toISOString();
@@ -283,7 +290,6 @@ const Customer_Reservations: React.FC = () => {
     return getDiscountTextFrom(di.kind, di.value);
   };
 
-  // final cost after discount
   const getSessionTotalCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
@@ -300,7 +306,6 @@ const Customer_Reservations: React.FC = () => {
     return round2(Math.max(0, DOWN_PAYMENT - totalCost));
   };
 
-  // one display amount only
   const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
     const bal = getSessionBalance(s);
     if (bal > 0) return { label: "Total Balance", value: bal };
@@ -331,7 +336,6 @@ const Customer_Reservations: React.FC = () => {
     return nowTick >= start;
   };
 
-  // ✅ Release seat_blocked_times for this session (end_at = now)
   const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
@@ -389,7 +393,6 @@ const Customer_Reservations: React.FC = () => {
       const totalMinutes = diffMinutes(session.time_started, nowIso);
       const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
-      // 1) stop session
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
@@ -407,10 +410,8 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      // 2) release seats immediately
       await releaseSeatBlocksNow(session, nowIso);
 
-      // 3) update UI
       setSessions((prev) => {
         const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
         return next.filter((s) => !isPromoType(s.customer_type));
@@ -460,7 +461,6 @@ const Customer_Reservations: React.FC = () => {
     const clean = Number.isFinite(raw) ? Math.max(0, raw) : 0;
     const finalValue = discountKind === "percent" ? clamp(clean, 0, 100) : clean;
 
-    // recompute due AFTER discount, then auto-adjust payments
     const base = getBaseSystemCost(discountTarget);
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
     const due = round2(Math.max(0, discounted - DOWN_PAYMENT));
@@ -480,12 +480,8 @@ const Customer_Reservations: React.FC = () => {
           discount_kind: discountKind,
           discount_value: finalValue,
           discount_reason: discountReason.trim(),
-
-          // auto adjust payment to new due
           gcash_amount: adjPay.gcash,
           cash_amount: adjPay.cash,
-
-          // auto set paid status
           is_paid: autoPaid,
           paid_at: autoPaid ? new Date().toISOString() : null,
         })
@@ -514,7 +510,7 @@ const Customer_Reservations: React.FC = () => {
   // PAYMENT MODAL
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
-    const due = getSessionBalance(s); // after discount
+    const due = getSessionBalance(s);
     const pi = getPaidInfo(s);
 
     const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
@@ -547,7 +543,7 @@ const Customer_Reservations: React.FC = () => {
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = getSessionBalance(paymentTarget); // after discount
+    const due = getSessionBalance(paymentTarget);
     const gcIn = Math.max(0, toMoney(gcashInput));
     const adj = recalcPaymentsToDue(due, gcIn);
 
@@ -587,7 +583,7 @@ const Customer_Reservations: React.FC = () => {
   };
 
   // -----------------------
-  // PAID / UNPAID TOGGLE (manual)
+  // PAID TOGGLE
   // -----------------------
   const togglePaid = async (s: CustomerSession): Promise<void> => {
     try {
@@ -624,10 +620,8 @@ const Customer_Reservations: React.FC = () => {
 
   return (
     <IonPage>
-      {/* ✅ SAME BACKGROUND as other pages */}
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR (same as Customer_Lists) */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Reservations</h2>
@@ -652,7 +646,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
           </div>
 
-          {/* TABLE */}
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
@@ -664,6 +657,7 @@ const Customer_Reservations: React.FC = () => {
                   <tr>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
+                    <th>Phone #</th> {/* ✅ NEW */}
                     <th>Field</th>
                     <th>Has ID</th>
                     <th>Specific ID</th>
@@ -693,6 +687,7 @@ const Customer_Reservations: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.reservation_date ?? "N/A"}</td>
                         <td>{session.full_name}</td>
+                        <td>{phoneText(session)}</td> {/* ✅ NEW */}
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
                         <td>{session.id_number ?? "N/A"}</td>
@@ -773,7 +768,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* DISCOUNT MODAL (same as Customer_Lists) */}
+          {/* DISCOUNT MODAL */}
           {discountTarget && (
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -882,7 +877,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL (same as Customer_Lists) */}
+          {/* PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -957,7 +952,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL (same classnames as Customer_Lists) */}
+          {/* RECEIPT MODAL */}
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -976,6 +971,11 @@ const Customer_Reservations: React.FC = () => {
                 <div className="receipt-row">
                   <span>Customer</span>
                   <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Phone</span>
+                  <span>{phoneText(selectedSession)}</span>
                 </div>
 
                 <div className="receipt-row">
