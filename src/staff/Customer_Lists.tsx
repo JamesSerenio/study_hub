@@ -6,13 +6,13 @@
 // ✅ Manual PAID/UNPAID toggle still works
 // ✅ Payment (GCash/Cash auto based on Total Balance AFTER discount)
 // ✅ Discount reason is SAVED but ❌ NOT shown on receipt
+// ✅ NEW: Phone # column beside Full Name (separate column)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
-
 
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
@@ -24,6 +24,10 @@ interface CustomerSession {
   id: string;
   date: string; // YYYY-MM-DD
   full_name: string;
+
+  // ✅ NEW
+  phone_number?: string | null;
+
   customer_type: string;
   customer_field: string | null;
   has_id: boolean;
@@ -179,6 +183,11 @@ const Customer_Lists: React.FC = () => {
 
     setSessions((data as CustomerSession[]) || []);
     setLoading(false);
+  };
+
+  const phoneText = (s: CustomerSession): string => {
+    const p = String(s.phone_number ?? "").trim();
+    return p || "N/A";
   };
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
@@ -492,7 +501,6 @@ const Customer_Lists: React.FC = () => {
 
   return (
     <IonPage>
-      {/* ✅ SAME BACKGROUND as Seat Map page: use staff-content */}
       <IonContent className="staff-content">
         <div className="customer-lists-container">
           {/* TOP BAR */}
@@ -532,6 +540,7 @@ const Customer_Lists: React.FC = () => {
                   <tr>
                     <th>Date</th>
                     <th>Full Name</th>
+                    <th>Phone #</th> {/* ✅ NEW column beside Full Name */}
                     <th>Type</th>
                     <th>Field</th>
                     <th>Has ID</th>
@@ -560,6 +569,7 @@ const Customer_Lists: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.date}</td>
                         <td>{session.full_name}</td>
+                        <td>{phoneText(session)}</td> {/* ✅ PHONE DATA HERE */}
                         <td>{session.customer_type}</td>
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
@@ -603,12 +613,18 @@ const Customer_Lists: React.FC = () => {
 
                         <td>
                           <button
-                            className={`receipt-btn pay-badge ${toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            className={`receipt-btn pay-badge ${
+                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
+                            }`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                           >
-                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                            {togglingPaidId === session.id
+                              ? "Updating..."
+                              : toBool(session.is_paid)
+                              ? "PAID"
+                              : "UNPAID"}
                           </button>
                         </td>
 
@@ -842,6 +858,11 @@ const Customer_Lists: React.FC = () => {
                 <div className="receipt-row">
                   <span>Customer</span>
                   <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Phone</span>
+                  <span>{phoneText(selectedSession)}</span>
                 </div>
 
                 <div className="receipt-row">
