@@ -2,6 +2,7 @@
 // ✅ SAME classnames as Customer_Lists.tsx (one CSS)
 // ✅ Full code + Export to Excel (.xlsx) by selected date
 // ✅ strict TS (NO "any")
+// ✅ ADD Phone # in table + receipt + excel
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -19,6 +20,8 @@ interface PromoBookingRow {
   id: string;
   created_at: string;
   full_name: string;
+  phone_number: string | null;
+
   area: PackageArea;
   seat_number: string | null;
   start_at: string;
@@ -46,6 +49,8 @@ interface PromoBookingDBRow {
   id: string;
   created_at: string;
   full_name: string;
+  phone_number: string | null;
+
   area: PackageArea;
   seat_number: string | null;
   start_at: string;
@@ -129,7 +134,10 @@ const startEndIsoLocalDay = (yyyyMmDd: string): { startIso: string; endIso: stri
 
 const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
 
-const seatLabel = (r: PromoBookingRow): string => (r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A");
+const seatLabel = (r: PromoBookingRow): string =>
+  r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
+
+const safePhone = (v: string | null | undefined): string => (String(v ?? "").trim() ? String(v ?? "").trim() : "—");
 
 const getStatus = (startIso: string, endIso: string): "UPCOMING" | "ONGOING" | "FINISHED" => {
   const now = Date.now();
@@ -236,6 +244,8 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
     id: row.id,
     created_at: row.created_at,
     full_name: row.full_name,
+    phone_number: row.phone_number ?? null,
+
     area: row.area,
     seat_number: row.seat_number,
     start_at: row.start_at,
@@ -305,37 +315,35 @@ const Admin_Customer_Discount_List: React.FC = () => {
   // paid toggle
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
+  const selectPromoBookings = `
+    id,
+    created_at,
+    full_name,
+    phone_number,
+    area,
+    seat_number,
+    start_at,
+    end_at,
+    price,
+    gcash_amount,
+    cash_amount,
+    is_paid,
+    paid_at,
+    discount_kind,
+    discount_value,
+    discount_reason,
+    packages:package_id ( title ),
+    package_options:package_option_id (
+      option_name,
+      duration_value,
+      duration_unit
+    )
+  `;
+
   const fetchPromoBookings = async (): Promise<void> => {
     setLoading(true);
 
-    const { data, error } = await supabase
-      .from("promo_bookings")
-      .select(
-        `
-        id,
-        created_at,
-        full_name,
-        area,
-        seat_number,
-        start_at,
-        end_at,
-        price,
-        gcash_amount,
-        cash_amount,
-        is_paid,
-        paid_at,
-        discount_kind,
-        discount_value,
-        discount_reason,
-        packages:package_id ( title ),
-        package_options:package_option_id (
-          option_name,
-          duration_value,
-          duration_unit
-        )
-      `
-      )
-      .order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("promo_bookings").select(selectPromoBookings).order("created_at", { ascending: false });
 
     if (error) {
       // eslint-disable-next-line no-console
@@ -386,6 +394,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
   /* =========================
      ✅ Export Excel (.xlsx) - NICE LAYOUT (by selected date)
+     ✅ Added Phone #
   ========================= */
   const exportToExcelByDate = async (): Promise<void> => {
     if (!selectedDate) {
@@ -409,6 +418,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
     ws.columns = [
       { header: "Created At", key: "created_at", width: 20 },
       { header: "Customer", key: "customer", width: 26 },
+      { header: "Phone #", key: "phone", width: 16 },
       { header: "Area", key: "area", width: 16 },
       { header: "Seat", key: "seat", width: 16 },
       { header: "Package", key: "pkg", width: 20 },
@@ -430,19 +440,19 @@ const Admin_Customer_Discount_List: React.FC = () => {
     ];
 
     // Title rows
-    ws.mergeCells("A1", "T1");
+    ws.mergeCells("A1", "U1");
     ws.getCell("A1").value = "ME TYME LOUNGE — DISCOUNT / PROMO REPORT";
     ws.getCell("A1").font = { bold: true, size: 16 };
     ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(1).height = 26;
 
-    ws.mergeCells("A2", "T2");
+    ws.mergeCells("A2", "U2");
     ws.getCell("A2").value = `Date: ${selectedDate}`;
     ws.getCell("A2").font = { size: 11 };
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(2).height = 18;
 
-    ws.mergeCells("A3", "T3");
+    ws.mergeCells("A3", "U3");
     ws.getCell("A3").value = `Generated: ${new Date().toLocaleString()}`;
     ws.getCell("A3").font = { size: 11 };
     ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
@@ -458,7 +468,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       return sum + Math.max(0, due - pi.totalPaid);
     }, 0);
 
-    ws.mergeCells("A4", "T4");
+    ws.mergeCells("A4", "U4");
     ws.getCell("A4").value =
       `Rows: ${filteredRows.length}` +
       `   •   Upcoming: ${totals.upcoming}` +
@@ -482,7 +492,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
         const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
         const imgId = wb.addImage({ buffer: ab, extension: ext });
         ws.addImage(imgId, {
-          tl: { col: 15.5, row: 0.2 }, // near top-right
+          tl: { col: 16.3, row: 0.2 },
           ext: { width: 170, height: 60 },
         });
       }
@@ -524,6 +534,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       const row = ws.addRow({
         created_at: new Date(r.created_at).toLocaleString("en-PH"),
         customer: r.full_name,
+        phone: safePhone(r.phone_number),
         area: prettyArea(r.area),
         seat: seatLabel(r),
         pkg: r.packages?.title || "—",
@@ -548,8 +559,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       ws.getRow(rowIndex).height = 18;
 
       // zebra + borders
-      row.eachCell((cell, colNumber) => {
-        cell.alignment = { vertical: "middle", horizontal: colNumber === 2 || colNumber === 6 || colNumber === 20 ? "left" : "center", wrapText: true };
+      row.eachCell((cell) => {
         cell.border = {
           top: { style: "thin", color: { argb: "FFE5E7EB" } },
           left: { style: "thin", color: { argb: "FFE5E7EB" } },
@@ -558,27 +568,35 @@ const Admin_Customer_Discount_List: React.FC = () => {
         };
         const zebra = idx % 2 === 0 ? "FFFFFFFF" : "FFF9FAFB";
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      });
+
+      // Left align text-heavy cols: Customer(2), Phone(3), Option(7), Reason(21)
+      [2, 3, 7, 21].forEach((c) => {
+        const cell = ws.getCell(rowIndex, c);
+        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
       });
 
       // Force Date/Time columns to TEXT (Created/Start/End)
-      // col: 1, 7, 8
-      [1, 7, 8].forEach((c) => {
+      // col: 1, 8, 9 (because we inserted Phone #, Start/End shifted)
+      [1, 8, 9].forEach((c) => {
         const cell = ws.getCell(rowIndex, c);
         cell.numFmt = "@";
         if (cell.value != null) cell.value = String(cell.value);
         cell.alignment = { vertical: "middle", horizontal: "center" };
       });
 
-      // Money columns formatting
-      const moneyCols = [9, 12, 13, 14, 15, 16, 17]; // base, discountAmount, final, gcash, cash, totalPaid, remaining
+      // Money columns formatting (shifted by +1 due to phone)
+      // base(10), discountAmount(13), final(14), gcash(15), cash(16), totalPaid(17), remaining(18)
+      const moneyCols = [10, 13, 14, 15, 16, 17, 18];
       moneyCols.forEach((c) => {
         const cell = ws.getCell(rowIndex, c);
         cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
         cell.alignment = { vertical: "middle", horizontal: "right" };
       });
 
-      // Paid badge coloring (col 18)
-      const paidCell = ws.getCell(rowIndex, 18);
+      // Paid badge coloring (col 19)
+      const paidCell = ws.getCell(rowIndex, 19);
       if (String(paidCell.value) === "PAID") {
         paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
         paidCell.font = { bold: true, color: { argb: "FF166534" } };
@@ -588,17 +606,13 @@ const Admin_Customer_Discount_List: React.FC = () => {
       }
     });
 
-    // filter
     ws.autoFilter = {
       from: { row: headerRowIndex, column: 1 },
       to: { row: headerRowIndex, column: ws.columns.length },
     };
 
     const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buf], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     saveAs(blob, `admin_promo_records_${selectedDate}.xlsx`);
   };
 
@@ -657,31 +671,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
         .eq("id", paymentTarget.id)
-        .select(
-          `
-          id,
-          created_at,
-          full_name,
-          area,
-          seat_number,
-          start_at,
-          end_at,
-          price,
-          gcash_amount,
-          cash_amount,
-          is_paid,
-          paid_at,
-          discount_kind,
-          discount_value,
-          discount_reason,
-          packages:package_id ( title ),
-          package_options:package_option_id (
-            option_name,
-            duration_value,
-            duration_unit
-          )
-        `
-        )
+        .select(selectPromoBookings)
         .single();
 
       if (error || !data) {
@@ -753,31 +743,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
         .eq("id", discountTarget.id)
-        .select(
-          `
-          id,
-          created_at,
-          full_name,
-          area,
-          seat_number,
-          start_at,
-          end_at,
-          price,
-          gcash_amount,
-          cash_amount,
-          is_paid,
-          paid_at,
-          discount_kind,
-          discount_value,
-          discount_reason,
-          packages:package_id ( title ),
-          package_options:package_option_id (
-            option_name,
-            duration_value,
-            duration_unit
-          )
-        `
-        )
+        .select(selectPromoBookings)
         .single();
 
       if (error || !data) {
@@ -857,7 +823,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
   const deletePromoBooking = async (row: PromoBookingRow): Promise<void> => {
     const ok = window.confirm(
-      `Delete this promo record?\n\n${row.full_name}\n${prettyArea(row.area)} - ${seatLabel(row)}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
+      `Delete this promo record?\n\n${row.full_name}\nPhone: ${safePhone(row.phone_number)}\n${prettyArea(row.area)} - ${seatLabel(row)}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
     );
     if (!ok) return;
 
@@ -995,6 +961,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                   <tr>
                     <th>Date</th>
                     <th>Customer</th>
+                    <th>Phone</th>
                     <th>Area</th>
                     <th>Seat</th>
                     <th>Package</th>
@@ -1031,6 +998,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                       <tr key={r.id}>
                         <td>{new Date(r.created_at).toLocaleString("en-PH")}</td>
                         <td>{r.full_name}</td>
+                        <td>{safePhone(r.phone_number)}</td>
                         <td>{prettyArea(r.area)}</td>
                         <td>{seatLabel(r)}</td>
                         <td>{r.packages?.title || "—"}</td>
@@ -1318,6 +1286,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
+                  <span>Phone</span>
+                  <span>{safePhone(selected.phone_number)}</span>
+                </div>
+
+                <div className="receipt-row">
                   <span>Area</span>
                   <span>{prettyArea(selected.area)}</span>
                 </div>
@@ -1342,9 +1315,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 {selected.package_options?.duration_value && selected.package_options?.duration_unit ? (
                   <div className="receipt-row">
                     <span>Duration</span>
-                    <span>
-                      {formatDuration(Number(selected.package_options.duration_value), selected.package_options.duration_unit)}
-                    </span>
+                    <span>{formatDuration(Number(selected.package_options.duration_value), selected.package_options.duration_unit)}</span>
                   </div>
                 ) : null}
 
