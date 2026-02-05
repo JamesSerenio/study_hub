@@ -3,7 +3,7 @@
 // ✅ Discount feature (same as Customer_Lists)
 // ✅ Payment modal
 // ✅ Date filter
-// ✅ Export EXCEL (.xlsx) with ExcelJS + file-saver (REPORT LAYOUT like your 2nd picture)
+// ✅ Export EXCEL (.xlsx) with ExcelJS + file-saver (logo embedded)
 // ✅ Admin delete: single row + delete by date
 // ✅ No "any"
 
@@ -55,6 +55,7 @@ const yyyyMmDdLocal = (d: Date): string => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
+
 
 const formatTimeText = (iso: string): string => {
   const d = new Date(iso);
@@ -146,7 +147,7 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
 };
 
 /* =========================
-   Excel helpers (REPORT STYLE like your 2nd screenshot)
+   Excel helpers
 ========================= */
 const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
   try {
@@ -160,26 +161,6 @@ const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
 
 const isLikelyUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v.trim());
 
-const setThinBorder = (cell: ExcelJS.Cell): void => {
-  cell.border = {
-    top: { style: "thin", color: { argb: "FF9CA3AF" } },
-    left: { style: "thin", color: { argb: "FF9CA3AF" } },
-    bottom: { style: "thin", color: { argb: "FF9CA3AF" } },
-    right: { style: "thin", color: { argb: "FF9CA3AF" } },
-  };
-};
-
-const setBoxBorderThin = (ws: ExcelJS.Worksheet, r1: number, c1: number, r2: number, c2: number): void => {
-  for (let r = r1; r <= r2; r++) {
-    for (let c = c1; c <= c2; c++) {
-      const cell = ws.getCell(r, c);
-      setThinBorder(cell);
-    }
-  }
-};
-
-const moneyFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
-
 const Admin_customer_list: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -190,6 +171,7 @@ const Admin_customer_list: React.FC = () => {
   const [deletingDate, setDeletingDate] = useState<string | null>(null);
 
   const [nowTick, setNowTick] = useState<number>(Date.now());
+
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   // Discount modal
@@ -365,19 +347,13 @@ const Admin_customer_list: React.FC = () => {
   const deleteByDate = async (): Promise<void> => {
     if (!selectedDate) return;
 
-    const ok = window.confirm(
-      `Delete ALL records on date: ${selectedDate}?\n\nThis will remove them from the database.`
-    );
+    const ok = window.confirm(`Delete ALL records on date: ${selectedDate}?\n\nThis will remove them from the database.`);
     if (!ok) return;
 
     try {
       setDeletingDate(selectedDate);
 
-      const { error } = await supabase
-        .from("customer_sessions")
-        .delete()
-        .eq("date", selectedDate)
-        .neq("reservation", "yes");
+      const { error } = await supabase.from("customer_sessions").delete().eq("date", selectedDate).neq("reservation", "yes");
 
       if (error) {
         alert(`Delete by date error: ${error.message}`);
@@ -578,7 +554,7 @@ const Admin_customer_list: React.FC = () => {
   };
 
   // -----------------------
-  // Export Excel (.xlsx) - REPORT layout like your 2nd picture
+  // Export Excel (.xlsx) with embedded logo + nice layout
   // -----------------------
   const exportToExcel = async (): Promise<void> => {
     if (!selectedDate) {
@@ -590,52 +566,16 @@ const Admin_customer_list: React.FC = () => {
       return;
     }
 
-    // totals like "Total Qty / Total / Voided" style
-    const totals = filteredSessions.reduce(
-      (acc, s) => {
-        const base = getBaseSystemCost(s);
-        const di = getDiscountInfo(s);
-        const calc = applyDiscount(base, di.kind, di.value);
-
-        const due = round2(Math.max(0, calc.discountedCost - DOWN_PAYMENT));
-        const paid = getPaidInfo(s);
-
-        acc.rows += 1;
-        acc.totalDiscount += calc.discountAmount;
-        acc.totalSystemCost += calc.discountedCost;
-        acc.totalDue += due;
-        acc.totalGcash += paid.gcash;
-        acc.totalCash += paid.cash;
-        acc.totalPaid += paid.totalPaid;
-        if (!toBool(s.is_paid)) acc.unpaid += 1;
-        return acc;
-      },
-      {
-        rows: 0,
-        unpaid: 0,
-        totalDiscount: 0,
-        totalSystemCost: 0,
-        totalDue: 0,
-        totalGcash: 0,
-        totalCash: 0,
-        totalPaid: 0,
-      }
-    );
-
     const wb = new ExcelJS.Workbook();
     wb.creator = "Me Tyme Lounge";
     wb.created = new Date();
 
-    const ws = wb.addWorksheet("Logs", {
+    const ws = wb.addWorksheet("Non-Reservation", {
       views: [{ state: "frozen", ySplit: 6 }],
       pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
     });
 
-    // A..V = 22 columns (same as your table)
-    const LAST_COL = 22; // V
-    const lastColLetter = "V";
-
-    // columns
+    // Columns (nice widths)
     ws.columns = [
       { header: "Date", key: "date", width: 12 },
       { header: "Full Name", key: "full_name", width: 26 },
@@ -661,76 +601,60 @@ const Admin_customer_list: React.FC = () => {
       { header: "Status", key: "status", width: 12 },
     ];
 
-    // ===== HEADER like your 2nd picture =====
-    // Title (big, merged, bordered)
-    ws.mergeCells(`A1:${lastColLetter}1`);
-    const titleCell = ws.getCell("A1");
-    titleCell.value = "ADMIN CUSTOMER LISTS — NON-RESERVATION REPORT";
-    titleCell.font = { bold: true, size: 16 };
-    titleCell.alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(1).height = 26;
+    // Top header
+    ws.mergeCells("A1", "V1");
+    ws.getCell("A1").value = "ME TYME LOUNGE — Admin Customer Lists (Non-Reservation)";
+    ws.getCell("A1").font = { bold: true, size: 16 };
+    ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
 
-    // Date row
-    ws.mergeCells(`A2:${lastColLetter}2`);
-    const dateCell = ws.getCell("A2");
-    dateCell.value = `Date: ${selectedDate}`;
-    dateCell.font = { size: 11 };
-    dateCell.alignment = { vertical: "middle", horizontal: "left" };
+    ws.mergeCells("A2", "V2");
+    ws.getCell("A2").value = `Date: ${selectedDate}    •    Records: ${filteredSessions.length}`;
+    ws.getCell("A2").font = { size: 11 };
+    ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
+
+    ws.getRow(1).height = 26;
     ws.getRow(2).height = 18;
 
-    // Generated row
-    ws.mergeCells(`A3:${lastColLetter}3`);
-    const genCell = ws.getCell("A3");
-    genCell.value = `Generated: ${new Date().toLocaleString()}`;
-    genCell.font = { size: 11 };
-    genCell.alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(3).height = 18;
-
-    // Summary row (like your totals line)
-    ws.mergeCells(`A4:${lastColLetter}4`);
-    const sumCell = ws.getCell("A4");
-    sumCell.value = `Rows: ${totals.rows}   •   Unpaid: ${totals.unpaid}   •   Total Due: ₱${round2(
-      totals.totalDue
-    ).toFixed(2)}   •   Total Paid: ₱${round2(totals.totalPaid).toFixed(2)}`;
-    sumCell.font = { bold: true, size: 11 };
-    sumCell.alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(4).height = 18;
-
-    // Border box around header block A1:V4 (like your green outline feel)
-    setBoxBorderThin(ws, 1, 1, 4, LAST_COL);
-
-    // Embed logo (top-right) like the report
+    // Embed logo (if bundler resolves to URL)
     if (isLikelyUrl(logo)) {
       const ab = await fetchAsArrayBuffer(logo);
       if (ab) {
         const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
         const imgId = wb.addImage({ buffer: ab, extension: ext });
         ws.addImage(imgId, {
-          tl: { col: 18.2, row: 0.2 },
-          ext: { width: 170, height: 60 },
+          tl: { col: 18.2, row: 0.2 }, // top-right
+          ext: { width: 160, height: 60 },
         });
       }
     }
 
-    // Blank spacer row 5
-    ws.getRow(5).height = 8;
-
-    // ===== TABLE HEADER ROW (row 6) =====
+    // Header row index
     const headerRowIndex = 6;
     const headerRow = ws.getRow(headerRowIndex);
-    headerRow.values = ["", ...ws.columns.map((c) => String(c.header ?? ""))]; // ✅ FIX: proper 1-based values
-    headerRow.height = 22;
+    headerRow.values = ws.columns.map((c) => String(c.header ?? ""));
+    headerRow.height = 20;
 
-    for (let c = 1; c <= LAST_COL; c++) {
-      const cell = ws.getCell(headerRowIndex, c);
-      cell.font = { bold: true, size: 11 };
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
       cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } }; // light gray like your 2nd pic
-      setThinBorder(cell);
-    }
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF9CA3AF" } },
+        left: { style: "thin", color: { argb: "FF9CA3AF" } },
+        bottom: { style: "thin", color: { argb: "FF9CA3AF" } },
+        right: { style: "thin", color: { argb: "FF9CA3AF" } },
+      };
+    });
 
-    // ===== DATA ROWS =====
-    const startDataRow = headerRowIndex + 1;
+    const moneyCols = new Set([
+      "amount",
+      "discount_amount",
+      "system_cost",
+      "gcash",
+      "cash",
+      "total_paid",
+      "remaining",
+    ]);
 
     filteredSessions.forEach((s, idx) => {
       const open = isOpenTimeSession(s);
@@ -742,60 +666,63 @@ const Admin_customer_list: React.FC = () => {
       const calc = applyDiscount(base, di.kind, di.value);
 
       const pi = getPaidInfo(s);
-      const due = round2(Math.max(0, calc.discountedCost - DOWN_PAYMENT));
+      const due = getSessionBalance(s);
       const remaining = round2(Math.max(0, due - pi.totalPaid));
       const status = renderStatus(s);
 
-      const row = ws.addRow([
-        s.date,
-        s.full_name,
-        s.customer_type,
-        s.customer_field ?? "",
-        s.has_id ? "Yes" : "No",
-        s.id_number ?? "N/A",
-        s.hour_avail,
-        formatTimeText(s.time_started),
-        open ? "OPEN" : formatTimeText(s.time_ended),
-        formatMinutesToTime(totalMins),
-        disp.label,
-        disp.value,
-        getDiscountTextFrom(di.kind, di.value),
-        calc.discountAmount,
-        calc.discountedCost,
-        pi.gcash,
-        pi.cash,
-        pi.totalPaid,
+      const row = ws.addRow({
+        date: s.date,
+        full_name: s.full_name,
+        customer_type: s.customer_type,
+        customer_field: s.customer_field ?? "",
+        has_id: s.has_id ? "Yes" : "No",
+        id_number: s.id_number ?? "N/A",
+        hour_avail: s.hour_avail,
+        time_in: formatTimeText(s.time_started),
+        time_out: open ? "OPEN" : formatTimeText(s.time_ended),
+        total_time: formatMinutesToTime(totalMins),
+        amount_label: disp.label,
+        amount: disp.value,
+        discount_text: getDiscountTextFrom(di.kind, di.value),
+        discount_amount: calc.discountAmount,
+        system_cost: calc.discountedCost,
+        gcash: pi.gcash,
+        cash: pi.cash,
+        total_paid: pi.totalPaid,
         remaining,
-        toBool(s.is_paid) ? "PAID" : "UNPAID",
-        s.seat_number,
+        paid: toBool(s.is_paid) ? "PAID" : "UNPAID",
+        seat: s.seat_number,
         status,
-      ]);
+      });
 
-      const r = row.number;
-      ws.getRow(r).height = 18;
+      const rowIndex = row.number;
+      ws.getRow(rowIndex).height = 18;
 
-      // zebra + borders + alignments like report tables
-      for (let c = 1; c <= LAST_COL; c++) {
-        const cell = ws.getCell(r, c);
-        setThinBorder(cell);
+      row.eachCell((cell, colNumber) => {
+        cell.alignment = { vertical: "middle", horizontal: colNumber === 2 ? "left" : "center", wrapText: true };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFE5E7EB" } },
+          left: { style: "thin", color: { argb: "FFE5E7EB" } },
+          bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+          right: { style: "thin", color: { argb: "FFE5E7EB" } },
+        };
 
         const zebra = idx % 2 === 0 ? "FFFFFFFF" : "FFF9FAFB";
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
-
-        // default
-        cell.alignment = { vertical: "middle", horizontal: c === 2 || c === 4 ? "left" : "center", wrapText: true };
-      }
-
-      // money columns formatting
-      const moneyCols = [12, 14, 15, 16, 17, 18, 19]; // Amount, Discount Amount, System Cost, GCash, Cash, Total Paid, Remaining
-      moneyCols.forEach((col) => {
-        const cell = ws.getCell(r, col);
-        cell.numFmt = moneyFmt;
-        cell.alignment = { vertical: "middle", horizontal: "right" };
       });
 
-      // Paid cell highlight (col 20)
-      const paidCell = ws.getCell(r, 20);
+      // money formatting
+      ws.columns.forEach((c, i) => {
+        if (!c.key) return;
+        if (moneyCols.has(String(c.key))) {
+          const cell = ws.getCell(rowIndex, i + 1);
+          cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
+          cell.alignment = { vertical: "middle", horizontal: "right" };
+        }
+      });
+
+      // paid badge coloring (column 20 = Paid?)
+      const paidCell = ws.getCell(rowIndex, 20);
       if (String(paidCell.value) === "PAID") {
         paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
         paidCell.font = { bold: true, color: { argb: "FF166534" } };
@@ -803,17 +730,12 @@ const Admin_customer_list: React.FC = () => {
         paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
         paidCell.font = { bold: true, color: { argb: "FF991B1B" } };
       }
-      paidCell.alignment = { vertical: "middle", horizontal: "center" };
     });
 
-    // Outline border for whole table block (header+data)
-    const endRow = startDataRow + filteredSessions.length;
-    setBoxBorderThin(ws, headerRowIndex, 1, Math.max(headerRowIndex, endRow), LAST_COL);
-
-    // Filter on header row
+    // Filter
     ws.autoFilter = {
       from: { row: headerRowIndex, column: 1 },
-      to: { row: headerRowIndex, column: LAST_COL },
+      to: { row: headerRowIndex, column: ws.columns.length },
     };
 
     const buf = await wb.xlsx.writeBuffer();

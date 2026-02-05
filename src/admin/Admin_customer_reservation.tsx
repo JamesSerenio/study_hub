@@ -1,7 +1,7 @@
 // src/pages/Admin_customer_reservation.tsx
 // ✅ Same classnames/layout as Admin_customer_list.tsx (one CSS)
 // ✅ Date filter (reservation_date)
-// ✅ Export to Excel (CSV) selected date only (UTF-8 BOM, Date/Time as TEXT, Amount as NUMBER only)
+// ✅ Export EXCEL (.xlsx) selected date only (Date/Time as TEXT, Amount as NUMBER only)
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both) in table + receipt
 // ✅ Discount + Discount Reason (saved, NOT shown on receipt)
 // ✅ Payment (GCash/Cash) + Auto PAID/UNPAID on SAVE PAYMENT
@@ -17,6 +17,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
+
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0; // hidden
@@ -69,8 +72,6 @@ const yyyyMmDdLocal = (d: Date): string => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
-
-const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
 
 const formatTimeText = (iso: string): string => {
   const d = new Date(iso);
@@ -143,6 +144,21 @@ const splitSeats = (seatStr: string): string[] => {
     .map((s) => s.trim())
     .filter((s) => s.length > 0 && s.toUpperCase() !== "N/A");
 };
+
+/* =========================
+   Excel helpers (logo)
+========================= */
+const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.arrayBuffer();
+  } catch {
+    return null;
+  }
+};
+
+const isLikelyUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v.trim());
 
 const Admin_customer_reservation: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
@@ -466,7 +482,9 @@ const Admin_customer_reservation: React.FC = () => {
     }
 
     const count = filteredSessions.length;
-    const ok = window.confirm(`Delete ALL reservation records on ${selectedDate}?\n\nThis will delete ${count} record(s) from the database.`);
+    const ok = window.confirm(
+      `Delete ALL reservation records on ${selectedDate}?\n\nThis will delete ${count} record(s) from the database.`
+    );
     if (!ok) return;
 
     try {
@@ -674,10 +692,10 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // Export CSV for selected date only
-  // -----------------------
-  const exportToExcel = (): void => {
+  /* =========================
+     ✅ Export Excel (.xlsx) - NICE LAYOUT
+  ========================= */
+  const exportToExcel = async (): Promise<void> => {
     if (!selectedDate) {
       alert("Please select a date.");
       return;
@@ -687,35 +705,136 @@ const Admin_customer_reservation: React.FC = () => {
       return;
     }
 
-    const headers = [
-      "Reservation Date",
-      "Full Name",
-      "Field",
-      "Has ID",
-      "Specific ID",
-      "Hours",
-      "Time In",
-      "Time Out",
-      "Total Time (min)",
-      "Amount Label",
-      "Amount",
-      "Discount",
-      "Discount Amount",
-      "System Cost (After Discount)",
-      "GCash",
-      "Cash",
-      "Total Paid",
-      "Remaining Balance",
-      "Paid?",
-      "Seat",
-      "Status",
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Me Tyme Lounge";
+    wb.created = new Date();
+
+    const ws = wb.addWorksheet("Reservations", {
+      views: [{ state: "frozen", ySplit: 6 }],
+      pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    });
+
+    ws.columns = [
+      { header: "Reservation Date", key: "reservation_date", width: 16 },
+      { header: "Full Name", key: "full_name", width: 26 },
+      { header: "Field", key: "field", width: 18 },
+      { header: "Has ID", key: "has_id", width: 10 },
+      { header: "Specific ID", key: "id_number", width: 16 },
+      { header: "Hours", key: "hours", width: 10 },
+      { header: "Time In", key: "time_in", width: 10 },
+      { header: "Time Out", key: "time_out", width: 10 },
+      { header: "Total Time", key: "total_time", width: 14 },
+      { header: "Amount Label", key: "amount_label", width: 14 },
+      { header: "Amount", key: "amount", width: 12 },
+      { header: "Discount", key: "discount", width: 12 },
+      { header: "Discount Amount", key: "discount_amount", width: 16 },
+      { header: "System Cost", key: "system_cost", width: 14 },
+      { header: "GCash", key: "gcash", width: 12 },
+      { header: "Cash", key: "cash", width: 12 },
+      { header: "Total Paid", key: "total_paid", width: 12 },
+      { header: "Remaining", key: "remaining", width: 12 },
+      { header: "Paid?", key: "paid", width: 10 },
+      { header: "Seat", key: "seat", width: 12 },
+      { header: "Status", key: "status", width: 12 },
     ];
 
-    const rows = filteredSessions.map((s) => {
-      const timeIn = formatTimeText(s.time_started);
-      const timeOut = isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
-      const status = getStatus(s);
+    // Title rows
+    ws.mergeCells("A1", "U1");
+    ws.getCell("A1").value = "ME TYME LOUNGE — RESERVATIONS REPORT";
+    ws.getCell("A1").font = { bold: true, size: 16 };
+    ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(1).height = 26;
 
+    ws.mergeCells("A2", "U2");
+    ws.getCell("A2").value = `Date: ${selectedDate}`;
+    ws.getCell("A2").font = { size: 11 };
+    ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(2).height = 18;
+
+    const generatedAt = new Date();
+    ws.mergeCells("A3", "U3");
+    ws.getCell("A3").value = `Generated: ${generatedAt.toLocaleString()}`;
+    ws.getCell("A3").font = { size: 11 };
+    ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(3).height = 18;
+
+    // Totals row
+    const totals = filteredSessions.reduce(
+      (acc, s) => {
+        const disp = getDisplayAmount(s);
+        const pi = getPaidInfo(s);
+        const due = getSessionBalance(s);
+        const remaining = round2(Math.max(0, due - pi.totalPaid));
+
+        if (disp.label === "Total Balance") acc.totalBalance += disp.value;
+        else acc.totalChange += disp.value;
+
+        acc.totalPaid += pi.totalPaid;
+        acc.totalRemaining += remaining;
+
+        return acc;
+      },
+      { totalBalance: 0, totalChange: 0, totalPaid: 0, totalRemaining: 0 }
+    );
+
+    ws.mergeCells("A4", "U4");
+    ws.getCell("A4").value =
+      `Rows: ${filteredSessions.length}` +
+      `   •   Total Balance: ₱${totals.totalBalance.toFixed(2)}` +
+      `   •   Total Change: ₱${totals.totalChange.toFixed(2)}` +
+      `   •   Total Paid: ₱${totals.totalPaid.toFixed(2)}` +
+      `   •   Total Remaining: ₱${totals.totalRemaining.toFixed(2)}`;
+    ws.getCell("A4").font = { size: 11, bold: true };
+    ws.getCell("A4").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(4).height = 18;
+
+    // Blank row 5
+    ws.getRow(5).height = 6;
+
+    // Optional logo embed (top-right)
+    if (isLikelyUrl(logo)) {
+      const ab = await fetchAsArrayBuffer(logo);
+      if (ab) {
+        const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
+        const imgId = wb.addImage({ buffer: ab, extension: ext });
+        ws.addImage(imgId, {
+          tl: { col: 16.8, row: 0.2 }, // near top-right
+          ext: { width: 160, height: 60 },
+        });
+      }
+    }
+
+    // Header row index
+    const headerRowIndex = 6;
+    const headerRow = ws.getRow(headerRowIndex);
+    headerRow.values = ws.columns.map((c) => String(c.header ?? ""));
+    headerRow.height = 20;
+
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF9CA3AF" } },
+        left: { style: "thin", color: { argb: "FF9CA3AF" } },
+        bottom: { style: "thin", color: { argb: "FF9CA3AF" } },
+        right: { style: "thin", color: { argb: "FF9CA3AF" } },
+      };
+    });
+
+    const moneyCols = new Set([
+      "amount",
+      "discount_amount",
+      "system_cost",
+      "gcash",
+      "cash",
+      "total_paid",
+      "remaining",
+    ]);
+
+    // Add rows
+    filteredSessions.forEach((s, idx) => {
+      const open = isOpenTimeSession(s);
       const mins = getDisplayedTotalMinutes(s);
       const disp = getDisplayAmount(s);
 
@@ -726,43 +845,91 @@ const Admin_customer_reservation: React.FC = () => {
       const pi = getPaidInfo(s);
       const due = getSessionBalance(s);
       const remaining = round2(Math.max(0, due - pi.totalPaid));
+      const status = getStatus(s);
 
-      return [
-        `\t${s.reservation_date ?? ""}`,
-        s.full_name,
-        s.customer_field ?? "",
-        s.has_id ? "Yes" : "No",
-        s.id_number ?? "N/A",
-        s.hour_avail,
-        `\t${timeIn}`,
-        `\t${timeOut}`,
-        String(mins ?? 0),
-        disp.label,
-        disp.value.toFixed(2),
-        getDiscountTextFrom(di.kind, di.value),
-        calc.discountAmount.toFixed(2),
-        calc.discountedCost.toFixed(2),
-        pi.gcash.toFixed(2),
-        pi.cash.toFixed(2),
-        pi.totalPaid.toFixed(2),
-        remaining.toFixed(2),
-        toBool(s.is_paid) ? "PAID" : "UNPAID",
-        s.seat_number,
+      const row = ws.addRow({
+        reservation_date: String(s.reservation_date ?? ""),
+        full_name: s.full_name,
+        field: s.customer_field ?? "",
+        has_id: s.has_id ? "Yes" : "No",
+        id_number: s.id_number ?? "N/A",
+        hours: s.hour_avail,
+        time_in: String(formatTimeText(s.time_started)),
+        time_out: open ? "OPEN" : String(formatTimeText(s.time_ended)),
+        total_time: formatMinutesToTime(mins),
+        amount_label: disp.label,
+        amount: disp.value,
+        discount: getDiscountTextFrom(di.kind, di.value),
+        discount_amount: calc.discountAmount,
+        system_cost: calc.discountedCost,
+        gcash: pi.gcash,
+        cash: pi.cash,
+        total_paid: pi.totalPaid,
+        remaining,
+        paid: toBool(s.is_paid) ? "PAID" : "UNPAID",
+        seat: s.seat_number,
         status,
-      ];
+      });
+
+      const rowIndex = row.number;
+      ws.getRow(rowIndex).height = 18;
+
+      row.eachCell((cell, colNumber) => {
+        cell.alignment = { vertical: "middle", horizontal: colNumber === 2 ? "left" : "center", wrapText: true };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFE5E7EB" } },
+          left: { style: "thin", color: { argb: "FFE5E7EB" } },
+          bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+          right: { style: "thin", color: { argb: "FFE5E7EB" } },
+        };
+
+        const zebra = idx % 2 === 0 ? "FFFFFFFF" : "FFF9FAFB";
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
+      });
+
+      // Force Date/Time as TEXT (avoid Excel auto-change)
+      // Reservation Date (col 1), Time In (col 7), Time Out (col 8)
+      const textCols = [1, 7, 8];
+      textCols.forEach((c) => {
+        const cell = ws.getCell(rowIndex, c);
+        cell.numFmt = "@";
+        if (cell.value != null) cell.value = String(cell.value);
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+      });
+
+      // money formatting
+      ws.columns.forEach((c, i) => {
+        const key = String(c.key ?? "");
+        if (moneyCols.has(key)) {
+          const cell = ws.getCell(rowIndex, i + 1);
+          cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
+          cell.alignment = { vertical: "middle", horizontal: "right" };
+        }
+      });
+
+      // Paid badge coloring (Paid? column = 19)
+      const paidCell = ws.getCell(rowIndex, 19);
+      if (String(paidCell.value) === "PAID") {
+        paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
+        paidCell.font = { bold: true, color: { argb: "FF166534" } };
+      } else {
+        paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+        paidCell.font = { bold: true, color: { argb: "FF991B1B" } };
+      }
     });
 
-    const csv = "\ufeff" + [headers, ...rows].map((r) => r.map((v) => csvEscape(String(v ?? ""))).join(",")).join("\n");
+    // Filter
+    ws.autoFilter = {
+      from: { row: headerRowIndex, column: 1 },
+      to: { row: headerRowIndex, column: ws.columns.length },
+    };
 
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `admin-reservations-${selectedDate}.csv`;
-    a.click();
-
-    URL.revokeObjectURL(url);
+    saveAs(blob, `admin-reservations-${selectedDate}.xlsx`);
   };
 
   return (
@@ -793,7 +960,7 @@ const Admin_customer_reservation: React.FC = () => {
               </label>
 
               <div className="admin-tools-row">
-                <button className="receipt-btn" onClick={exportToExcel} disabled={filteredSessions.length === 0}>
+                <button className="receipt-btn" onClick={() => void exportToExcel()} disabled={filteredSessions.length === 0}>
                   Export to Excel
                 </button>
 
@@ -911,7 +1078,11 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>
                           <div className="action-stack">
                             {showStop && (
-                              <button className="receipt-btn" disabled={stoppingId === session.id} onClick={() => void stopReservationTime(session)}>
+                              <button
+                                className="receipt-btn"
+                                disabled={stoppingId === session.id}
+                                onClick={() => void stopReservationTime(session)}
+                              >
                                 {stoppingId === session.id ? "Stopping..." : "Stop Time"}
                               </button>
                             )}
