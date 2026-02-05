@@ -6,6 +6,7 @@
 // ✅ Friendly overlap modal when seat_blocked_times_no_overlap hit
 // ✅ After success OK: closes THIS promo modal only (does NOT trigger parent "Thank you" unless your parent onSaved() shows it)
 // ✅ THEMED: className="booking-modal" + bookadd-card + form-item (same as Booking)
+// ✅ NEW: Phone Number required + modal validation (must start 09 + exactly 11 digits)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -163,6 +164,18 @@ const computeStatus = (
   return "finished";
 };
 
+/* ✅ Phone number helpers (09 + exactly 11 digits) */
+const normalizePhone = (raw: string): string => String(raw).replace(/\D/g, "");
+const isValidPHPhone09 = (digits: string): boolean => /^09\d{9}$/.test(digits);
+const phoneErrorMessage = (digits: string): string | null => {
+  if (!digits) return "Phone number is required.";
+  if (!digits.startsWith("09")) return "Phone number must start with 09.\n\nExample: 09123456789";
+  if (digits.length < 11) return "Phone number is too short. It must be exactly 11 digits.\n\nExample: 09123456789";
+  if (digits.length > 11) return "Phone number is too long. It must be exactly 11 digits.\n\nExample: 09123456789";
+  if (!isValidPHPhone09(digits)) return "Invalid phone number.\n\nExample: 09123456789";
+  return null;
+};
+
 /** Overlap rule: existing.start < new.end AND existing.end > new.start */
 const checkPromoAvailability = async (params: {
   area: PackageArea;
@@ -229,7 +242,7 @@ const isSeatBlockedOverlap = (msg: string): boolean => {
   const m = msg.toLowerCase();
   return (
     m.includes("seat_blocked_times_no_overlap") ||
-    m.includes("duplicate key") === false && m.includes("exclusion constraint") // generic pg wording
+    (m.includes("duplicate key") === false && m.includes("exclusion constraint"))
   );
 };
 
@@ -252,6 +265,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
   };
 
   const [fullName, setFullName] = useState<string>("");
+  const [phoneNumber, setPhoneNumber] = useState<string>(""); // ✅ NEW
   const [area, setArea] = useState<PackageArea>("common_area");
   const [packageId, setPackageId] = useState<string>("");
   const [optionId, setOptionId] = useState<string>("");
@@ -349,6 +363,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setLoading(true);
 
       setFullName("");
+      setPhoneNumber(""); // ✅ NEW reset
       setArea("common_area");
       setPackageId("");
       setOptionId("");
@@ -452,7 +467,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       seat_number: seatKey,
       start_at: startIso,
       end_at: endIso,
-      source: "reserved", // ✅ allowed by your table constraint
+      source: "reserved",
       note: "promo",
     };
 
@@ -477,8 +492,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
   const submitPromo = async (): Promise<void> => {
     const name = fullName.trim();
+    const phoneDigits = normalizePhone(phoneNumber);
 
     if (!name) return showAlert("Required", "Full name is required.");
+
+    // ✅ Phone validation -> IonAlert
+    const pErr = phoneErrorMessage(phoneDigits);
+    if (pErr) return showAlert("Invalid Phone Number", pErr);
+
     if (!selectedPackage) return showAlert("Required", "Select promo package.");
     if (!selectedOption) return showAlert("Required", "Select duration/price option.");
     if (!startIso) return showAlert("Required", "Select start date & time.");
@@ -515,6 +536,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     const payload = {
       user_id: userId,
       full_name: name,
+      phone_number: phoneDigits, // ✅ NEW saved to DB
       area,
       package_id: selectedPackage.id,
       package_option_id: selectedOption.id,
@@ -548,9 +570,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     if (!blockRes.ok) {
       setLoading(false);
-
-      // optional: could also rollback promo_bookings here (delete last insert),
-      // but strict rollback needs returning inserted id. For now: just warn.
       return showAlert("Not Available", blockRes.message ?? "Not available.");
     }
 
@@ -597,9 +616,22 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             </div>
           )}
 
+          {/* ✅ Full Name */}
           <IonItem className="form-item">
-            <IonLabel position="stacked">Full Name</IonLabel>
+            <IonLabel position="stacked">Full Name *</IonLabel>
             <IonInput value={fullName} onIonInput={(e) => setFullName(String(e.detail.value ?? ""))} />
+          </IonItem>
+
+          {/* ✅ Phone Number (katabi/sunod ng Full Name) */}
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Phone Number *</IonLabel>
+            <IonInput
+              type="tel"
+              inputMode="tel"
+              placeholder="09XXXXXXXXX"
+              value={phoneNumber}
+              onIonInput={(e) => setPhoneNumber(String(e.detail.value ?? ""))}
+            />
           </IonItem>
 
           <IonItem className="form-item">
@@ -659,8 +691,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             >
               {packageOptions.map((o) => (
                 <IonSelectOption key={o.id} value={o.id}>
-                  {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱
-                  {toNum(o.price).toFixed(2)}
+                  {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
                 </IonSelectOption>
               ))}
             </IonSelect>

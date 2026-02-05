@@ -12,6 +12,7 @@
 // ✅ OPEN sessions auto-update display
 // ✅ Stop Time (OPEN) releases seat_blocked_times (end_at = now)
 // ✅ No "any"
+// ✅ NEW: Phone Number column (table + receipt + excel)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -31,6 +32,9 @@ interface CustomerSession {
   id: string;
   date: string;
   full_name: string;
+
+  phone_number?: string | null; // ✅ NEW
+
   customer_type: string;
   customer_field: string | null;
   has_id: boolean;
@@ -213,6 +217,11 @@ const Admin_customer_reservation: React.FC = () => {
   const isPromoType = (t: string | null | undefined): boolean => {
     const v = (t ?? "").trim().toLowerCase();
     return v === "promo";
+  };
+
+  const safePhone = (v: string | null | undefined): string => {
+    const s = String(v ?? "").trim();
+    return s || "N/A";
   };
 
   const fetchReservations = async (): Promise<void> => {
@@ -449,7 +458,7 @@ const Admin_customer_reservation: React.FC = () => {
 
   const deleteSession = async (session: CustomerSession): Promise<void> => {
     const ok = window.confirm(
-      `Delete this reservation record?\n\n${session.full_name}\nReservation Date: ${session.reservation_date ?? "N/A"}`
+      `Delete this reservation record?\n\n${session.full_name}\nPhone: ${safePhone(session.phone_number)}\nReservation Date: ${session.reservation_date ?? "N/A"}`
     );
     if (!ok) return;
 
@@ -693,7 +702,7 @@ const Admin_customer_reservation: React.FC = () => {
   };
 
   /* =========================
-     ✅ Export Excel (.xlsx) - NICE LAYOUT
+     ✅ Export Excel (.xlsx) - NICE LAYOUT (with Phone #)
   ========================= */
   const exportToExcel = async (): Promise<void> => {
     if (!selectedDate) {
@@ -717,6 +726,7 @@ const Admin_customer_reservation: React.FC = () => {
     ws.columns = [
       { header: "Reservation Date", key: "reservation_date", width: 16 },
       { header: "Full Name", key: "full_name", width: 26 },
+      { header: "Phone Number", key: "phone_number", width: 16 }, // ✅ NEW
       { header: "Field", key: "field", width: 18 },
       { header: "Has ID", key: "has_id", width: 10 },
       { header: "Specific ID", key: "id_number", width: 16 },
@@ -739,20 +749,20 @@ const Admin_customer_reservation: React.FC = () => {
     ];
 
     // Title rows
-    ws.mergeCells("A1", "U1");
+    ws.mergeCells("A1", "V1"); // ✅ updated end col (V)
     ws.getCell("A1").value = "ME TYME LOUNGE — RESERVATIONS REPORT";
     ws.getCell("A1").font = { bold: true, size: 16 };
     ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(1).height = 26;
 
-    ws.mergeCells("A2", "U2");
+    ws.mergeCells("A2", "V2");
     ws.getCell("A2").value = `Date: ${selectedDate}`;
     ws.getCell("A2").font = { size: 11 };
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(2).height = 18;
 
     const generatedAt = new Date();
-    ws.mergeCells("A3", "U3");
+    ws.mergeCells("A3", "V3");
     ws.getCell("A3").value = `Generated: ${generatedAt.toLocaleString()}`;
     ws.getCell("A3").font = { size: 11 };
     ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
@@ -777,7 +787,7 @@ const Admin_customer_reservation: React.FC = () => {
       { totalBalance: 0, totalChange: 0, totalPaid: 0, totalRemaining: 0 }
     );
 
-    ws.mergeCells("A4", "U4");
+    ws.mergeCells("A4", "V4");
     ws.getCell("A4").value =
       `Rows: ${filteredSessions.length}` +
       `   •   Total Balance: ₱${totals.totalBalance.toFixed(2)}` +
@@ -798,7 +808,7 @@ const Admin_customer_reservation: React.FC = () => {
         const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
         const imgId = wb.addImage({ buffer: ab, extension: ext });
         ws.addImage(imgId, {
-          tl: { col: 16.8, row: 0.2 }, // near top-right
+          tl: { col: 18.2, row: 0.2 }, // ✅ adjust for more columns
           ext: { width: 160, height: 60 },
         });
       }
@@ -850,6 +860,7 @@ const Admin_customer_reservation: React.FC = () => {
       const row = ws.addRow({
         reservation_date: String(s.reservation_date ?? ""),
         full_name: s.full_name,
+        phone_number: safePhone(s.phone_number), // ✅ NEW
         field: s.customer_field ?? "",
         has_id: s.has_id ? "Yes" : "No",
         id_number: s.id_number ?? "N/A",
@@ -888,8 +899,8 @@ const Admin_customer_reservation: React.FC = () => {
       });
 
       // Force Date/Time as TEXT (avoid Excel auto-change)
-      // Reservation Date (col 1), Time In (col 7), Time Out (col 8)
-      const textCols = [1, 7, 8];
+      // Reservation Date (col 1), Phone (col 3), Time In (col 8), Time Out (col 9)
+      const textCols = [1, 3, 8, 9];
       textCols.forEach((c) => {
         const cell = ws.getCell(rowIndex, c);
         cell.numFmt = "@";
@@ -907,8 +918,8 @@ const Admin_customer_reservation: React.FC = () => {
         }
       });
 
-      // Paid badge coloring (Paid? column = 19)
-      const paidCell = ws.getCell(rowIndex, 19);
+      // Paid badge coloring (Paid? column = 20)
+      const paidCell = ws.getCell(rowIndex, 20);
       if (String(paidCell.value) === "PAID") {
         paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
         paidCell.font = { bold: true, color: { argb: "FF166534" } };
@@ -987,6 +998,7 @@ const Admin_customer_reservation: React.FC = () => {
                   <tr>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
+                    <th>Phone #</th> {/* ✅ NEW */}
                     <th>Field</th>
                     <th>Has ID</th>
                     <th>Specific ID</th>
@@ -1017,6 +1029,7 @@ const Admin_customer_reservation: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.reservation_date ?? "N/A"}</td>
                         <td>{session.full_name}</td>
+                        <td>{safePhone(session.phone_number)}</td> {/* ✅ NEW */}
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
                         <td>{session.id_number ?? "N/A"}</td>
@@ -1113,7 +1126,9 @@ const Admin_customer_reservation: React.FC = () => {
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">DISCOUNT</h3>
-                <p className="receipt-subtitle">{discountTarget.full_name}</p>
+                <p className="receipt-subtitle">
+                  {discountTarget.full_name} — {safePhone(discountTarget.phone_number)}
+                </p>
 
                 <hr />
 
@@ -1220,7 +1235,9 @@ const Admin_customer_reservation: React.FC = () => {
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">PAYMENT</h3>
-                <p className="receipt-subtitle">{paymentTarget.full_name}</p>
+                <p className="receipt-subtitle">
+                  {paymentTarget.full_name} — {safePhone(paymentTarget.phone_number)}
+                </p>
 
                 <hr />
 
@@ -1309,6 +1326,11 @@ const Admin_customer_reservation: React.FC = () => {
                 <div className="receipt-row">
                   <span>Customer</span>
                   <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Phone #</span>
+                  <span>{safePhone(selectedSession.phone_number)}</span>
                 </div>
 
                 <div className="receipt-row">
