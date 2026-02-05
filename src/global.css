@@ -1707,6 +1707,13 @@ ion-content,
   background: rgba(69, 160, 73, 0.10);
   border: 1px solid rgba(69, 160, 73, 0.28);
   white-space: nowrap;
+  border: 0;
+  cursor: pointer;
+}
+
+.bookadd-hero-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
 }
 
 .bookadd-hero-chip-dot {

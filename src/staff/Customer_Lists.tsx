@@ -7,6 +7,7 @@
 // ✅ Payment (GCash/Cash auto based on Total Balance AFTER discount)
 // ✅ Discount reason is SAVED but ❌ NOT shown on receipt
 // ✅ NEW: Phone # column beside Full Name (separate column)
+// ✅ NEW: View to Customer toggle via localStorage (bear always visible in Book_Add)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -17,6 +18,10 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 const DOWN_PAYMENT = 50;
+
+/* ✅ LOCAL STORAGE KEYS (shared with Book_Add) */
+const LS_VIEW_ENABLED = "customer_view_enabled";
+const LS_SESSION_ID = "customer_view_session_id";
 
 type DiscountKind = "none" | "percent" | "amount";
 
@@ -128,12 +133,35 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
   return { gcash: g, cash: c };
 };
 
+/* ✅ VIEW-TO-CUSTOMER helpers */
+const isCustomerViewOnFor = (sessionId: string): boolean => {
+  const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
+  const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
+  return enabled && sid === sessionId;
+};
+
+const setCustomerView = (enabled: boolean, sessionId: string | null): void => {
+  localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
+  if (enabled && sessionId) {
+    localStorage.setItem(LS_SESSION_ID, sessionId);
+  } else {
+    localStorage.removeItem(LS_SESSION_ID);
+  }
+};
+
+const stopCustomerView = (): void => {
+  localStorage.setItem(LS_VIEW_ENABLED, "false");
+  localStorage.removeItem(LS_SESSION_ID);
+};
+
 const Customer_Lists: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+
+  const [, setViewTick] = useState<number>(0);
 
   // Date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
@@ -540,7 +568,7 @@ const Customer_Lists: React.FC = () => {
                   <tr>
                     <th>Date</th>
                     <th>Full Name</th>
-                    <th>Phone #</th> {/* ✅ NEW column beside Full Name */}
+                    <th>Phone #</th>
                     <th>Type</th>
                     <th>Field</th>
                     <th>Has ID</th>
@@ -569,7 +597,7 @@ const Customer_Lists: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.date}</td>
                         <td>{session.full_name}</td>
-                        <td>{phoneText(session)}</td> {/* ✅ PHONE DATA HERE */}
+                        <td>{phoneText(session)}</td>
                         <td>{session.customer_type}</td>
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
@@ -994,9 +1022,36 @@ const Customer_Lists: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <button className="close-btn" onClick={() => setSelectedSession(null)}>
+              <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="receipt-btn"
+                  onClick={() => {
+                    if (!selectedSession) return;
+
+                    const on = isCustomerViewOnFor(selectedSession.id);
+                    setCustomerView(!on, !on ? selectedSession.id : null);
+
+                    // ✅ force re-render para mag switch agad yung label
+                    setViewTick((x) => x + 1);
+                  }}
+                >
+                  {selectedSession && isCustomerViewOnFor(selectedSession.id)
+                    ? "Stop View to Customer"
+                    : "View to Customer"}
+                </button>
+
+                <button
+                  className="close-btn"
+                  onClick={() => {
+                    stopCustomerView();
+                    setViewTick((x) => x + 1);
+                    setSelectedSession(null);
+                  }}
+                >
                   Close
                 </button>
+              </div>
+
               </div>
             </div>
           )}
