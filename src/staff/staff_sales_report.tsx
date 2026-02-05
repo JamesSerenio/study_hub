@@ -649,6 +649,9 @@ const StaffSalesReport: React.FC = () => {
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
+  // ✅ FIX: COH GCASH should mirror "GCash Sales"
+  const cohGcash = gcashSales;
+
   const addons = addonsPaid;
 
   const discount = totals ? toNumber(totals.discount_total) : 0;
@@ -809,10 +812,11 @@ const StaffSalesReport: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* ✅ FIXED: COH / Total of the Day GCASH now mirrors gcashSales */}
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">COH / Total of the Day</div>
                     <div className="ssr-left-value ssr-left-value--cash">{peso(cashTotal + coinTotal)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">—</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(cohGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
