@@ -1,12 +1,15 @@
 // src/pages/Admin_Customer_Discount_List.tsx
 // ✅ SAME classnames as Customer_Lists.tsx (one CSS)
-// ✅ Full code + Export to Excel (by selected date)
+// ✅ Full code + Export to Excel (.xlsx) by selected date
 // ✅ strict TS (NO "any")
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
+
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
@@ -124,11 +127,9 @@ const startEndIsoLocalDay = (yyyyMmDd: string): { startIso: string; endIso: stri
   return { startIso: startLocal.toISOString(), endIso: endLocal.toISOString() };
 };
 
-const prettyArea = (a: PackageArea): string =>
-  a === "conference_room" ? "Conference Room" : "Common Area";
+const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
 
-const seatLabel = (r: PromoBookingRow): string =>
-  r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
+const seatLabel = (r: PromoBookingRow): string => (r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A");
 
 const getStatus = (startIso: string, endIso: string): "UPCOMING" | "ONGOING" | "FINISHED" => {
   const now = Date.now();
@@ -255,22 +256,18 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
   };
 };
 
-/* ====== EXPORT (CSV opens in Excel) ====== */
+/* ================= Excel helpers ================= */
 
-const csvEscape = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+const isLikelyUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v.trim());
 
-const downloadCsv = (filename: string, rows: string[][]): void => {
-  const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.arrayBuffer();
+  } catch {
+    return null;
+  }
 };
 
 /* ================= COMPONENT ================= */
@@ -387,34 +384,130 @@ const Admin_Customer_Discount_List: React.FC = () => {
     return { due: round2(calc.discountedCost), discountAmount: round2(calc.discountAmount) };
   };
 
-  /* ====== EXPORT BY DATE ====== */
-  const exportToExcelByDate = (): void => {
-    const header: string[] = [
-      "Created At",
-      "Customer",
-      "Area",
-      "Seat",
-      "Package",
-      "Option",
-      "Start",
-      "End",
-      "System Cost (Before)",
-      "Discount Type",
-      "Discount Value",
-      "Discount Amount",
-      "Final Cost",
-      "GCash",
-      "Cash",
-      "Total Paid",
-      "Remaining",
-      "Paid?",
-      "Status",
-      "Reason",
+  /* =========================
+     ✅ Export Excel (.xlsx) - NICE LAYOUT (by selected date)
+  ========================= */
+  const exportToExcelByDate = async (): Promise<void> => {
+    if (!selectedDate) {
+      alert("Please select a date.");
+      return;
+    }
+    if (filteredRows.length === 0) {
+      alert("No records for selected date.");
+      return;
+    }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Me Tyme Lounge";
+    wb.created = new Date();
+
+    const ws = wb.addWorksheet("Promo Discounts", {
+      views: [{ state: "frozen", ySplit: 6 }],
+      pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    });
+
+    ws.columns = [
+      { header: "Created At", key: "created_at", width: 20 },
+      { header: "Customer", key: "customer", width: 26 },
+      { header: "Area", key: "area", width: 16 },
+      { header: "Seat", key: "seat", width: 16 },
+      { header: "Package", key: "pkg", width: 20 },
+      { header: "Option", key: "opt", width: 28 },
+      { header: "Start", key: "start", width: 20 },
+      { header: "End", key: "end", width: 20 },
+      { header: "System Cost (Before)", key: "base", width: 18 },
+      { header: "Discount Type", key: "dkind", width: 14 },
+      { header: "Discount Value", key: "dval", width: 14 },
+      { header: "Discount Amount", key: "damt", width: 16 },
+      { header: "Final Cost", key: "final", width: 12 },
+      { header: "GCash", key: "gcash", width: 12 },
+      { header: "Cash", key: "cash", width: 12 },
+      { header: "Total Paid", key: "paid", width: 12 },
+      { header: "Remaining", key: "remain", width: 12 },
+      { header: "Paid?", key: "paid_status", width: 10 },
+      { header: "Status", key: "status", width: 12 },
+      { header: "Reason", key: "reason", width: 24 },
     ];
 
-    const lines: string[][] = [header];
+    // Title rows
+    ws.mergeCells("A1", "T1");
+    ws.getCell("A1").value = "ME TYME LOUNGE — DISCOUNT / PROMO REPORT";
+    ws.getCell("A1").font = { bold: true, size: 16 };
+    ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(1).height = 26;
 
-    filteredRows.forEach((r) => {
+    ws.mergeCells("A2", "T2");
+    ws.getCell("A2").value = `Date: ${selectedDate}`;
+    ws.getCell("A2").font = { size: 11 };
+    ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(2).height = 18;
+
+    ws.mergeCells("A3", "T3");
+    ws.getCell("A3").value = `Generated: ${new Date().toLocaleString()}`;
+    ws.getCell("A3").font = { size: 11 };
+    ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(3).height = 18;
+
+    // Totals line
+    const sumFinal = filteredRows.reduce((sum, r) => sum + getDueAfterDiscount(r).due, 0);
+    const sumDiscount = filteredRows.reduce((sum, r) => sum + getDueAfterDiscount(r).discountAmount, 0);
+    const sumPaid = filteredRows.reduce((sum, r) => sum + getPaidInfo(r).totalPaid, 0);
+    const sumRemaining = filteredRows.reduce((sum, r) => {
+      const { due } = getDueAfterDiscount(r);
+      const pi = getPaidInfo(r);
+      return sum + Math.max(0, due - pi.totalPaid);
+    }, 0);
+
+    ws.mergeCells("A4", "T4");
+    ws.getCell("A4").value =
+      `Rows: ${filteredRows.length}` +
+      `   •   Upcoming: ${totals.upcoming}` +
+      `   •   Ongoing: ${totals.ongoing}` +
+      `   •   Finished: ${totals.finished}` +
+      `   •   Total Discount: ₱${round2(sumDiscount).toFixed(2)}` +
+      `   •   Total Final: ₱${round2(sumFinal).toFixed(2)}` +
+      `   •   Total Paid: ₱${round2(sumPaid).toFixed(2)}` +
+      `   •   Total Remaining: ₱${round2(sumRemaining).toFixed(2)}`;
+    ws.getCell("A4").font = { size: 11, bold: true };
+    ws.getCell("A4").alignment = { vertical: "middle", horizontal: "left" };
+    ws.getRow(4).height = 18;
+
+    // Blank row 5
+    ws.getRow(5).height = 6;
+
+    // Optional logo embed (top-right)
+    if (isLikelyUrl(logo)) {
+      const ab = await fetchAsArrayBuffer(logo);
+      if (ab) {
+        const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
+        const imgId = wb.addImage({ buffer: ab, extension: ext });
+        ws.addImage(imgId, {
+          tl: { col: 15.5, row: 0.2 }, // near top-right
+          ext: { width: 170, height: 60 },
+        });
+      }
+    }
+
+    // Header row (row 6)
+    const headerRowIndex = 6;
+    const headerRow = ws.getRow(headerRowIndex);
+    headerRow.values = ws.columns.map((c) => String(c.header ?? ""));
+    headerRow.height = 20;
+
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF9CA3AF" } },
+        left: { style: "thin", color: { argb: "FF9CA3AF" } },
+        bottom: { style: "thin", color: { argb: "FF9CA3AF" } },
+        right: { style: "thin", color: { argb: "FF9CA3AF" } },
+      };
+    });
+
+    // Rows
+    filteredRows.forEach((r, idx) => {
       const opt = r.package_options;
       const optionText =
         opt?.option_name && opt?.duration_value && opt?.duration_unit
@@ -428,31 +521,85 @@ const Admin_Customer_Discount_List: React.FC = () => {
       const pi = getPaidInfo(r);
       const remaining = round2(Math.max(0, due - pi.totalPaid));
 
-      lines.push([
-        new Date(r.created_at).toLocaleString("en-PH"),
-        r.full_name,
-        prettyArea(r.area),
-        seatLabel(r),
-        r.packages?.title || "—",
-        optionText,
-        new Date(r.start_at).toLocaleString("en-PH"),
-        new Date(r.end_at).toLocaleString("en-PH"),
-        base.toFixed(2),
-        r.discount_kind,
-        String(round2(r.discount_value)),
-        discountAmount.toFixed(2),
-        due.toFixed(2),
-        pi.gcash.toFixed(2),
-        pi.cash.toFixed(2),
-        pi.totalPaid.toFixed(2),
-        remaining.toFixed(2),
-        toBool(r.is_paid) ? "PAID" : "UNPAID",
-        getStatus(r.start_at, r.end_at),
-        (r.discount_reason ?? "").trim(),
-      ]);
+      const row = ws.addRow({
+        created_at: new Date(r.created_at).toLocaleString("en-PH"),
+        customer: r.full_name,
+        area: prettyArea(r.area),
+        seat: seatLabel(r),
+        pkg: r.packages?.title || "—",
+        opt: optionText,
+        start: new Date(r.start_at).toLocaleString("en-PH"),
+        end: new Date(r.end_at).toLocaleString("en-PH"),
+        base,
+        dkind: r.discount_kind,
+        dval: round2(r.discount_value),
+        damt: round2(discountAmount),
+        final: due,
+        gcash: pi.gcash,
+        cash: pi.cash,
+        paid: pi.totalPaid,
+        remain: remaining,
+        paid_status: toBool(r.is_paid) ? "PAID" : "UNPAID",
+        status: getStatus(r.start_at, r.end_at),
+        reason: (r.discount_reason ?? "").trim() || "—",
+      });
+
+      const rowIndex = row.number;
+      ws.getRow(rowIndex).height = 18;
+
+      // zebra + borders
+      row.eachCell((cell, colNumber) => {
+        cell.alignment = { vertical: "middle", horizontal: colNumber === 2 || colNumber === 6 || colNumber === 20 ? "left" : "center", wrapText: true };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFE5E7EB" } },
+          left: { style: "thin", color: { argb: "FFE5E7EB" } },
+          bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+          right: { style: "thin", color: { argb: "FFE5E7EB" } },
+        };
+        const zebra = idx % 2 === 0 ? "FFFFFFFF" : "FFF9FAFB";
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
+      });
+
+      // Force Date/Time columns to TEXT (Created/Start/End)
+      // col: 1, 7, 8
+      [1, 7, 8].forEach((c) => {
+        const cell = ws.getCell(rowIndex, c);
+        cell.numFmt = "@";
+        if (cell.value != null) cell.value = String(cell.value);
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+      });
+
+      // Money columns formatting
+      const moneyCols = [9, 12, 13, 14, 15, 16, 17]; // base, discountAmount, final, gcash, cash, totalPaid, remaining
+      moneyCols.forEach((c) => {
+        const cell = ws.getCell(rowIndex, c);
+        cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
+        cell.alignment = { vertical: "middle", horizontal: "right" };
+      });
+
+      // Paid badge coloring (col 18)
+      const paidCell = ws.getCell(rowIndex, 18);
+      if (String(paidCell.value) === "PAID") {
+        paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
+        paidCell.font = { bold: true, color: { argb: "FF166534" } };
+      } else {
+        paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+        paidCell.font = { bold: true, color: { argb: "FF991B1B" } };
+      }
     });
 
-    downloadCsv(`admin_promo_records_${selectedDate}.csv`, lines);
+    // filter
+    ws.autoFilter = {
+      from: { row: headerRowIndex, column: 1 },
+      to: { row: headerRowIndex, column: ws.columns.length },
+    };
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    saveAs(blob, `admin_promo_records_${selectedDate}.xlsx`);
   };
 
   /* ====== PAYMENT ====== */
@@ -710,9 +857,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
   const deletePromoBooking = async (row: PromoBookingRow): Promise<void> => {
     const ok = window.confirm(
-      `Delete this promo record?\n\n${row.full_name}\n${prettyArea(row.area)} - ${seatLabel(
-        row
-      )}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
+      `Delete this promo record?\n\n${row.full_name}\n${prettyArea(row.area)} - ${seatLabel(row)}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
     );
     if (!ok) return;
 
@@ -776,11 +921,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
     try {
       setDeletingDate(selectedDate);
 
-      const { error } = await supabase
-        .from("promo_bookings")
-        .delete()
-        .gte("created_at", range.startIso)
-        .lt("created_at", range.endIso);
+      const { error } = await supabase.from("promo_bookings").delete().gte("created_at", range.startIso).lt("created_at", range.endIso);
 
       if (error) {
         alert(`Delete by date error: ${error.message}`);
@@ -831,7 +972,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
               {/* Buttons use same receipt-btn */}
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <button className="receipt-btn" onClick={exportToExcelByDate} disabled={filteredRows.length === 0}>
+                <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={filteredRows.length === 0}>
                   Export to Excel
                 </button>
 
@@ -901,9 +1042,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
-                            <span className="cell-strong">
-                              {getDiscountTextFrom(r.discount_kind, r.discount_value)}
-                            </span>
+                            <span className="cell-strong">{getDiscountTextFrom(r.discount_kind, r.discount_value)}</span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>Disc ₱{discountAmount.toFixed(2)}</span>
                             <button className="receipt-btn" onClick={() => openDiscountModal(r)}>
                               Discount
@@ -946,11 +1085,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                               View Receipt
                             </button>
 
-                            <button
-                              className="receipt-btn"
-                              disabled={deletingId === r.id}
-                              onClick={() => void deletePromoBooking(r)}
-                            >
+                            <button className="receipt-btn" disabled={deletingId === r.id} onClick={() => void deletePromoBooking(r)}>
                               {deletingId === r.id ? "Deleting..." : "Delete"}
                             </button>
                           </div>
@@ -1067,9 +1202,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 <div className="receipt-row">
                   <span>Value</span>
                   <div className="inline-input">
-                    <span className="inline-input-prefix">
-                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
-                    </span>
+                    <span className="inline-input-prefix">{discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}</span>
                     <input
                       className="small-input"
                       type="number"
@@ -1096,8 +1229,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 {(() => {
                   const base = round2(Math.max(0, toNumber(discountTarget.price)));
                   const rawVal = toNumber(discountValueInput);
-                  const val =
-                    discountKind === "percent" ? clamp(Math.max(0, rawVal), 0, 100) : Math.max(0, rawVal);
+                  const val = discountKind === "percent" ? clamp(Math.max(0, rawVal), 0, 100) : Math.max(0, rawVal);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, val);
 

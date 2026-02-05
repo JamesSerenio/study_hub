@@ -29,7 +29,6 @@ const Admin_Add_Ons: React.FC = () => {
   const [name, setName] = useState<string>("");
   const [restocked, setRestocked] = useState<number | undefined>(undefined);
   const [price, setPrice] = useState<number | undefined>(undefined);
-  const [expenses, setExpenses] = useState<number>(0);
   const [imageFile, setImageFile] = useState<File | null>(null);
 
   const [showToast, setShowToast] = useState<boolean>(false);
@@ -143,7 +142,6 @@ const Admin_Add_Ons: React.FC = () => {
           name: name.trim(),
           restocked,
           price,
-          expenses,
           image_url: imageUrl,
         },
       ]);
@@ -160,7 +158,6 @@ const Admin_Add_Ons: React.FC = () => {
       setName("");
       setRestocked(undefined);
       setPrice(undefined);
-      setExpenses(0);
       setImageFile(null);
       closePopover();
 
@@ -325,24 +322,6 @@ const Admin_Add_Ons: React.FC = () => {
                 </IonItem>
               </div>
 
-              <IonItem className="aao-item" lines="none">
-                <IonLabel position="stacked" className="aao-label">
-                  Expenses
-                </IonLabel>
-                <div className="aao-field">
-                  <IonInput
-                    className="aao-input"
-                    type="number"
-                    inputMode="decimal"
-                    value={expenses}
-                    placeholder="0"
-                    onIonChange={(e) => {
-                      const v: string = (e.detail.value ?? "").toString();
-                      setExpenses(v === "" ? 0 : Number(v));
-                    }}
-                  />
-                </div>
-              </IonItem>
 
               <IonButton className="aao-btn aao-btn--primary" expand="block" onClick={handleAddOnSubmit}>
                 <IonIcon slot="start" icon={addCircleOutline} />

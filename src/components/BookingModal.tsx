@@ -16,6 +16,7 @@
 // ✅ NO any
 // ✅ NEW UI: Reservation Date uses scroll/wheel picker (IonDatetimeButton + modal)
 // ✅ NEW FIX: Can save even without login (auto anonymous auth)
+// ✅ NEW: Phone Number required (both reservation and non-reservation)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -54,6 +55,7 @@ type CustomerType = "reviewer" | "student" | "regular" | "";
 
 interface CustomerForm {
   full_name: string;
+  phone_number: string; // ✅ NEW
   customer_type: CustomerType;
   customer_field: string;
   has_id: boolean;
@@ -277,6 +279,7 @@ const ensureAuthUserId = async (): Promise<string> => {
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
+    phone_number: "", // ✅ NEW
     customer_type: "",
     customer_field: "",
     has_id: false,
@@ -606,6 +609,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const trimmedName = form.full_name.trim();
     if (!trimmedName) return alert("Full Name is required.");
 
+    const trimmedPhone = form.phone_number.trim();
+    if (!trimmedPhone) return alert("Phone Number is required."); // ✅ NEW required
+
     if (form.reservation) {
       if (!form.reservation_date) return alert("Please select a reservation date.");
       if (!reservationStartIso) return alert("Please enter a valid Time Started.");
@@ -702,6 +708,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         staff_id: null, // ✅ allow saving without staff/admin login
         date: dateToStore,
         full_name: trimmedName,
+        phone_number: trimmedPhone, // ✅ NEW
         customer_type: form.customer_type,
         customer_field: form.customer_field,
         has_id: form.has_id,
@@ -729,6 +736,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     setForm({
       full_name: "",
+      phone_number: "", // ✅ NEW reset
       customer_type: "",
       customer_field: "",
       has_id: false,
@@ -782,12 +790,27 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             <IonLabel slot="end">{openTime ? "Yes" : "No"}</IonLabel>
           </IonItem>
 
+          {/* ✅ Full Name (REQUIRED) */}
           <IonItem className="form-item">
             <IonLabel position="stacked">Full Name *</IonLabel>
             <IonInput
               value={form.full_name}
+              required
               onIonChange={(e) => setForm({ ...form, full_name: e.detail.value ?? "" })}
               placeholder="Enter full name"
+            />
+          </IonItem>
+
+          {/* ✅ Phone Number BELOW Full Name (REQUIRED, both reservation & non-reservation) */}
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Phone Number *</IonLabel>
+            <IonInput
+              type="tel"
+              inputMode="tel"
+              value={form.phone_number}
+              required
+              onIonChange={(e) => setForm({ ...form, phone_number: e.detail.value ?? "" })}
+              placeholder="e.g., 09XXXXXXXXX or +639XXXXXXXXX"
             />
           </IonItem>
 
