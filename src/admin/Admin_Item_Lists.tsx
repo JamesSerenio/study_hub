@@ -6,7 +6,9 @@
 // ✅ Search bar (name/category)
 // ✅ Sort by Category OR Stock (asc/desc)
 // ✅ Actions kept (Add Stocks / Edit / Delete) — only wrapped with classnames
-// ✅ NEW: Export to Excel (.xlsx) with nicer layout (title row, generated date, widths, number formats)
+// ✅ Export to Excel (.xlsx) with nice layout
+// ✅ Excel NO ID column
+// ✅ Excel embeds actual images (not URL) using ExcelJS
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -54,7 +56,10 @@ import type {
   SelectChangeEventDetail,
 } from "@ionic/core";
 import { IonSelect, IonSelectOption } from "@ionic/react";
-import * as XLSX from "xlsx";
+
+// ✅ Excel with images
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 type SortKey = "category" | "stocks";
 
@@ -115,7 +120,6 @@ const Admin_Item_Lists: React.FC = () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.from("add_ons").select("*").order("created_at", { ascending: false });
-
       if (error) throw error;
       setAddOns((data as AddOn[]) || []);
     } catch (error: unknown) {
@@ -356,16 +360,80 @@ const Admin_Item_Lists: React.FC = () => {
     setDeleteId(null);
   };
 
-  // ✅ NEW: Export to Excel
-  const exportToExcel = (): void => {
+  // =========================
+  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED)
+  // =========================
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const res = reader.result;
+        if (typeof res !== "string") return reject(new Error("Failed to convert image"));
+        const base64 = res.split(",")[1] ?? "";
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error("FileReader error"));
+      reader.readAsDataURL(blob);
+    });
+
+  const fetchImageBase64 = async (url: string): Promise<{ base64: string; ext: "png" | "jpeg" }> => {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("Image fetch failed");
+
+    const ct = (r.headers.get("content-type") ?? "").toLowerCase();
+    const blob = await r.blob();
+    const base64 = await blobToBase64(blob);
+
+    const isPng = ct.includes("png") || url.toLowerCase().includes(".png");
+    const ext: "png" | "jpeg" = isPng ? "png" : "jpeg";
+    return { base64, ext };
+  };
+
+  const exportToExcel = async (): Promise<void> => {
     try {
       const now = new Date();
       const title = "ADD-ONS INVENTORY REPORT";
       const generated = `Generated: ${now.toLocaleString()}`;
       const sortInfo = `Sort: ${sortKey} (${sortOrder})   Search: ${search.trim() ? search.trim() : "—"}`;
 
-      // columns count = 11 (same as table)
-      const header = [
+      const workbook = new ExcelJS.Workbook();
+      const ws = workbook.addWorksheet("Add-ons", {
+        views: [{ state: "frozen", ySplit: 5 }],
+      });
+
+      ws.columns = [
+        { header: "Image", key: "image", width: 14 },
+        { header: "Name", key: "name", width: 28 },
+        { header: "Category", key: "category", width: 18 },
+        { header: "Price", key: "price", width: 12 },
+        { header: "Restocked", key: "restocked", width: 12 },
+        { header: "Sold", key: "sold", width: 10 },
+        { header: "Stocks", key: "stocks", width: 10 },
+        { header: "Expenses", key: "expenses", width: 12 },
+        { header: "Overall Sales", key: "overall", width: 14 },
+        { header: "Expected Sales", key: "expected", width: 14 },
+      ];
+
+      // Title rows
+      ws.mergeCells(1, 1, 1, 10);
+      ws.mergeCells(2, 1, 2, 10);
+      ws.mergeCells(3, 1, 3, 10);
+
+      ws.getCell("A1").value = title;
+      ws.getCell("A2").value = generated;
+      ws.getCell("A3").value = sortInfo;
+
+      ws.getCell("A1").font = { bold: true, size: 16 };
+      ws.getCell("A2").font = { size: 11 };
+      ws.getCell("A3").font = { size: 11 };
+
+      ws.addRow([]); // row 4 blank
+
+      // Header row at row 5
+      const headerRow = ws.getRow(5);
+      headerRow.values = [
+        "Image",
         "Name",
         "Category",
         "Price",
@@ -375,99 +443,92 @@ const Admin_Item_Lists: React.FC = () => {
         "Expenses",
         "Overall Sales",
         "Expected Sales",
-        "Image URL",
-        "ID",
       ];
+      headerRow.font = { bold: true };
+      headerRow.alignment = { vertical: "middle", horizontal: "center" };
+      headerRow.height = 20;
 
-      const rows: Array<(string | number | null)>[] = filteredAddOns.map((a) => [
-        a.name ?? "",
-        a.category ?? "",
-        Number.isFinite(a.price) ? Number(a.price) : 0,
-        Number.isFinite(a.restocked) ? Number(a.restocked) : 0,
-        Number.isFinite(a.sold) ? Number(a.sold) : 0,
-        Number.isFinite(a.stocks) ? Number(a.stocks) : 0,
-        Number.isFinite(a.expenses) ? Number(a.expenses) : 0,
-        Number.isFinite(a.overall_sales) ? Number(a.overall_sales) : 0,
-        Number.isFinite(a.expected_sales) ? Number(a.expected_sales) : 0,
-        a.image_url ?? "",
-        a.id ?? "",
-      ]);
+      headerRow.eachCell((cell) => {
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFEFEFEF" },
+        };
+      });
 
-      const aoa: Array<Array<string | number | null>> = [
-        [title],
-        [generated],
-        [sortInfo],
-        [],
-        header,
-        ...rows,
-      ];
+      // Data starts at row 6
+      let rowIndex = 6;
 
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      for (const a of filteredAddOns) {
+        const r = ws.getRow(rowIndex);
 
-      // Merge title rows across all columns
-      const lastCol = header.length - 1;
-      ws["!merges"] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } },
-        { s: { r: 2, c: 0 }, e: { r: 2, c: lastCol } },
-      ];
+        // A column (Image) left blank; image will be placed over it
+        r.getCell(2).value = a.name ?? "";
+        r.getCell(3).value = a.category ?? "";
+        r.getCell(4).value = Number(a.price ?? 0);
+        r.getCell(5).value = Number(a.restocked ?? 0);
+        r.getCell(6).value = Number(a.sold ?? 0);
+        r.getCell(7).value = Number(a.stocks ?? 0);
+        r.getCell(8).value = Number(a.expenses ?? 0);
+        r.getCell(9).value = Number(a.overall_sales ?? 0);
+        r.getCell(10).value = Number(a.expected_sales ?? 0);
 
-      // Column widths
-      ws["!cols"] = [
-        { wch: 26 }, // Name
-        { wch: 18 }, // Category
-        { wch: 12 }, // Price
-        { wch: 12 }, // Restocked
-        { wch: 10 }, // Sold
-        { wch: 10 }, // Stocks
-        { wch: 12 }, // Expenses
-        { wch: 14 }, // Overall
-        { wch: 14 }, // Expected
-        { wch: 38 }, // Image URL
-        { wch: 38 }, // ID
-      ];
+        r.height = 52;
 
-      // Number formats for money columns (Price, Expenses, Overall, Expected)
-      // Table starts at row index 4 (0-based), header row is 4, data begins at row 5
-      const headerRowIndex = 4;
-      const dataStartRow = headerRowIndex + 1;
+        // Borders + alignment
+        for (let c = 1; c <= 10; c++) {
+          const cell = r.getCell(c);
+          cell.alignment =
+            c === 2
+              ? { vertical: "middle", horizontal: "left", wrapText: true }
+              : { vertical: "middle", horizontal: c === 1 ? "center" : "center" };
+          cell.border = {
+            top: { style: "thin" },
+            left: { style: "thin" },
+            bottom: { style: "thin" },
+            right: { style: "thin" },
+          };
+        }
 
-      const setCellFormat = (r: number, c: number, z: string): void => {
-        const addr = XLSX.utils.encode_cell({ r, c });
-        const cell = ws[addr] as XLSX.CellObject | undefined;
-        if (!cell) return;
-        cell.z = z;
-      };
+        // Currency formats
+        r.getCell(4).numFmt = '₱#,##0.00'; // Price
+        r.getCell(8).numFmt = '₱#,##0.00'; // Expenses
+        r.getCell(9).numFmt = '₱#,##0.00'; // Overall
+        r.getCell(10).numFmt = '₱#,##0.00'; // Expected
 
-      // Apply currency format to: Price(2), Expenses(6), Overall(7), Expected(8)
-      for (let r = dataStartRow; r < dataStartRow + rows.length; r++) {
-        setCellFormat(r, 2, '₱#,##0.00'); // Price
-        setCellFormat(r, 6, '₱#,##0.00'); // Expenses
-        setCellFormat(r, 7, '₱#,##0.00'); // Overall
-        setCellFormat(r, 8, '₱#,##0.00'); // Expected
+        // ✅ Embed image in column A if available
+        if (a.image_url) {
+          try {
+            const { base64, ext } = await fetchImageBase64(a.image_url);
+            const imgId = workbook.addImage({ base64, extension: ext });
+
+            // place image inside cell A(rowIndex)
+            ws.addImage(imgId, {
+              tl: { col: 0.15, row: rowIndex - 1 + 0.15 },
+              ext: { width: 48, height: 48 },
+            });
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          } catch (e) {
+            console.warn("Image embed failed for:", a.image_url);
+          }
+        }
+
+        r.commit();
+        rowIndex++;
       }
 
-      // Freeze panes (freeze top 5 rows: title+meta+blank+header)
-      // Note: this is supported by SheetJS in the workbook view metadata.
-      (ws as unknown as { ["!freeze"]?: { xSplit?: number; ySplit?: number } })["!freeze"] = { xSplit: 0, ySplit: 5 };
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Add-ons");
-
-      const fileName = `add_ons_${ymd(now)}.xlsx`;
-      const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-      const blob = new Blob([out], {
+      const buf = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      saveAs(blob, `add_ons_${ymd(now)}.xlsx`);
 
       setToastMessage("Exported to Excel successfully.");
       setShowToast(true);
@@ -489,19 +550,19 @@ const Admin_Item_Lists: React.FC = () => {
           <IonRefresherContent />
         </IonRefresher>
 
-        {/* TOP ACTIONS (same layout/classnames as PIL) */}
+        {/* TOP ACTIONS */}
         <div className="pil-actions">
           <IonButton className="pil-btn pil-btn--primary" fill="solid" onClick={() => void fetchAddOns()}>
             <IonIcon slot="start" icon={addCircleOutline} />
             Refresh
           </IonButton>
 
-          {/* ✅ NEW: Export Excel */}
+          {/* ✅ EXPORT EXCEL */}
           <IonButton
             className="pil-btn pil-btn--ghost"
             fill="outline"
             disabled={loading || filteredAddOns.length === 0}
-            onClick={exportToExcel}
+            onClick={() => void exportToExcel()}
           >
             <IonIcon slot="start" icon={downloadOutline} />
             Export Excel
@@ -527,7 +588,7 @@ const Admin_Item_Lists: React.FC = () => {
             <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
           </IonButton>
 
-          {/* ✅ SEARCH BAR (same classnames) */}
+          {/* SEARCH */}
           <div className="pil-search">
             <IonItem lines="none" className="pil-search-item">
               <IonIcon className="pil-search-ico" icon={searchOutline} />
@@ -644,7 +705,7 @@ const Admin_Item_Lists: React.FC = () => {
           ]}
         />
 
-        {/* ✅ RESTOCK MODAL */}
+        {/* RESTOCK MODAL */}
         <IonModal isOpen={showRestockModal} onDidDismiss={() => setShowRestockModal(false)} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
@@ -716,7 +777,7 @@ const Admin_Item_Lists: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* ✅ EDIT MODAL */}
+        {/* EDIT MODAL */}
         <IonModal isOpen={showEditModal} onDidDismiss={() => setShowEditModal(false)} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
@@ -765,6 +826,7 @@ const Admin_Item_Lists: React.FC = () => {
                     />
                   </IonItem>
 
+                  {/* REPLACE IMAGE */}
                   <IonItem className="pil-item">
                     <IonLabel position="stacked" className="pil-label">
                       Replace Image (optional)
