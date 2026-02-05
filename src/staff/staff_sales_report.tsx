@@ -889,7 +889,7 @@ const StaffSalesReport: React.FC = () => {
                   <div className="ssr-card-head">
                     <IonText className="ssr-card-title">Cash Count</IonText>
                     <div className="ssr-total-chip">
-                      Bills: <b>{peso(cashTotal)}</b> | Coins: <b>{peso(coinTotal)}</b>
+                      Cash: <b>{peso(cashTotal)}</b> | Coins: <b>{peso(coinTotal)}</b>
                     </div>
                   </div>
 

@@ -105,7 +105,7 @@ const Admin_menu: React.FC = () => {
       { name: "Admin Add Ons", key: "add_ons", icon: addOnsIcon },
       { name: "Item Lists", key: "item_lists", icon: itemIcon },
       { name: "Restock Records", key: "restock_records", icon: restockIcon },
-      { name: "Staff Expenses", key: "staff_expenses", icon: expenseIcon },
+      { name: "Staff Expenses & Cash outs", key: "staff_expenses", icon: expenseIcon },
       { name: "Sales Report", key: "sales_report", icon: salesIcon },
       { name: "Customer Add-Ons", key: "customer_add_ons", icon: hamburgerIcon },
       { name: "Customer List", key: "customer_list", icon: customerListIcon },
