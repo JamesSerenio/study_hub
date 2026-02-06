@@ -12,6 +12,7 @@
 //    - no "source" key
 //    - label switches instantly (force re-render)
 //    - Close stops view (same as Customer_Lists)
+// ✅ NEW: Search bar (Full Name) beside Date (same classnames as Customer_Lists)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -281,6 +282,9 @@ const Customer_Discount_List: React.FC = () => {
   // ✅ DATE FILTER (view-only)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
+  // ✅ SEARCH (Full Name)
+  const [searchName, setSearchName] = useState<string>("");
+
   // refresh status/time
   const [tick, setTick] = useState<number>(Date.now());
   useEffect(() => {
@@ -370,10 +374,21 @@ const Customer_Discount_List: React.FC = () => {
     void fetchPromoBookings();
   }, []);
 
+  // ✅ Filter by date + full_name search
   const filteredRows = useMemo(() => {
     void tick;
-    return rows.filter((r) => getCreatedDateLocal(r.created_at) === selectedDate);
-  }, [rows, tick, selectedDate]);
+
+    const q = searchName.trim().toLowerCase();
+
+    return rows.filter((r) => {
+      const sameDate = getCreatedDateLocal(r.created_at) === selectedDate;
+      if (!sameDate) return false;
+
+      if (!q) return true;
+      const name = String(r.full_name ?? "").toLowerCase();
+      return name.includes(q);
+    });
+  }, [rows, tick, selectedDate, searchName]);
 
   const getPaidInfo = (r: PromoBookingRow): { gcash: number; cash: number; totalPaid: number } => {
     const gcash = round2(Math.max(0, toNumber(r.gcash_amount)));
@@ -644,21 +659,6 @@ const Customer_Discount_List: React.FC = () => {
     }
   };
 
-  const totals = useMemo(() => {
-    void tick;
-
-    const total = filteredRows.reduce((sum, r) => {
-      const base = round2(Math.max(0, toNumber(r.price)));
-      const calc = applyDiscount(base, r.discount_kind, r.discount_value);
-      return sum + round2(calc.discountedCost);
-    }, 0);
-
-    const upcoming = filteredRows.filter((r) => getStatus(r.start_at, r.end_at) === "UPCOMING").length;
-    const ongoing = filteredRows.filter((r) => getStatus(r.start_at, r.end_at) === "ONGOING").length;
-    const finished = filteredRows.filter((r) => getStatus(r.start_at, r.end_at) === "FINISHED").length;
-
-    return { total, upcoming, ongoing, finished };
-  }, [filteredRows, tick]);
 
   return (
     <IonPage>
@@ -666,26 +666,34 @@ const Customer_Discount_List: React.FC = () => {
         <div className="customer-lists-container">
           <div className="customer-topbar">
             <div className="customer-topbar-left">
-              <h2 className="customer-lists-title">Customer Discount / Promo Records</h2>
-
+              <h2 className="customer-lists-title">Customer Promo Records</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
-                <span style={{ marginLeft: 10 }}>
-                  • Upcoming: <strong>{totals.upcoming}</strong>
-                </span>
-                <span style={{ marginLeft: 10 }}>
-                  • Ongoing: <strong>{totals.ongoing}</strong>
-                </span>
-                <span style={{ marginLeft: 10 }}>
-                  • Finished: <strong>{totals.finished}</strong>
-                </span>
-                <span style={{ marginLeft: 10 }}>
-                  • Total Sales: <strong>₱{totals.total.toFixed(2)}</strong>
-                </span>
               </div>
             </div>
 
             <div className="customer-topbar-right">
+              {/* ✅ SEARCH BAR (same classnames as Customer_Lists) */}
+              <div className="customer-searchbar-inline">
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    value={searchName}
+                    onChange={(e) => setSearchName(e.currentTarget.value)}
+                    placeholder="Search by Full Name..."
+                  />
+                  {searchName.trim() && (
+                    <button className="customer-search-clear" onClick={() => setSearchName("")}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <label className="date-pill">
                 <span className="date-pill-label">Date</span>
                 <input
