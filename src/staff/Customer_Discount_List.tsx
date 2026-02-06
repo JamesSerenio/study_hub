@@ -7,6 +7,7 @@
 // ❌ NO Delete by Date
 // ✅ strict TS (NO "any")
 // ✅ ADD: phone_number field (separate column) + Receipt shows Customer Name + Phone #
+// ✅ ADD: "View to Customer" button (sets localStorage like Customer_Lists)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -82,6 +83,15 @@ interface PromoBookingPaidUpdateRow {
   gcash_amount: number | string | null;
   cash_amount: number | string | null;
 }
+
+/* ================= CUSTOMER VIEW (localStorage keys) =================
+   Same keys as your Customer_Lists.
+   NOTE: We also store LS_VIEW_SOURCE="promo" (safe extra key).
+   If your customer page (Book_Add) supports promo view, it can use this.
+*/
+const LS_VIEW_ENABLED = "customer_view_enabled";
+const LS_SESSION_ID = "customer_view_session_id";
+const LS_VIEW_SOURCE = "customer_view_source"; // optional extra (promo/customer_sessions)
 
 /* ================= HELPERS ================= */
 
@@ -255,6 +265,49 @@ const Customer_Discount_List: React.FC = () => {
     const t = window.setInterval(() => setTick(Date.now()), 10000);
     return () => window.clearInterval(t);
   }, []);
+
+  // ✅ CUSTOMER VIEW state (for button label)
+  const [customerViewEnabled, setCustomerViewEnabled] = useState<boolean>(false);
+  const [customerViewId, setCustomerViewId] = useState<string>("");
+
+  const readCustomerView = (): void => {
+    const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
+    const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
+    setCustomerViewEnabled(enabled);
+    setCustomerViewId(sid);
+  };
+
+  useEffect(() => {
+    readCustomerView();
+
+    const onStorage = (e: StorageEvent): void => {
+      if (!e.key) return;
+      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID || e.key === LS_VIEW_SOURCE) readCustomerView();
+    };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const enableViewToCustomer = (r: PromoBookingRow): void => {
+    // ✅ same behavior as Customer_Lists: set enabled + id
+    localStorage.setItem(LS_VIEW_ENABLED, "true");
+    localStorage.setItem(LS_SESSION_ID, r.id);
+
+    // optional: tell customer page this is promo
+    localStorage.setItem(LS_VIEW_SOURCE, "promo");
+
+    readCustomerView();
+    alert(`View to Customer enabled for: ${r.full_name}`);
+  };
+
+  const disableViewToCustomer = (): void => {
+    localStorage.setItem(LS_VIEW_ENABLED, "false");
+    localStorage.removeItem(LS_SESSION_ID);
+    localStorage.removeItem(LS_VIEW_SOURCE);
+    readCustomerView();
+    alert("View to Customer disabled.");
+  };
 
   // payment modal
   const [paymentTarget, setPaymentTarget] = useState<PromoBookingRow | null>(null);
@@ -619,10 +672,8 @@ const Customer_Discount_List: React.FC = () => {
 
   return (
     <IonPage>
-      {/* ✅ SAME PAGE BACKGROUND setup as Customer_Lists */}
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR (same classes as Customer_Lists) */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Discount / Promo Records</h2>
@@ -641,6 +692,13 @@ const Customer_Discount_List: React.FC = () => {
                 <span style={{ marginLeft: 10 }}>
                   • Total Sales: <strong>₱{totals.total.toFixed(2)}</strong>
                 </span>
+
+                {/* ✅ optional quick indicator */}
+                {customerViewEnabled && customerViewId ? (
+                  <span style={{ marginLeft: 10 }}>
+                    • View to Customer: <strong>{customerViewId === "promo" ? "" : "ON"}</strong>
+                  </span>
+                ) : null}
               </div>
             </div>
 
@@ -660,7 +718,6 @@ const Customer_Discount_List: React.FC = () => {
             </div>
           </div>
 
-          {/* TABLE */}
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredRows.length === 0 ? (
@@ -706,6 +763,8 @@ const Customer_Discount_List: React.FC = () => {
 
                     const pi = getPaidInfo(r);
                     const remaining = round2(Math.max(0, due - pi.totalPaid));
+
+                    const isViewingThis = customerViewEnabled && customerViewId === r.id;
 
                     return (
                       <tr key={r.id}>
@@ -761,6 +820,22 @@ const Customer_Discount_List: React.FC = () => {
 
                         <td>
                           <div className="action-stack">
+                            {/* ✅ NEW: View to Customer */}
+                            <button
+                              className={`receipt-btn ${isViewingThis ? "pay-badge pay-badge--paid" : ""}`}
+                              onClick={() => enableViewToCustomer(r)}
+                              title="Enable customer to view this promo receipt"
+                            >
+                              {isViewingThis ? "Viewing (Customer)" : "View to Customer"}
+                            </button>
+
+                            {/* optional: quick OFF button (if currently viewing this) */}
+                            {isViewingThis && (
+                              <button className="receipt-btn" onClick={disableViewToCustomer} title="Disable customer view">
+                                Stop View
+                              </button>
+                            )}
+
                             <button className="receipt-btn" onClick={() => setSelected(r)}>
                               View Receipt
                             </button>
@@ -1030,7 +1105,10 @@ const Customer_Discount_List: React.FC = () => {
                   <div className="receipt-row">
                     <span>Duration</span>
                     <span>
-                      {formatDuration(Number(selected.package_options.duration_value), selected.package_options.duration_unit)}
+                      {formatDuration(
+                        Number(selected.package_options.duration_value),
+                        selected.package_options.duration_unit
+                      )}
                     </span>
                   </div>
                 ) : null}
@@ -1106,8 +1184,6 @@ const Customer_Discount_List: React.FC = () => {
                         <span>Paid Status</span>
                         <span className="receipt-status">{paid ? "PAID" : "UNPAID"}</span>
                       </div>
-
-                      {/* ❌ discount_reason intentionally hidden */}
 
                       <div className="receipt-total">
                         <span>TOTAL</span>

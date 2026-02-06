@@ -13,6 +13,7 @@
 //    - Manual PAID/UNPAID toggle still works
 // ✅ Open Time Stop -> ALSO releases seat_blocked_times (end_at = now)
 // ✅ NEW: Phone # beside Full Name + shown in receipt
+// ✅ NEW: View to Customer button (same logic as Customer_Lists)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -23,6 +24,10 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0; // hidden
 const DOWN_PAYMENT = 50;
+
+/* ✅ LOCAL STORAGE KEYS (shared with Book_Add + Customer_Lists) */
+const LS_VIEW_ENABLED = "customer_view_enabled";
+const LS_SESSION_ID = "customer_view_session_id";
 
 type DiscountKind = "none" | "percent" | "amount";
 
@@ -160,6 +165,27 @@ const formatMinutesToTime = (minutes: number): string => {
   return `${hrs} hr ${mins} min`;
 };
 
+/* ✅ VIEW-TO-CUSTOMER helpers (same as Customer_Lists) */
+const isCustomerViewOnFor = (sessionId: string): boolean => {
+  const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
+  const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
+  return enabled && sid === sessionId;
+};
+
+const setCustomerView = (enabled: boolean, sessionId: string | null): void => {
+  localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
+  if (enabled && sessionId) {
+    localStorage.setItem(LS_SESSION_ID, sessionId);
+  } else {
+    localStorage.removeItem(LS_SESSION_ID);
+  }
+};
+
+const stopCustomerView = (): void => {
+  localStorage.setItem(LS_VIEW_ENABLED, "false");
+  localStorage.removeItem(LS_SESSION_ID);
+};
+
 const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -169,6 +195,9 @@ const Customer_Reservations: React.FC = () => {
 
   // tick so OPEN sessions auto-update display
   const [nowTick, setNowTick] = useState<number>(Date.now());
+
+  // ✅ re-render tick for View-to-Customer label
+  const [, setViewTick] = useState<number>(0);
 
   // Date filter (by reservation_date)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
@@ -372,7 +401,10 @@ const Customer_Reservations: React.FC = () => {
 
     const ids = rows.map((r) => r.id);
 
-    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in("id", ids);
+    const { error: upErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped" })
+      .in("id", ids);
 
     if (upErr) {
       // eslint-disable-next-line no-console
@@ -657,7 +689,7 @@ const Customer_Reservations: React.FC = () => {
                   <tr>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
-                    <th>Phone #</th> {/* ✅ NEW */}
+                    <th>Phone #</th>
                     <th>Field</th>
                     <th>Has ID</th>
                     <th>Specific ID</th>
@@ -687,7 +719,7 @@ const Customer_Reservations: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.reservation_date ?? "N/A"}</td>
                         <td>{session.full_name}</td>
-                        <td>{phoneText(session)}</td> {/* ✅ NEW */}
+                        <td>{phoneText(session)}</td>
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
                         <td>{session.id_number ?? "N/A"}</td>
@@ -731,12 +763,18 @@ const Customer_Reservations: React.FC = () => {
 
                         <td>
                           <button
-                            className={`receipt-btn pay-badge ${toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            className={`receipt-btn pay-badge ${
+                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
+                            }`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                           >
-                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                            {togglingPaidId === session.id
+                              ? "Updating..."
+                              : toBool(session.is_paid)
+                              ? "PAID"
+                              : "UNPAID"}
                           </button>
                         </td>
 
@@ -818,7 +856,8 @@ const Customer_Reservations: React.FC = () => {
                 {(() => {
                   const base = getBaseSystemCost(discountTarget);
                   const val = toMoney(discountInput);
-                  const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+                  const appliedVal =
+                    discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
                   const due = round2(Math.max(0, discountedCost - DOWN_PAYMENT));
@@ -1097,9 +1136,36 @@ const Customer_Reservations: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <button className="close-btn" onClick={() => setSelectedSession(null)}>
-                  Close
-                </button>
+                {/* ✅ SAME AS Customer_Lists: View to Customer + Close */}
+                <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => {
+                      if (!selectedSession) return;
+
+                      const on = isCustomerViewOnFor(selectedSession.id);
+                      setCustomerView(!on, !on ? selectedSession.id : null);
+
+                      // ✅ force re-render for label update
+                      setViewTick((x) => x + 1);
+                    }}
+                  >
+                    {selectedSession && isCustomerViewOnFor(selectedSession.id)
+                      ? "Stop View to Customer"
+                      : "View to Customer"}
+                  </button>
+
+                  <button
+                    className="close-btn"
+                    onClick={() => {
+                      stopCustomerView();
+                      setViewTick((x) => x + 1);
+                      setSelectedSession(null);
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           )}

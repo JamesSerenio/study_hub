@@ -61,6 +61,10 @@ interface CustomerSessionLite {
   time_ended: string;
   hour_avail: string;
 
+  // ✅ IMPORTANT (to know if this is reservation receipt)
+  reservation?: string | null; // "yes" | "no"
+  reservation_date?: string | null; // YYYY-MM-DD
+
   total_amount: number;
   discount_kind?: DiscountKind;
   discount_value?: number;
@@ -168,6 +172,11 @@ const getDisplayAmount = (s: CustomerSessionLite): { label: "Total Balance" | "T
   return { label: "Total Change", value: change };
 };
 
+const isReservationSession = (s: CustomerSessionLite | null): boolean => {
+  if (!s) return false;
+  return String(s.reservation ?? "no").trim().toLowerCase() === "yes";
+};
+
 const Book_Add: React.FC = () => {
   const history = useHistory();
 
@@ -229,10 +238,11 @@ const Book_Add: React.FC = () => {
     if (!id) return;
     setReceiptLoading(true);
 
+    // ✅ include reservation + reservation_date so customer receipt can show "RESERVATION RECEIPT"
     const { data, error } = await supabase
       .from("customer_sessions")
       .select(
-        "id,date,full_name,phone_number,customer_type,customer_field,seat_number,time_started,time_ended,hour_avail,total_amount,discount_kind,discount_value,gcash_amount,cash_amount,is_paid"
+        "id,date,full_name,phone_number,customer_type,customer_field,seat_number,time_started,time_ended,hour_avail,reservation,reservation_date,total_amount,discount_kind,discount_value,gcash_amount,cash_amount,is_paid"
       )
       .eq("id", id)
       .single();
@@ -366,9 +376,19 @@ const Book_Add: React.FC = () => {
           seatGroups={SEAT_GROUPS}
         />
 
-        <PromoModal isOpen={isPromoOpen} onClose={() => setIsPromoOpen(false)} onSaved={handlePromoSaved} seatGroups={SEAT_GROUPS} />
+        <PromoModal
+          isOpen={isPromoOpen}
+          onClose={() => setIsPromoOpen(false)}
+          onSaved={handlePromoSaved}
+          seatGroups={SEAT_GROUPS}
+        />
 
-        <AddOnsModal isOpen={isAddOnsOpen} onClose={() => setIsAddOnsOpen(false)} onSaved={() => setAddOnsSentOpen(true)} seatGroups={SEAT_GROUPS} />
+        <AddOnsModal
+          isOpen={isAddOnsOpen}
+          onClose={() => setIsAddOnsOpen(false)}
+          onSaved={() => setAddOnsSentOpen(true)}
+          seatGroups={SEAT_GROUPS}
+        />
 
         {/* ALERTS */}
         <IonAlert
@@ -401,7 +421,7 @@ const Book_Add: React.FC = () => {
           ]}
         />
 
-        {/* ✅ RECEIPT OVERLAY (CUSTOMER_Lists logic) */}
+        {/* ✅ RECEIPT OVERLAY (Customer_Lists logic) */}
         {showReceipt && canOpenReceipt && (
           <div className="receipt-overlay" onClick={() => setShowReceipt(false)}>
             <div
@@ -411,7 +431,12 @@ const Book_Add: React.FC = () => {
             >
               <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
               <h3 className="receipt-title">ME TYME LOUNGE</h3>
-              <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
+
+              {/* ✅ FIX: show Reservation receipt when reservation=yes */}
+              <p className="receipt-subtitle">
+                {isReservationSession(receipt) ? "RESERVATION RECEIPT" : "OFFICIAL RECEIPT"}
+              </p>
+
               <hr />
 
               {receiptLoading ? (
@@ -424,6 +449,16 @@ const Book_Add: React.FC = () => {
                 </p>
               ) : (
                 <>
+                  {/* ✅ FIX: show Reservation Date field ONLY if reservation */}
+                  {isReservationSession(receipt) && (
+                    <>
+                      <div className="receipt-row">
+                        <span>Reservation Date</span>
+                        <span>{receipt.reservation_date ?? "N/A"}</span>
+                      </div>
+                    </>
+                  )}
+
                   <div className="receipt-row">
                     <span>Date</span>
                     <span>{receipt.date}</span>
@@ -467,21 +502,25 @@ const Book_Add: React.FC = () => {
                   </div>
 
                   {/* optional (same as staff receipt style) */}
-                  <div className="receipt-row">
-                    <span>Minutes Used</span>
-                    <span>{diffMinutes(receipt.time_started, isOpenTimeSession(receipt) ? new Date().toISOString() : receipt.time_ended)} min</span>
-                  </div>
+                  {(() => {
+                    const endIso = isOpenTimeSession(receipt) ? new Date().toISOString() : receipt.time_ended;
+                    const used = diffMinutes(receipt.time_started, endIso);
+                    const charge = Math.max(0, used - FREE_MINUTES);
 
-                  <div className="receipt-row">
-                    <span>Charge Minutes</span>
-                    <span>
-                      {Math.max(
-                        0,
-                        diffMinutes(receipt.time_started, isOpenTimeSession(receipt) ? new Date().toISOString() : receipt.time_ended) - FREE_MINUTES
-                      )}{" "}
-                      min
-                    </span>
-                  </div>
+                    return (
+                      <>
+                        <div className="receipt-row">
+                          <span>Minutes Used</span>
+                          <span>{used} min</span>
+                        </div>
+
+                        <div className="receipt-row">
+                          <span>Charge Minutes</span>
+                          <span>{charge} min</span>
+                        </div>
+                      </>
+                    );
+                  })()}
 
                   <hr />
 
