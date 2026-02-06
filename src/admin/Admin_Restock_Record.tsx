@@ -614,15 +614,33 @@ const Admin_Restock_Record: React.FC = () => {
 
           <div className="restock-filters">
             <div className="restock-left">
-              <div className="restock-search">
-                <div className="restock-label">Search (item / category)</div>
+            {/* ✅ SAME SEARCH BAR AS BOOKING / CUSTOMER LISTS */}
+            <div className="customer-searchbar-inline">
+              <div className="customer-searchbar-inner">
+                <span className="customer-search-icon" aria-hidden="true">
+                  🔎
+                </span>
+
                 <input
-                  className="restock-input"
+                  className="customer-search-input"
+                  type="text"
                   value={search}
-                  placeholder="Type to search…"
                   onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+                  placeholder="Search item or category..."
                 />
+
+                {search.trim() && (
+                  <button
+                    className="customer-search-clear"
+                    onClick={() => setSearch("")}
+                    type="button"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
+            </div>
+
             </div>
 
             <div className="restock-right">
