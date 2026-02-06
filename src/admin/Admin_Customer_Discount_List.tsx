@@ -916,10 +916,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
               </div>
-              <div className="customer-subtext">
-                Upcoming <strong>{totals.upcoming}</strong> • Ongoing <strong>{totals.ongoing}</strong> • Finished{" "}
-                <strong>{totals.finished}</strong> • Total Sales <strong>₱{totals.total.toFixed(2)}</strong>
-              </div>
             </div>
 
             <div className="customer-topbar-right">
