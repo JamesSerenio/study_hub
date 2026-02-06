@@ -765,7 +765,7 @@ const Admin_customer_list: React.FC = () => {
           {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
-              <h2 className="customer-lists-title">Admin Customer Lists - Non Reservation</h2>
+              <h2 className="customer-lists-title">Admin Customer Lists</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong> ({filteredSessions.length})
               </div>
