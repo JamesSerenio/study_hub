@@ -14,6 +14,7 @@
 // ✅ Open Time Stop -> ALSO releases seat_blocked_times (end_at = now)
 // ✅ NEW: Phone # beside Full Name + shown in receipt
 // ✅ NEW: View to Customer button (same logic as Customer_Lists)
+// ✅ NEW: Search bar (Full Name only) beside Date (same classnames as Customer_Lists)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -202,6 +203,9 @@ const Customer_Reservations: React.FC = () => {
   // Date filter (by reservation_date)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
+  // ✅ Search (Full Name only)
+  const [searchName, setSearchName] = useState<string>("");
+
   // Discount modal
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
   const [discountKind, setDiscountKind] = useState<DiscountKind>("none");
@@ -259,10 +263,19 @@ const Customer_Reservations: React.FC = () => {
     setLoading(false);
   };
 
-  // filter sessions by reservation_date
+  // ✅ filter sessions by reservation_date + search (full_name)
   const filteredSessions = useMemo(() => {
-    return sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
-  }, [sessions, selectedDate]);
+    const q = searchName.trim().toLowerCase();
+
+    return sessions.filter((s) => {
+      const sameDate = (s.reservation_date ?? "") === selectedDate;
+      if (!sameDate) return false;
+
+      if (!q) return true;
+      const name = String(s.full_name ?? "").toLowerCase();
+      return name.includes(q);
+    });
+  }, [sessions, selectedDate, searchName]);
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").trim().toUpperCase() === "OPEN") return true;
@@ -663,6 +676,27 @@ const Customer_Reservations: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
+              {/* ✅ SEARCH BAR (same classnames as Customer_Lists) */}
+              <div className="customer-searchbar-inline">
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    value={searchName}
+                    onChange={(e) => setSearchName(e.currentTarget.value)}
+                    placeholder="Search by Full Name..."
+                  />
+                  {searchName.trim() && (
+                    <button className="customer-search-clear" onClick={() => setSearchName("")}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <label className="date-pill">
                 <span className="date-pill-label">Date</span>
                 <input
@@ -711,7 +745,6 @@ const Customer_Reservations: React.FC = () => {
                   {filteredSessions.map((session) => {
                     const open = isOpenTimeSession(session);
                     const disp = getDisplayAmount(session);
-
                     const due = getSessionBalance(session);
                     const pi = getPaidInfo(session);
 
@@ -726,7 +759,6 @@ const Customer_Reservations: React.FC = () => {
                         <td>{session.hour_avail}</td>
                         <td>{formatTimeText(session.time_started)}</td>
                         <td>{renderTimeOut(session)}</td>
-
                         <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
 
                         <td>
@@ -1146,7 +1178,6 @@ const Customer_Reservations: React.FC = () => {
                       const on = isCustomerViewOnFor(selectedSession.id);
                       setCustomerView(!on, !on ? selectedSession.id : null);
 
-                      // ✅ force re-render for label update
                       setViewTick((x) => x + 1);
                     }}
                   >
