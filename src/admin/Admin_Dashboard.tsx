@@ -41,14 +41,16 @@ type Totals = {
   all: number;
 };
 
+type PieName = "Walk-in" | "Reservation" | "Promo";
+
 type PieRow = {
-  name: "Walk-in" | "Reservation" | "Promo";
+  name: PieName;
   value: number;
 };
 
 type LineRow = {
-  day: string;   // label
-  total: number; // total all
+  day: string;
+  total: number;
 };
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -65,11 +67,7 @@ const toISODateForIon = (yyyyMmDd: string): string => yyyyMmDd;
 const formatPretty = (yyyyMmDd: string): string => {
   const [y, m, d] = yyyyMmDd.split("-").map((x) => Number(x));
   const dt = new Date(y, m - 1, d);
-  return dt.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "2-digit",
-  });
+  return dt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "2-digit" });
 };
 
 const formatShort = (yyyyMmDd: string): string => {
@@ -101,16 +99,77 @@ const numberSpring = {
 };
 
 // ✅ chart colors (fixed)
-const PIE_COLORS: Record<PieRow["name"], string> = {
+const PIE_COLORS: Record<PieName, string> = {
   "Walk-in": "#2f3b2f",
   Reservation: "#6a3fb5",
   Promo: "#c04b1a",
 };
 
+/**
+ * ✅ Percent rule:
+ * total = 1, part = 1 => 100%
+ */
+const pct = (part: number, total: number): number => {
+  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return 0;
+  return (part / total) * 100;
+};
+
+const formatPct = (n: number): string => {
+  if (!Number.isFinite(n)) return "0%";
+  const rounded1 = Math.round(n * 10) / 10;
+  const isInt = Math.abs(rounded1 - Math.round(rounded1)) < 1e-9;
+  return `${isInt ? Math.round(rounded1) : rounded1}%`;
+};
+
+const isPieName = (v: unknown): v is PieName => v === "Walk-in" || v === "Reservation" || v === "Promo";
+
+/** ✅ Legend raw item shape (strict, no any) */
+type LegendItemRaw = {
+  value?: unknown;   // label
+  color?: unknown;   // string
+  payload?: unknown; // original item, contains value
+};
+
+const toLegendItems = (
+  payload: unknown
+): Array<{ name: PieName; color: string; value: number }> => {
+  if (!Array.isArray(payload)) return [];
+
+  const out: Array<{ name: PieName; color: string; value: number }> = [];
+
+  for (const raw of payload) {
+    if (typeof raw !== "object" || raw === null) continue;
+
+    const item = raw as LegendItemRaw;
+    const nameStr = String(item.value ?? "");
+    if (!isPieName(nameStr)) continue;
+
+    const color = typeof item.color === "string" ? item.color : PIE_COLORS[nameStr];
+
+    let v = 0;
+    if (typeof item.payload === "object" && item.payload !== null) {
+      const p = item.payload as Record<string, unknown>;
+      const pv = p.value;
+
+      if (typeof pv === "number" && Number.isFinite(pv)) v = pv;
+      else if (typeof pv === "string") {
+        const n = Number(pv);
+        if (Number.isFinite(n)) v = n;
+      }
+    }
+
+    out.push({ name: nameStr, color, value: v });
+  }
+
+  return out;
+};
+
+/** ✅ Instead of LegendProps (no payload), use our own props type */
+type LegendContentProps = { payload?: unknown };
+
 const Admin_Dashboard: React.FC = () => {
   const todayYYYYMMDD = useMemo(() => toYYYYMMDD(new Date()), []);
 
-  // ✅ selected date (used for: totals cards, pie chart, and week-ending for line chart)
   const [selectedDate, setSelectedDate] = useState<string>(todayYYYYMMDD);
   const [openCalendar, setOpenCalendar] = useState<boolean>(false);
 
@@ -123,7 +182,6 @@ const Admin_Dashboard: React.FC = () => {
 
   const [pulseKey, setPulseKey] = useState<number>(0);
 
-  // ✅ line chart data
   const [weekSeries, setWeekSeries] = useState<LineRow[]>([]);
   const [weekLoading, setWeekLoading] = useState<boolean>(false);
 
@@ -136,7 +194,6 @@ const Admin_Dashboard: React.FC = () => {
     return `${a} – ${b}`;
   }, [weekStart, selectedDate]);
 
-  // --- shared fetch (for a single date) ---
   const fetchTotalsForDate = async (dateYYYYMMDD: string): Promise<Totals> => {
     const walkinQ = supabase
       .from("customer_sessions")
@@ -150,7 +207,6 @@ const Admin_Dashboard: React.FC = () => {
       .eq("date", dateYYYYMMDD)
       .eq("reservation", "yes");
 
-    // Promo: by start_at day range
     const startOfDay = new Date(`${dateYYYYMMDD}T00:00:00`);
     const endOfDay = new Date(`${dateYYYYMMDD}T23:59:59`);
 
@@ -160,36 +216,24 @@ const Admin_Dashboard: React.FC = () => {
       .gte("start_at", startOfDay.toISOString())
       .lte("start_at", endOfDay.toISOString());
 
-    const [walkinRes, reservationRes, promoRes] = await Promise.all([
-      walkinQ,
-      reservationQ,
-      promoQ,
-    ]);
+    const [walkinRes, reservationRes, promoRes] = await Promise.all([walkinQ, reservationQ, promoQ]);
 
     const walkin = walkinRes.count ?? 0;
     const reservation = reservationRes.count ?? 0;
     const promo = promoRes.count ?? 0;
 
-    return {
-      walkin,
-      reservation,
-      promo,
-      all: walkin + reservation + promo,
-    };
+    return { walkin, reservation, promo, all: walkin + reservation + promo };
   };
 
-  // ✅ load totals for selected date + week series (7 days)
   useEffect(() => {
     let alive = true;
 
     const run = async (): Promise<void> => {
-      // 1) cards + pie totals for the selected date
       const t = await fetchTotalsForDate(selectedDate);
       if (!alive) return;
       setTotals(t);
       setPulseKey((k) => k + 1);
 
-      // 2) week series line chart (7 days ending selectedDate)
       setWeekLoading(true);
       const days: string[] = Array.from({ length: 7 }, (_, i) => addDaysYYYYMMDD(selectedDate, i - 6));
 
@@ -200,7 +244,6 @@ const Admin_Dashboard: React.FC = () => {
             return { day: formatShort(d), total: tt.all };
           })
         );
-
         if (!alive) return;
         setWeekSeries(results);
       } finally {
@@ -208,14 +251,12 @@ const Admin_Dashboard: React.FC = () => {
       }
     };
 
-    run();
-
+    void run();
     return () => {
       alive = false;
     };
   }, [selectedDate]);
 
-  // ✅ pie data only (three categories)
   const pieData: PieRow[] = useMemo(
     () => [
       { name: "Walk-in", value: totals.walkin },
@@ -225,10 +266,51 @@ const Admin_Dashboard: React.FC = () => {
     [totals.walkin, totals.reservation, totals.promo]
   );
 
-  const pieTotal = useMemo(
-    () => totals.walkin + totals.reservation + totals.promo,
-    [totals.walkin, totals.reservation, totals.promo]
-  );
+  const pieTotal = useMemo(() => totals.walkin + totals.reservation + totals.promo, [totals.walkin, totals.reservation, totals.promo]);
+
+  // ✅ percentages for cards = share of TOTAL ALL
+  const walkinPct = useMemo(() => formatPct(pct(totals.walkin, totals.all)), [totals.walkin, totals.all]);
+  const reservePct = useMemo(() => formatPct(pct(totals.reservation, totals.all)), [totals.reservation, totals.all]);
+  const promoPct = useMemo(() => formatPct(pct(totals.promo, totals.all)), [totals.promo, totals.all]);
+
+  // ✅ custom legend (name + percent)
+  const BreakdownLegend: React.FC<LegendContentProps> = ({ payload }) => {
+    const items = toLegendItems(payload);
+
+    if (items.length === 0 || pieTotal <= 0) return null;
+
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          gap: 14,
+          flexWrap: "wrap",
+          padding: "6px 10px 12px",
+        }}
+      >
+        {items.map((item) => {
+          const percentText = formatPct(pct(item.value, pieTotal));
+
+          return (
+            <div key={item.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  background: item.color,
+                  display: "inline-block",
+                }}
+              />
+              <span style={{ fontWeight: 800, fontSize: 13 }}>{item.name}</span>
+              <span style={{ fontWeight: 800, fontSize: 13, opacity: 0.9 }}>{percentText}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <IonPage>
@@ -245,6 +327,7 @@ const Admin_Dashboard: React.FC = () => {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={cardSpring}
+                style={{ position: "relative" }}
               >
                 <img className="dash-total-icon" src={iconWalkin} alt="Walk-in" />
                 <div className="dash-total-meta">
@@ -262,6 +345,11 @@ const Admin_Dashboard: React.FC = () => {
                     </motion.div>
                   </AnimatePresence>
                 </div>
+
+                <div style={{ position: "absolute", right: 14, top: 14, textAlign: "right", opacity: 0.95 }}>
+                  <div style={{ fontWeight: 900, fontSize: 20, lineHeight: 1 }}>{walkinPct}</div>
+                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>of total</div>
+                </div>
               </motion.div>
 
               {/* RESERVATION */}
@@ -270,6 +358,7 @@ const Admin_Dashboard: React.FC = () => {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ ...cardSpring, delay: 0.03 }}
+                style={{ position: "relative" }}
               >
                 <img className="dash-total-icon" src={iconReserve} alt="Reservation" />
                 <div className="dash-total-meta">
@@ -287,6 +376,11 @@ const Admin_Dashboard: React.FC = () => {
                     </motion.div>
                   </AnimatePresence>
                 </div>
+
+                <div style={{ position: "absolute", right: 14, top: 14, textAlign: "right", opacity: 0.95 }}>
+                  <div style={{ fontWeight: 900, fontSize: 20, lineHeight: 1 }}>{reservePct}</div>
+                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>of total</div>
+                </div>
               </motion.div>
 
               {/* PROMO */}
@@ -295,6 +389,7 @@ const Admin_Dashboard: React.FC = () => {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ ...cardSpring, delay: 0.06 }}
+                style={{ position: "relative" }}
               >
                 <img className="dash-total-icon" src={iconPromo} alt="Promo" />
                 <div className="dash-total-meta">
@@ -311,6 +406,11 @@ const Admin_Dashboard: React.FC = () => {
                       {totals.promo}
                     </motion.div>
                   </AnimatePresence>
+                </div>
+
+                <div style={{ position: "absolute", right: 14, top: 14, textAlign: "right", opacity: 0.95 }}>
+                  <div style={{ fontWeight: 900, fontSize: 20, lineHeight: 1 }}>{promoPct}</div>
+                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>of total</div>
                 </div>
               </motion.div>
 
@@ -337,12 +437,7 @@ const Admin_Dashboard: React.FC = () => {
                     </motion.div>
                   </AnimatePresence>
 
-                  <button
-                    type="button"
-                    className="dash-date-btn"
-                    onClick={() => setOpenCalendar(true)}
-                    title="Set date"
-                  >
+                  <button type="button" className="dash-date-btn" onClick={() => setOpenCalendar(true)} title="Set date">
                     <img className="dash-date-icon" src={iconCalendar} alt="Calendar" />
                     <span className="dash-date-text">{prettyDate}</span>
                   </button>
@@ -351,9 +446,9 @@ const Admin_Dashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* ✅ CHARTS GRID (LEFT line / RIGHT pie) */}
+          {/* ✅ CHARTS GRID */}
           <div className="dash-charts-grid">
-            {/* LEFT: LINE CHART (7 days total all) */}
+            {/* LEFT: LINE */}
             <motion.div
               className="dash-chart-card"
               initial={{ opacity: 0, y: 12 }}
@@ -390,13 +485,13 @@ const Admin_Dashboard: React.FC = () => {
                         isAnimationActive={true}
                         animationDuration={700}
                       />
-                    </LineChart>  
+                    </LineChart>
                   </ResponsiveContainer>
                 </div>
               )}
             </motion.div>
 
-            {/* RIGHT: PIE CHART */}
+            {/* RIGHT: PIE */}
             <motion.div
               className="dash-chart-card"
               initial={{ opacity: 0, y: 12 }}
@@ -430,8 +525,27 @@ const Admin_Dashboard: React.FC = () => {
                           <Cell key={`cell-${entry.name}`} fill={PIE_COLORS[entry.name]} />
                         ))}
                       </Pie>
-                      <Tooltip />
-                      <Legend verticalAlign="bottom" height={40} />
+
+                      <Tooltip
+                        formatter={(value: unknown, name: unknown) => {
+                          const v = typeof value === "number" ? value : Number(value);
+                          const label = String(name);
+                          const pv = Number.isFinite(v) ? v : 0;
+                          const percentText = formatPct(pct(pv, pieTotal));
+                          return [`${pv} (${percentText})`, label];
+                        }}
+                      />
+
+                      {/* ✅ IMPORTANT: pass payload safely from legend */}
+                      <Legend
+                        verticalAlign="bottom"
+                        content={(p) => {
+                          const payload = (typeof p === "object" && p !== null ? (p as Record<string, unknown>).payload : undefined) as
+                            | unknown
+                            | undefined;
+                          return <BreakdownLegend payload={payload} />;
+                        }}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
 
@@ -455,12 +569,8 @@ const Admin_Dashboard: React.FC = () => {
             </motion.div>
           </div>
 
-          {/* ✅ CALENDAR MODAL (affects both charts + totals) */}
-          <IonModal
-            isOpen={openCalendar}
-            onDidDismiss={() => setOpenCalendar(false)}
-            className="dash-calendar-modal"
-          >
+          {/* ✅ CALENDAR MODAL */}
+          <IonModal isOpen={openCalendar} onDidDismiss={() => setOpenCalendar(false)} className="dash-calendar-modal">
             <div className="dash-calendar-card">
               <div className="dash-calendar-head">
                 <div className="dash-calendar-title">Select Date</div>
@@ -477,9 +587,7 @@ const Admin_Dashboard: React.FC = () => {
                 value={toISODateForIon(selectedDate)}
                 onIonChange={(e) => {
                   const val = e.detail.value;
-                  if (typeof val === "string" && val.length >= 10) {
-                    setSelectedDate(val.slice(0, 10));
-                  }
+                  if (typeof val === "string" && val.length >= 10) setSelectedDate(val.slice(0, 10));
                 }}
               />
 
@@ -493,8 +601,6 @@ const Admin_Dashboard: React.FC = () => {
               </div>
             </div>
           </IonModal>
-
-          {/* ...rest of your dashboard */}
         </div>
       </IonContent>
     </IonPage>
