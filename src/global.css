@@ -568,6 +568,70 @@ ion-content,
 }
 
 /* =========================
+   SEARCH BAR (Customer Lists)
+========================= */
+
+.customer-searchbar {
+  margin: 12px 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.customer-searchbar-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  min-width: 280px;
+  flex: 1;
+  max-width: 20px;
+}
+
+.customer-search-icon {
+  opacity: 0.9;
+  font-size: 16px;
+}
+
+.customer-search-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+}
+
+.customer-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.customer-search-clear {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.customer-search-clear:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.customer-search-hint {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* =========================
    TOP BAR
 ========================= */
 .customer-topbar{

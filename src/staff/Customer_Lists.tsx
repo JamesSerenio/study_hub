@@ -8,6 +8,7 @@
 // ✅ Discount reason is SAVED but ❌ NOT shown on receipt
 // ✅ NEW: Phone # column beside Full Name (separate column)
 // ✅ NEW: View to Customer toggle via localStorage (bear always visible in Book_Add)
+// ✅ NEW: Search bar (Full Name only) — moved beside Date
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -166,6 +167,9 @@ const Customer_Lists: React.FC = () => {
   // Date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
+  // ✅ Search (Full Name only)
+  const [searchName, setSearchName] = useState<string>("");
+
   // Discount modal
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
   const [discountKind, setDiscountKind] = useState<DiscountKind>("none");
@@ -188,8 +192,16 @@ const Customer_Lists: React.FC = () => {
   }, []);
 
   const filteredSessions = useMemo(() => {
-    return sessions.filter((s) => (s.date ?? "") === selectedDate);
-  }, [sessions, selectedDate]);
+    const q = searchName.trim().toLowerCase();
+    return sessions.filter((s) => {
+      const sameDate = (s.date ?? "") === selectedDate;
+      if (!sameDate) return false;
+
+      if (!q) return true;
+      const name = String(s.full_name ?? "").toLowerCase();
+      return name.includes(q);
+    });
+  }, [sessions, selectedDate, searchName]);
 
   const fetchCustomerSessions = async (): Promise<void> => {
     setLoading(true);
@@ -541,6 +553,29 @@ const Customer_Lists: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
+              {/* ✅ SEARCH BAR (moved here) */}
+              <div className="customer-searchbar-inline">
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    value={searchName}
+                    onChange={(e) => setSearchName(e.currentTarget.value)}
+                    placeholder="Search by Full Name..."
+                  />
+                  {searchName.trim() && (
+                    <button className="customer-search-clear" onClick={() => setSearchName("")}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+              </div>
+
+              {/* DATE */}
               <label className="date-pill">
                 <span className="date-pill-label">Date</span>
                 <input
@@ -1022,36 +1057,34 @@ const Customer_Lists: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-              <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
-                <button
-                  className="receipt-btn"
-                  onClick={() => {
-                    if (!selectedSession) return;
+                <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => {
+                      if (!selectedSession) return;
 
-                    const on = isCustomerViewOnFor(selectedSession.id);
-                    setCustomerView(!on, !on ? selectedSession.id : null);
+                      const on = isCustomerViewOnFor(selectedSession.id);
+                      setCustomerView(!on, !on ? selectedSession.id : null);
 
-                    // ✅ force re-render para mag switch agad yung label
-                    setViewTick((x) => x + 1);
-                  }}
-                >
-                  {selectedSession && isCustomerViewOnFor(selectedSession.id)
-                    ? "Stop View to Customer"
-                    : "View to Customer"}
-                </button>
+                      setViewTick((x) => x + 1);
+                    }}
+                  >
+                    {selectedSession && isCustomerViewOnFor(selectedSession.id)
+                      ? "Stop View to Customer"
+                      : "View to Customer"}
+                  </button>
 
-                <button
-                  className="close-btn"
-                  onClick={() => {
-                    stopCustomerView();
-                    setViewTick((x) => x + 1);
-                    setSelectedSession(null);
-                  }}
-                >
-                  Close
-                </button>
-              </div>
-
+                  <button
+                    className="close-btn"
+                    onClick={() => {
+                      stopCustomerView();
+                      setViewTick((x) => x + 1);
+                      setSelectedSession(null);
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           )}
