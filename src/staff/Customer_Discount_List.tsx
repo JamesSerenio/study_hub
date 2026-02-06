@@ -7,7 +7,11 @@
 // ❌ NO Delete by Date
 // ✅ strict TS (NO "any")
 // ✅ ADD: phone_number field (separate column) + Receipt shows Customer Name + Phone #
-// ✅ ADD: "View to Customer" button (sets localStorage like Customer_Lists)
+// ✅ FIX: View to Customer EXACT same behavior as Customer_Lists.tsx
+//    - uses ONLY: customer_view_enabled + customer_view_session_id
+//    - no "source" key
+//    - label switches instantly (force re-render)
+//    - Close stops view (same as Customer_Lists)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -84,14 +88,11 @@ interface PromoBookingPaidUpdateRow {
   cash_amount: number | string | null;
 }
 
-/* ================= CUSTOMER VIEW (localStorage keys) =================
-   Same keys as your Customer_Lists.
-   NOTE: We also store LS_VIEW_SOURCE="promo" (safe extra key).
-   If your customer page (Book_Add) supports promo view, it can use this.
+/* ================= CUSTOMER VIEW (localStorage keys)
+   ✅ SAME as Customer_Lists.tsx (ONLY these 2 keys)
 */
 const LS_VIEW_ENABLED = "customer_view_enabled";
 const LS_SESSION_ID = "customer_view_session_id";
-const LS_VIEW_SOURCE = "customer_view_source"; // optional extra (promo/customer_sessions)
 
 /* ================= HELPERS ================= */
 
@@ -249,6 +250,27 @@ const safePhone = (v: string | null | undefined): string => {
   return p ? p : "—";
 };
 
+/* ✅ VIEW-TO-CUSTOMER helpers (same as Customer_Lists) */
+const isCustomerViewOnFor = (sessionId: string): boolean => {
+  const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
+  const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
+  return enabled && sid === sessionId;
+};
+
+const setCustomerView = (enabled: boolean, sessionId: string | null): void => {
+  localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
+  if (enabled && sessionId) {
+    localStorage.setItem(LS_SESSION_ID, sessionId);
+  } else {
+    localStorage.removeItem(LS_SESSION_ID);
+  }
+};
+
+const stopCustomerView = (): void => {
+  localStorage.setItem(LS_VIEW_ENABLED, "false");
+  localStorage.removeItem(LS_SESSION_ID);
+};
+
 /* ================= COMPONENT ================= */
 
 const Customer_Discount_List: React.FC = () => {
@@ -266,48 +288,20 @@ const Customer_Discount_List: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
 
-  // ✅ CUSTOMER VIEW state (for button label)
-  const [customerViewEnabled, setCustomerViewEnabled] = useState<boolean>(false);
-  const [customerViewId, setCustomerViewId] = useState<string>("");
+  // ✅ force rerender for view-to-customer label switching
+  const [, setViewTick] = useState<number>(0);
 
-  const readCustomerView = (): void => {
-    const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
-    const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
-    setCustomerViewEnabled(enabled);
-    setCustomerViewId(sid);
-  };
-
+  // listen storage changes (other tab / same app events)
   useEffect(() => {
-    readCustomerView();
-
     const onStorage = (e: StorageEvent): void => {
       if (!e.key) return;
-      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID || e.key === LS_VIEW_SOURCE) readCustomerView();
+      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) {
+        setViewTick((x) => x + 1);
+      }
     };
-
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
-
-  const enableViewToCustomer = (r: PromoBookingRow): void => {
-    // ✅ same behavior as Customer_Lists: set enabled + id
-    localStorage.setItem(LS_VIEW_ENABLED, "true");
-    localStorage.setItem(LS_SESSION_ID, r.id);
-
-    // optional: tell customer page this is promo
-    localStorage.setItem(LS_VIEW_SOURCE, "promo");
-
-    readCustomerView();
-    alert(`View to Customer enabled for: ${r.full_name}`);
-  };
-
-  const disableViewToCustomer = (): void => {
-    localStorage.setItem(LS_VIEW_ENABLED, "false");
-    localStorage.removeItem(LS_SESSION_ID);
-    localStorage.removeItem(LS_VIEW_SOURCE);
-    readCustomerView();
-    alert("View to Customer disabled.");
-  };
 
   // payment modal
   const [paymentTarget, setPaymentTarget] = useState<PromoBookingRow | null>(null);
@@ -315,7 +309,7 @@ const Customer_Discount_List: React.FC = () => {
   const [cashInput, setCashInput] = useState<string>("0");
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
-  // discount modal (WITH reason + auto payment after)
+  // discount modal
   const [discountTarget, setDiscountTarget] = useState<PromoBookingRow | null>(null);
   const [discountKind, setDiscountKind] = useState<DiscountKind>("none");
   const [discountValueInput, setDiscountValueInput] = useState<string>("0");
@@ -395,8 +389,6 @@ const Customer_Discount_List: React.FC = () => {
 
     const pi = getPaidInfo(r);
     const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
-
-    // ✅ total paid always matches due (no overpay)
     const adj = recalcPaymentsToDue(due, existingGcash);
 
     setPaymentTarget(r);
@@ -421,7 +413,6 @@ const Customer_Discount_List: React.FC = () => {
     const due = round2(calc.discountedCost);
 
     const ca = round2(Math.max(0, toNumber(cashStr)));
-
     const cash = round2(Math.min(due, ca));
     const gcash = round2(Math.max(0, due - cash));
 
@@ -506,7 +497,6 @@ const Customer_Discount_List: React.FC = () => {
     setDiscountValueInput(String(round2(toNumber(r.discount_value))));
     setDiscountReasonInput(String(r.discount_reason ?? ""));
 
-    // Default payment after (based on FINAL cost)
     const base = round2(Math.max(0, toNumber(r.price)));
     const calc = applyDiscount(base, r.discount_kind, r.discount_value);
     const due = round2(calc.discountedCost);
@@ -692,13 +682,6 @@ const Customer_Discount_List: React.FC = () => {
                 <span style={{ marginLeft: 10 }}>
                   • Total Sales: <strong>₱{totals.total.toFixed(2)}</strong>
                 </span>
-
-                {/* ✅ optional quick indicator */}
-                {customerViewEnabled && customerViewId ? (
-                  <span style={{ marginLeft: 10 }}>
-                    • View to Customer: <strong>{customerViewId === "promo" ? "" : "ON"}</strong>
-                  </span>
-                ) : null}
               </div>
             </div>
 
@@ -764,8 +747,6 @@ const Customer_Discount_List: React.FC = () => {
                     const pi = getPaidInfo(r);
                     const remaining = round2(Math.max(0, due - pi.totalPaid));
 
-                    const isViewingThis = customerViewEnabled && customerViewId === r.id;
-
                     return (
                       <tr key={r.id}>
                         <td>{new Date(r.created_at).toLocaleString("en-PH")}</td>
@@ -820,22 +801,6 @@ const Customer_Discount_List: React.FC = () => {
 
                         <td>
                           <div className="action-stack">
-                            {/* ✅ NEW: View to Customer */}
-                            <button
-                              className={`receipt-btn ${isViewingThis ? "pay-badge pay-badge--paid" : ""}`}
-                              onClick={() => enableViewToCustomer(r)}
-                              title="Enable customer to view this promo receipt"
-                            >
-                              {isViewingThis ? "Viewing (Customer)" : "View to Customer"}
-                            </button>
-
-                            {/* optional: quick OFF button (if currently viewing this) */}
-                            {isViewingThis && (
-                              <button className="receipt-btn" onClick={disableViewToCustomer} title="Disable customer view">
-                                Stop View
-                              </button>
-                            )}
-
                             <button className="receipt-btn" onClick={() => setSelected(r)}>
                               View Receipt
                             </button>
@@ -1053,7 +1018,7 @@ const Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT (VIEW ONLY) */}
+          {/* RECEIPT */}
           {selected && (
             <div className="receipt-overlay" onClick={() => setSelected(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1129,7 +1094,11 @@ const Customer_Discount_List: React.FC = () => {
 
                 {(() => {
                   const base = round2(Math.max(0, toNumber(selected.price)));
-                  const { discountedCost, discountAmount } = applyDiscount(base, selected.discount_kind, selected.discount_value);
+                  const { discountedCost, discountAmount } = applyDiscount(
+                    base,
+                    selected.discount_kind,
+                    selected.discount_value
+                  );
                   const due = round2(discountedCost);
 
                   const pi = getPaidInfo(selected);
@@ -1193,9 +1162,32 @@ const Customer_Discount_List: React.FC = () => {
                   );
                 })()}
 
-                <button className="close-btn" onClick={() => setSelected(null)}>
-                  Close
-                </button>
+                {/* ✅ SAME BUTTON AREA AS Customer_Lists */}
+                <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => {
+                      if (!selected) return;
+
+                      const on = isCustomerViewOnFor(selected.id);
+                      setCustomerView(!on, !on ? selected.id : null);
+                      setViewTick((x) => x + 1); // instant label switch
+                    }}
+                  >
+                    {isCustomerViewOnFor(selected.id) ? "Stop View to Customer" : "View to Customer"}
+                  </button>
+
+                  <button
+                    className="close-btn"
+                    onClick={() => {
+                      stopCustomerView(); // ✅ Close stops view (same as Customer_Lists)
+                      setViewTick((x) => x + 1);
+                      setSelected(null);
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           )}

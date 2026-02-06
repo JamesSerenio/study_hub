@@ -1,13 +1,6 @@
 // src/pages/Book_Add.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  IonPage,
-  IonHeader,
-  IonContent,
-  IonButton,
-  IonAlert,
-  IonSpinner,
-} from "@ionic/react";
+import { IonPage, IonHeader, IonContent, IonButton, IonAlert, IonSpinner } from "@ionic/react";
 import { useHistory } from "react-router-dom";
 
 import BookingModal from "../components/BookingModal";
@@ -25,20 +18,15 @@ import { supabase } from "../utils/supabaseClient";
 type SeatGroup = { title: string; seats: string[] };
 
 const SEAT_GROUPS: SeatGroup[] = [
-  {
-    title: "1stF",
-    seats: ["1", "2", "3", "4", "5", "6", "7a", "7b", "8a", "8b", "9", "10", "11"],
-  },
+  { title: "1stF", seats: ["1", "2", "3", "4", "5", "6", "7a", "7b", "8a", "8b", "9", "10", "11"] },
   { title: "TATAMI AREA", seats: ["12a", "12b", "12c"] },
-  {
-    title: "2ndF",
-    seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"],
-  },
+  { title: "2ndF", seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"] },
 ];
 
 // ✅ same keys with Customer_Lists
 const LS_VIEW_ENABLED = "customer_view_enabled";
 const LS_SESSION_ID = "customer_view_session_id";
+const LS_VIEW_SOURCE = "customer_view_source"; // ✅ new (promo | session) set by discount list
 
 // ✅ same billing constants as Customer_Lists
 const HOURLY_RATE = 20;
@@ -46,6 +34,8 @@ const FREE_MINUTES = 0;
 const DOWN_PAYMENT = 50;
 
 type DiscountKind = "none" | "percent" | "amount";
+
+/* ===================== CUSTOMER SESSION RECEIPT ===================== */
 
 interface CustomerSessionLite {
   id: string;
@@ -61,7 +51,7 @@ interface CustomerSessionLite {
   time_ended: string;
   hour_avail: string;
 
-  // ✅ IMPORTANT (to know if this is reservation receipt)
+  // ✅ reservation info
   reservation?: string | null; // "yes" | "no"
   reservation_date?: string | null; // YYYY-MM-DD
 
@@ -73,6 +63,43 @@ interface CustomerSessionLite {
   cash_amount?: number;
   is_paid?: boolean | number | string | null;
 }
+
+/* ===================== PROMO RECEIPT ===================== */
+
+type PackageArea = "common_area" | "conference_room";
+type DurationUnit = "hour" | "day" | "month" | "year";
+
+interface PromoReceiptLite {
+  id: string;
+  created_at: string;
+  full_name: string;
+  phone_number: string | null;
+
+  area: PackageArea;
+  seat_number: string | null;
+  start_at: string;
+  end_at: string;
+
+  price: number;
+
+  gcash_amount: number;
+  cash_amount: number;
+  is_paid: boolean | number | string | null;
+
+  discount_kind: DiscountKind;
+  discount_value: number;
+
+  discount_reason: string | null;
+
+  packages: { title: string | null } | null;
+  package_options: {
+    option_name: string | null;
+    duration_value: number | null;
+    duration_unit: DurationUnit | null;
+  } | null;
+}
+
+/* ===================== HELPERS ===================== */
 
 const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
 
@@ -91,6 +118,11 @@ const toBool = (v: unknown): boolean => {
     return s === "true" || s === "1" || s === "yes" || s === "paid";
   }
   return false;
+};
+
+const safeText = (v: unknown, fallback = "—"): string => {
+  const s = String(v ?? "").trim();
+  return s ? s : fallback;
 };
 
 const formatTimeText = (iso: string): string => {
@@ -152,7 +184,6 @@ const computeCostWithFreeMinutes = (startIso: string, endIso: string): number =>
 
 const getBaseSystemCost = (s: CustomerSessionLite): number => {
   if (isOpenTimeSession(s)) {
-    // ✅ LIVE COST while OPEN
     const nowIso = new Date().toISOString();
     return computeCostWithFreeMinutes(s.time_started, nowIso);
   }
@@ -177,6 +208,32 @@ const isReservationSession = (s: CustomerSessionLite | null): boolean => {
   return String(s.reservation ?? "no").trim().toLowerCase() === "yes";
 };
 
+const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
+const promoSeatLabel = (r: PromoReceiptLite): string =>
+  r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
+
+const formatDuration = (v: number, u: DurationUnit): string => {
+  const unit =
+    u === "hour"
+      ? v === 1
+        ? "hour"
+        : "hours"
+      : u === "day"
+      ? v === 1
+        ? "day"
+        : "days"
+      : u === "month"
+      ? v === 1
+        ? "month"
+        : "months"
+      : v === 1
+      ? "year"
+      : "years";
+  return `${v} ${unit}`;
+};
+
+/* ===================== COMPONENT ===================== */
+
 const Book_Add: React.FC = () => {
   const history = useHistory();
 
@@ -195,11 +252,15 @@ const Book_Add: React.FC = () => {
   // ✅ CUSTOMER VIEW (from staff)
   const [customerViewEnabled, setCustomerViewEnabled] = useState<boolean>(false);
   const [customerSessionId, setCustomerSessionId] = useState<string>("");
+  const [customerViewSource, setCustomerViewSource] = useState<"session" | "promo">("session");
 
   // ✅ receipt overlay
   const [showReceipt, setShowReceipt] = useState<boolean>(false);
   const [receiptLoading, setReceiptLoading] = useState<boolean>(false);
-  const [receipt, setReceipt] = useState<CustomerSessionLite | null>(null);
+
+  // ✅ two possible receipts
+  const [sessionReceipt, setSessionReceipt] = useState<CustomerSessionLite | null>(null);
+  const [promoReceipt, setPromoReceipt] = useState<PromoReceiptLite | null>(null);
 
   const canOpenReceipt = useMemo(
     () => customerViewEnabled && customerSessionId.length > 0,
@@ -207,18 +268,24 @@ const Book_Add: React.FC = () => {
   );
 
   const chipText = useMemo(() => {
-    return canOpenReceipt ? "Ready to view your receipt" : "Ready for booking";
-  }, [canOpenReceipt]);
+    if (!canOpenReceipt) return "Ready for booking";
+    return customerViewSource === "promo" ? "Ready to view your promo receipt" : "Ready to view your receipt";
+  }, [canOpenReceipt, customerViewSource]);
 
   const readCustomerViewFromStorage = (): void => {
     const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
     const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
+    const srcRaw = String(localStorage.getItem(LS_VIEW_SOURCE) ?? "session").trim().toLowerCase();
+    const src: "session" | "promo" = srcRaw === "promo" ? "promo" : "session";
+
     setCustomerViewEnabled(enabled);
     setCustomerSessionId(sid);
+    setCustomerViewSource(src);
 
     if (!enabled) {
       setShowReceipt(false);
-      setReceipt(null);
+      setSessionReceipt(null);
+      setPromoReceipt(null);
     }
   };
 
@@ -227,18 +294,19 @@ const Book_Add: React.FC = () => {
 
     const onStorage = (e: StorageEvent): void => {
       if (!e.key) return;
-      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) readCustomerViewFromStorage();
+      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID || e.key === LS_VIEW_SOURCE) {
+        readCustomerViewFromStorage();
+      }
     };
 
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  const fetchReceiptById = async (id: string): Promise<void> => {
+  const fetchSessionReceiptById = async (id: string): Promise<void> => {
     if (!id) return;
     setReceiptLoading(true);
 
-    // ✅ include reservation + reservation_date so customer receipt can show "RESERVATION RECEIPT"
     const { data, error } = await supabase
       .from("customer_sessions")
       .select(
@@ -250,19 +318,124 @@ const Book_Add: React.FC = () => {
     if (error || !data) {
       // eslint-disable-next-line no-console
       console.error(error);
-      setReceipt(null);
+      setSessionReceipt(null);
       setReceiptLoading(false);
       return;
     }
 
-    setReceipt(data as CustomerSessionLite);
+    setSessionReceipt(data as CustomerSessionLite);
+    setReceiptLoading(false);
+  };
+
+  const fetchPromoReceiptById = async (id: string): Promise<void> => {
+    if (!id) return;
+    setReceiptLoading(true);
+
+    const { data, error } = await supabase
+      .from("promo_bookings")
+      .select(
+        `
+        id,
+        created_at,
+        full_name,
+        phone_number,
+        area,
+        seat_number,
+        start_at,
+        end_at,
+        price,
+        gcash_amount,
+        cash_amount,
+        is_paid,
+        discount_kind,
+        discount_value,
+        discount_reason,
+        packages:package_id ( title ),
+        package_options:package_option_id (
+          option_name,
+          duration_value,
+          duration_unit
+        )
+      `
+      )
+      .eq("id", id)
+      .single();
+
+    if (error || !data) {
+      // eslint-disable-next-line no-console
+      console.error(error);
+      setPromoReceipt(null);
+      setReceiptLoading(false);
+      return;
+    }
+
+    // normalize numbers safely
+    const row = data as unknown as {
+      id: string;
+      created_at: string;
+      full_name: string;
+      phone_number: string | null;
+      area: PackageArea;
+      seat_number: string | null;
+      start_at: string;
+      end_at: string;
+      price: number | string | null;
+      gcash_amount: number | string | null;
+      cash_amount: number | string | null;
+      is_paid: boolean | number | string | null;
+      discount_kind: DiscountKind | string | null;
+      discount_value: number | string | null;
+      discount_reason: string | null;
+      packages: { title: string | null } | null;
+      package_options: {
+        option_name: string | null;
+        duration_value: number | null;
+        duration_unit: DurationUnit | null;
+      } | null;
+    };
+
+    const kindRaw = String(row.discount_kind ?? "none").toLowerCase().trim();
+    const kind: DiscountKind = kindRaw === "percent" ? "percent" : kindRaw === "amount" ? "amount" : "none";
+
+    const normalized: PromoReceiptLite = {
+      id: row.id,
+      created_at: row.created_at,
+      full_name: row.full_name,
+      phone_number: row.phone_number ?? null,
+      area: row.area,
+      seat_number: row.seat_number ?? null,
+      start_at: row.start_at,
+      end_at: row.end_at,
+      price: round2(toMoney(row.price)),
+      gcash_amount: round2(toMoney(row.gcash_amount)),
+      cash_amount: round2(toMoney(row.cash_amount)),
+      is_paid: row.is_paid,
+      discount_kind: kind,
+      discount_value: round2(toMoney(row.discount_value)),
+      discount_reason: row.discount_reason ?? null,
+      packages: row.packages ?? null,
+      package_options: row.package_options ?? null,
+    };
+
+    setPromoReceipt(normalized);
     setReceiptLoading(false);
   };
 
   const openReceipt = async (): Promise<void> => {
     if (!canOpenReceipt) return;
+
     setShowReceipt(true);
-    await fetchReceiptById(customerSessionId);
+    setReceiptLoading(true);
+
+    // clear old
+    setSessionReceipt(null);
+    setPromoReceipt(null);
+
+    if (customerViewSource === "promo") {
+      await fetchPromoReceiptById(customerSessionId);
+    } else {
+      await fetchSessionReceiptById(customerSessionId);
+    }
   };
 
   const handlePromoSaved = (): void => {
@@ -376,19 +549,9 @@ const Book_Add: React.FC = () => {
           seatGroups={SEAT_GROUPS}
         />
 
-        <PromoModal
-          isOpen={isPromoOpen}
-          onClose={() => setIsPromoOpen(false)}
-          onSaved={handlePromoSaved}
-          seatGroups={SEAT_GROUPS}
-        />
+        <PromoModal isOpen={isPromoOpen} onClose={() => setIsPromoOpen(false)} onSaved={handlePromoSaved} seatGroups={SEAT_GROUPS} />
 
-        <AddOnsModal
-          isOpen={isAddOnsOpen}
-          onClose={() => setIsAddOnsOpen(false)}
-          onSaved={() => setAddOnsSentOpen(true)}
-          seatGroups={SEAT_GROUPS}
-        />
+        <AddOnsModal isOpen={isAddOnsOpen} onClose={() => setIsAddOnsOpen(false)} onSaved={() => setAddOnsSentOpen(true)} seatGroups={SEAT_GROUPS} />
 
         {/* ALERTS */}
         <IonAlert
@@ -421,20 +584,20 @@ const Book_Add: React.FC = () => {
           ]}
         />
 
-        {/* ✅ RECEIPT OVERLAY (Customer_Lists logic) */}
+        {/* ✅ RECEIPT OVERLAY (SESSION or PROMO) */}
         {showReceipt && canOpenReceipt && (
           <div className="receipt-overlay" onClick={() => setShowReceipt(false)}>
-            <div
-              className="receipt-container"
-              onClick={(e) => e.stopPropagation()}
-              style={{ maxHeight: "90vh", overflowY: "auto", paddingBottom: 14 }}
-            >
+            <div className="receipt-container" onClick={(e) => e.stopPropagation()} style={{ maxHeight: "90vh", overflowY: "auto", paddingBottom: 14 }}>
               <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
               <h3 className="receipt-title">ME TYME LOUNGE</h3>
 
-              {/* ✅ FIX: show Reservation receipt when reservation=yes */}
+              {/* ✅ subtitle depends on source */}
               <p className="receipt-subtitle">
-                {isReservationSession(receipt) ? "RESERVATION RECEIPT" : "OFFICIAL RECEIPT"}
+                {customerViewSource === "promo"
+                  ? "PROMO RECEIPT"
+                  : isReservationSession(sessionReceipt)
+                  ? "RESERVATION RECEIPT"
+                  : "OFFICIAL RECEIPT"}
               </p>
 
               <hr />
@@ -443,68 +606,214 @@ const Book_Add: React.FC = () => {
                 <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
                   <IonSpinner />
                 </div>
-              ) : !receipt ? (
+              ) : customerViewSource === "promo" ? (
+                !promoReceipt ? (
+                  <p className="receipt-footer" style={{ textAlign: "center" }}>
+                    No promo receipt found.
+                  </p>
+                ) : (
+                  <>
+                    <div className="receipt-row">
+                      <span>Status</span>
+                      <span>
+                        {(() => {
+                          const now = Date.now();
+                          const s = new Date(promoReceipt.start_at).getTime();
+                          const e = new Date(promoReceipt.end_at).getTime();
+                          if (!Number.isFinite(s) || !Number.isFinite(e)) return "FINISHED";
+                          if (now < s) return "UPCOMING";
+                          if (now >= s && now <= e) return "ONGOING";
+                          return "FINISHED";
+                        })()}
+                      </span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Customer</span>
+                      <span>{promoReceipt.full_name}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Phone</span>
+                      <span>{safeText(promoReceipt.phone_number, "N/A")}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Area</span>
+                      <span>{prettyArea(promoReceipt.area)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Seat</span>
+                      <span>{promoSeatLabel(promoReceipt)}</span>
+                    </div>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Package</span>
+                      <span>{promoReceipt.packages?.title || "—"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Option</span>
+                      <span>{promoReceipt.package_options?.option_name || "—"}</span>
+                    </div>
+
+                    {promoReceipt.package_options?.duration_value && promoReceipt.package_options?.duration_unit ? (
+                      <div className="receipt-row">
+                        <span>Duration</span>
+                        <span>{formatDuration(Number(promoReceipt.package_options.duration_value), promoReceipt.package_options.duration_unit)}</span>
+                      </div>
+                    ) : null}
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Start</span>
+                      <span>{new Date(promoReceipt.start_at).toLocaleString("en-PH")}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>End</span>
+                      <span>{new Date(promoReceipt.end_at).toLocaleString("en-PH")}</span>
+                    </div>
+
+                    <hr />
+
+                    {(() => {
+                      const base = round2(Math.max(0, promoReceipt.price));
+                      const { discountedCost, discountAmount } = applyDiscount(base, promoReceipt.discount_kind, promoReceipt.discount_value);
+                      const due = round2(discountedCost);
+
+                      const gcash = round2(Math.max(0, promoReceipt.gcash_amount));
+                      const cash = round2(Math.max(0, promoReceipt.cash_amount));
+                      const totalPaid = round2(gcash + cash);
+
+                      const remaining = round2(Math.max(0, due - totalPaid));
+                      const paid = toBool(promoReceipt.is_paid);
+
+                      return (
+                        <>
+                          <div className="receipt-row">
+                            <span>System Cost (Before)</span>
+                            <span>₱{base.toFixed(2)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Discount</span>
+                            <span>{getDiscountTextFrom(promoReceipt.discount_kind, promoReceipt.discount_value)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Discount Amount</span>
+                            <span>₱{discountAmount.toFixed(2)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Final Cost</span>
+                            <span>₱{due.toFixed(2)}</span>
+                          </div>
+
+                          <hr />
+
+                          <div className="receipt-row">
+                            <span>GCash</span>
+                            <span>₱{gcash.toFixed(2)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Cash</span>
+                            <span>₱{cash.toFixed(2)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Total Paid</span>
+                            <span>₱{totalPaid.toFixed(2)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Remaining</span>
+                            <span>₱{remaining.toFixed(2)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Paid Status</span>
+                            <span className="receipt-status">{paid ? "PAID" : "UNPAID"}</span>
+                          </div>
+
+                          <div className="receipt-total">
+                            <span>TOTAL</span>
+                            <span>₱{due.toFixed(2)}</span>
+                          </div>
+                        </>
+                      );
+                    })()}
+
+                    <p className="receipt-footer">
+                      Thank you for choosing <br />
+                      <strong>Me Tyme Lounge</strong>
+                    </p>
+                  </>
+                )
+              ) : !sessionReceipt ? (
                 <p className="receipt-footer" style={{ textAlign: "center" }}>
                   No receipt found.
                 </p>
               ) : (
                 <>
-                  {/* ✅ FIX: show Reservation Date field ONLY if reservation */}
-                  {isReservationSession(receipt) && (
-                    <>
-                      <div className="receipt-row">
-                        <span>Reservation Date</span>
-                        <span>{receipt.reservation_date ?? "N/A"}</span>
-                      </div>
-                    </>
+                  {isReservationSession(sessionReceipt) && (
+                    <div className="receipt-row">
+                      <span>Reservation Date</span>
+                      <span>{sessionReceipt.reservation_date ?? "N/A"}</span>
+                    </div>
                   )}
 
                   <div className="receipt-row">
                     <span>Date</span>
-                    <span>{receipt.date}</span>
+                    <span>{sessionReceipt.date}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Customer</span>
-                    <span>{receipt.full_name}</span>
+                    <span>{sessionReceipt.full_name}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Phone</span>
-                    <span>{String(receipt.phone_number ?? "").trim() || "N/A"}</span>
+                    <span>{safeText(sessionReceipt.phone_number, "N/A")}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Type</span>
-                    <span>{receipt.customer_type}</span>
+                    <span>{sessionReceipt.customer_type}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Field</span>
-                    <span>{receipt.customer_field ?? ""}</span>
+                    <span>{sessionReceipt.customer_field ?? ""}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Seat</span>
-                    <span>{receipt.seat_number}</span>
+                    <span>{sessionReceipt.seat_number}</span>
                   </div>
 
                   <hr />
 
                   <div className="receipt-row">
                     <span>Time In</span>
-                    <span>{formatTimeText(receipt.time_started)}</span>
+                    <span>{formatTimeText(sessionReceipt.time_started)}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span>Time Out</span>
-                    <span>{isOpenTimeSession(receipt) ? "OPEN" : formatTimeText(receipt.time_ended) || "—"}</span>
+                    <span>{isOpenTimeSession(sessionReceipt) ? "OPEN" : formatTimeText(sessionReceipt.time_ended) || "—"}</span>
                   </div>
 
-                  {/* optional (same as staff receipt style) */}
                   {(() => {
-                    const endIso = isOpenTimeSession(receipt) ? new Date().toISOString() : receipt.time_ended;
-                    const used = diffMinutes(receipt.time_started, endIso);
+                    const endIso = isOpenTimeSession(sessionReceipt) ? new Date().toISOString() : sessionReceipt.time_ended;
+                    const used = diffMinutes(sessionReceipt.time_started, endIso);
                     const charge = Math.max(0, used - FREE_MINUTES);
 
                     return (
@@ -513,7 +822,6 @@ const Book_Add: React.FC = () => {
                           <span>Minutes Used</span>
                           <span>{used} min</span>
                         </div>
-
                         <div className="receipt-row">
                           <span>Charge Minutes</span>
                           <span>{charge} min</span>
@@ -525,15 +833,15 @@ const Book_Add: React.FC = () => {
                   <hr />
 
                   {(() => {
-                    const disp = getDisplayAmount(receipt);
+                    const disp = getDisplayAmount(sessionReceipt);
 
-                    const baseCost = getBaseSystemCost(receipt);
-                    const kind = (receipt.discount_kind ?? "none") as DiscountKind;
-                    const val = toMoney(receipt.discount_value ?? 0);
+                    const baseCost = getBaseSystemCost(sessionReceipt);
+                    const kind = (sessionReceipt.discount_kind ?? "none") as DiscountKind;
+                    const val = toMoney(sessionReceipt.discount_value ?? 0);
                     const discountCalc = applyDiscount(baseCost, kind, val);
 
-                    const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount ?? 0)));
-                    const cash = round2(Math.max(0, toMoney(receipt.cash_amount ?? 0)));
+                    const gcash = round2(Math.max(0, toMoney(sessionReceipt.gcash_amount ?? 0)));
+                    const cash = round2(Math.max(0, toMoney(sessionReceipt.cash_amount ?? 0)));
                     const totalPaid = round2(gcash + cash);
 
                     const due = round2(Math.max(0, discountCalc.discountedCost - DOWN_PAYMENT));
@@ -590,7 +898,7 @@ const Book_Add: React.FC = () => {
 
                         <div className="receipt-row">
                           <span>Status</span>
-                          <span className="receipt-status">{toBool(receipt.is_paid) ? "PAID" : "UNPAID"}</span>
+                          <span className="receipt-status">{toBool(sessionReceipt.is_paid) ? "PAID" : "UNPAID"}</span>
                         </div>
 
                         <div className="receipt-total">
