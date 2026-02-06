@@ -24,7 +24,7 @@ import Customer_Reservations from "./Customer_Reservations";
 import Customer_Calendar from "./Customer_Calendar";
 import Product_Item_Lists from "./Product_Item_lists";
 import Customer_Add_ons from "./Customer_Add_ons";
-import Customer_Discount_List from "./Customer_Discount_List";
+import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
 
 /* assets */
@@ -80,7 +80,7 @@ const Staff_menu: React.FC = () => {
       { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
       { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
       { name: "Customer Add-Ons", key: "customer_add_ons", icon: onsIcon },
-      { name: "Customer Discount List", key: "customer_discount_list", icon: discountIcon },
+      { name: "Customer Promo List", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
     ],
@@ -112,7 +112,7 @@ const Staff_menu: React.FC = () => {
         return <Customer_Calendar />;
       case "customer_add_ons":
         return <Customer_Add_ons />;
-      case "customer_discount_list":
+      case "customer_promo_list":
         return <Customer_Discount_List />;
       case "staff_sales_report":
         return <Staff_Sales_Report />;
