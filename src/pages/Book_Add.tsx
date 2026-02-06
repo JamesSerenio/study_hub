@@ -11,6 +11,7 @@ import leaves from "../assets/leave.png";
 import studyHubLogo from "../assets/study_hub.png";
 import whiteBear from "../assets/white_bear.png";
 
+// ✅ receipt logo + supabase
 import logo from "../assets/study_hub.png";
 import { supabase } from "../utils/supabaseClient";
 
@@ -28,7 +29,7 @@ const SEAT_GROUPS: SeatGroup[] = [
   },
 ];
 
-// ✅ same keys with Customer_Lists / Customer_Discount_List (fixed version)
+// ✅ same keys with Customer_Lists / Customer_Discount_List
 const LS_VIEW_ENABLED = "customer_view_enabled";
 const LS_SESSION_ID = "customer_view_session_id";
 
@@ -43,13 +44,13 @@ type DurationUnit = "hour" | "day" | "month" | "year";
 
 /* ===================== RECEIPT TYPES ===================== */
 
-// Customer Sessions receipt
-interface CustomerSessionLite {
+interface CustomerSessionReceipt {
   kind: "session";
+
   id: string;
   date: string;
   full_name: string;
-  phone_number?: string | null;
+  phone_number: string | null;
 
   customer_type: string;
   customer_field: string | null;
@@ -59,21 +60,21 @@ interface CustomerSessionLite {
   time_ended: string;
   hour_avail: string;
 
-  reservation?: string | null; // "yes" | "no"
-  reservation_date?: string | null; // YYYY-MM-DD
+  reservation: string | null; // "yes" | "no"
+  reservation_date: string | null; // YYYY-MM-DD
 
   total_amount: number;
-  discount_kind?: DiscountKind;
-  discount_value?: number;
+  discount_kind: DiscountKind;
+  discount_value: number;
 
-  gcash_amount?: number;
-  cash_amount?: number;
-  is_paid?: boolean | number | string | null;
+  gcash_amount: number;
+  cash_amount: number;
+  is_paid: boolean | number | string | null;
 }
 
-// Promo Bookings receipt
-interface PromoBookingReceipt {
+interface PromoReceipt {
   kind: "promo";
+
   id: string;
   created_at: string;
   full_name: string;
@@ -101,7 +102,7 @@ interface PromoBookingReceipt {
   } | null;
 }
 
-type ReceiptUnion = CustomerSessionLite | PromoBookingReceipt;
+type ReceiptUnion = CustomerSessionReceipt | PromoReceipt;
 
 /* ===================== HELPERS ===================== */
 
@@ -124,6 +125,11 @@ const toBool = (v: unknown): boolean => {
   return false;
 };
 
+const safePhone = (v: string | null | undefined): string => {
+  const p = String(v ?? "").trim();
+  return p ? p : "N/A";
+};
+
 const formatTimeText = (iso: string): string => {
   const dt = new Date(iso);
   if (!Number.isFinite(dt.getTime())) return "";
@@ -132,13 +138,8 @@ const formatTimeText = (iso: string): string => {
 
 const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
 
-const seatLabelPromo = (r: PromoBookingReceipt): string =>
+const seatLabelPromo = (r: PromoReceipt): string =>
   r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
-
-const safePhone = (v: string | null | undefined): string => {
-  const p = String(v ?? "").trim();
-  return p ? p : "N/A";
-};
 
 const formatDuration = (v: number, u: DurationUnit): string => {
   const unit =
@@ -158,6 +159,26 @@ const formatDuration = (v: number, u: DurationUnit): string => {
       ? "year"
       : "years";
   return `${v} ${unit}`;
+};
+
+const normalizeDiscountKind = (v: unknown): DiscountKind => {
+  const s = String(v ?? "none").trim().toLowerCase();
+  if (s === "percent") return "percent";
+  if (s === "amount") return "amount";
+  return "none";
+};
+
+const normalizeArea = (v: unknown): PackageArea => {
+  const s = String(v ?? "common_area").trim().toLowerCase();
+  return s === "conference_room" ? "conference_room" : "common_area";
+};
+
+const normalizeDurationUnit = (v: unknown): DurationUnit => {
+  const s = String(v ?? "hour").trim().toLowerCase();
+  if (s === "day") return "day";
+  if (s === "month") return "month";
+  if (s === "year") return "year";
+  return "hour";
 };
 
 const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
@@ -191,7 +212,7 @@ const applyDiscount = (
   return { discountedCost: round2(cost), discountAmount: 0 };
 };
 
-const isOpenTimeSession = (s: CustomerSessionLite): boolean => {
+const isOpenTimeSession = (s: CustomerSessionReceipt): boolean => {
   if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
   const end = new Date(s.time_ended);
   return end.getFullYear() >= 2999;
@@ -211,7 +232,7 @@ const computeCostWithFreeMinutes = (startIso: string, endIso: string): number =>
   return round2(chargeMinutes * perMinute);
 };
 
-const getBaseSystemCost = (s: CustomerSessionLite): number => {
+const getBaseSystemCost = (s: CustomerSessionReceipt): number => {
   if (isOpenTimeSession(s)) {
     const nowIso = new Date().toISOString();
     return computeCostWithFreeMinutes(s.time_started, nowIso);
@@ -219,9 +240,9 @@ const getBaseSystemCost = (s: CustomerSessionLite): number => {
   return toMoney(s.total_amount);
 };
 
-const getDisplayAmount = (s: CustomerSessionLite): { label: "Total Balance" | "Total Change"; value: number } => {
+const getDisplayAmount = (s: CustomerSessionReceipt): { label: "Total Balance" | "Total Change"; value: number } => {
   const base = getBaseSystemCost(s);
-  const kind = (s.discount_kind ?? "none") as DiscountKind;
+  const kind = s.discount_kind ?? "none";
   const val = toMoney(s.discount_value ?? 0);
   const disc = applyDiscount(base, kind, val);
 
@@ -232,17 +253,12 @@ const getDisplayAmount = (s: CustomerSessionLite): { label: "Total Balance" | "T
   return { label: "Total Change", value: change };
 };
 
-const isReservationSession = (s: CustomerSessionLite | null): boolean => {
+const isReservationSession = (s: CustomerSessionReceipt | null): boolean => {
   if (!s) return false;
   return String(s.reservation ?? "no").trim().toLowerCase() === "yes";
 };
 
-const normalizeDiscountKind = (v: unknown): DiscountKind => {
-  const s = String(v ?? "none").trim().toLowerCase();
-  if (s === "percent") return "percent";
-  if (s === "amount") return "amount";
-  return "none";
-};
+const isPromoReceipt = (r: ReceiptUnion): r is PromoReceipt => r.kind === "promo";
 
 /* ===================== COMPONENT ===================== */
 
@@ -324,42 +340,52 @@ const Book_Add: React.FC = () => {
         date: string;
         full_name: string;
         phone_number: string | null;
+
         customer_type: string;
         customer_field: string | null;
         seat_number: string;
+
         time_started: string;
         time_ended: string;
         hour_avail: string;
+
         reservation: string | null;
         reservation_date: string | null;
-        total_amount: number | string;
+
+        total_amount: number | string | null;
         discount_kind: unknown;
         discount_value: unknown;
+
         gcash_amount: unknown;
         cash_amount: unknown;
         is_paid: unknown;
       };
 
-      const rec: CustomerSessionLite = {
+      const rec: CustomerSessionReceipt = {
         kind: "session",
         id: d.id,
         date: d.date,
         full_name: d.full_name,
         phone_number: d.phone_number ?? null,
+
         customer_type: d.customer_type,
         customer_field: d.customer_field ?? null,
         seat_number: d.seat_number,
+
         time_started: d.time_started,
         time_ended: d.time_ended,
         hour_avail: d.hour_avail,
+
         reservation: d.reservation ?? null,
         reservation_date: d.reservation_date ?? null,
+
         total_amount: toMoney(d.total_amount),
         discount_kind: normalizeDiscountKind(d.discount_kind),
-        discount_value: toMoney(d.discount_value),
-        gcash_amount: toMoney(d.gcash_amount),
-        cash_amount: toMoney(d.cash_amount),
-        is_paid: d.is_paid,
+        discount_value: round2(toMoney(d.discount_value)),
+
+        gcash_amount: round2(toMoney(d.gcash_amount)),
+        cash_amount: round2(toMoney(d.cash_amount)),
+        is_paid: d.is_paid as boolean | number | string | null,
       };
 
       setReceipt(rec);
@@ -367,7 +393,7 @@ const Book_Add: React.FC = () => {
       return;
     }
 
-    // 2) promo_bookings fallback
+    // 2) promo_bookings fallback (✅ join can be object OR array -> normalize)
     const pb = await supabase
       .from("promo_bookings")
       .select(
@@ -399,49 +425,76 @@ const Book_Add: React.FC = () => {
       .maybeSingle();
 
     if (!pb.error && pb.data) {
+      type PackageJoin = { title: string | null } | { title: string | null }[] | null;
+      type OptionJoin =
+        | {
+            option_name: string | null;
+            duration_value: number | null;
+            duration_unit: string | null;
+          }
+        | {
+            option_name: string | null;
+            duration_value: number | null;
+            duration_unit: string | null;
+          }[]
+        | null;
+
       const d = pb.data as {
         id: string;
         created_at: string;
         full_name: string;
         phone_number: string | null;
-        area: PackageArea;
+
+        area: unknown;
         seat_number: string | null;
         start_at: string;
         end_at: string;
+
         price: number | string | null;
         gcash_amount: number | string | null;
         cash_amount: number | string | null;
         is_paid: boolean | number | string | null;
+
         discount_kind: unknown;
         discount_value: unknown;
         discount_reason: string | null;
-        packages: { title: string | null } | null;
-        package_options: {
-          option_name: string | null;
-          duration_value: number | null;
-          duration_unit: DurationUnit | null;
-        } | null;
+
+        packages: PackageJoin;
+        package_options: OptionJoin;
       };
 
-      const rec: PromoBookingReceipt = {
+      const pkgObj = Array.isArray(d.packages) ? d.packages[0] ?? null : d.packages;
+      const optObj = Array.isArray(d.package_options) ? d.package_options[0] ?? null : d.package_options;
+
+      const rec: PromoReceipt = {
         kind: "promo",
         id: d.id,
         created_at: d.created_at,
         full_name: d.full_name,
         phone_number: d.phone_number ?? null,
-        area: d.area,
+
+        area: normalizeArea(d.area),
         seat_number: d.seat_number ?? null,
         start_at: d.start_at,
         end_at: d.end_at,
+
         price: round2(toMoney(d.price)),
         gcash_amount: round2(toMoney(d.gcash_amount)),
         cash_amount: round2(toMoney(d.cash_amount)),
         is_paid: d.is_paid,
+
         discount_kind: normalizeDiscountKind(d.discount_kind),
         discount_value: round2(toMoney(d.discount_value)),
         discount_reason: d.discount_reason ?? null,
-        packages: d.packages ?? null,
-        package_options: d.package_options ?? null,
+
+        packages: pkgObj,
+        package_options: optObj
+          ? {
+              option_name: optObj.option_name ?? null,
+              duration_value: optObj.duration_value ?? null,
+              duration_unit: optObj.duration_unit == null ? null : normalizeDurationUnit(optObj.duration_unit),
+            }
+          : null,
       };
 
       setReceipt(rec);
@@ -449,7 +502,6 @@ const Book_Add: React.FC = () => {
       return;
     }
 
-    // none found
     setReceipt(null);
     setReceiptLoading(false);
   };
@@ -611,7 +663,7 @@ const Book_Add: React.FC = () => {
           ]}
         />
 
-        {/* ✅ RECEIPT OVERLAY (supports BOTH customer_sessions + promo_bookings) */}
+        {/* ✅ RECEIPT OVERLAY (supports BOTH session + promo) */}
         {showReceipt && canOpenReceipt && (
           <div className="receipt-overlay" onClick={() => setShowReceipt(false)}>
             <div
@@ -623,12 +675,12 @@ const Book_Add: React.FC = () => {
               <h3 className="receipt-title">ME TYME LOUNGE</h3>
 
               <p className="receipt-subtitle">
-                {receipt?.kind === "promo"
+                {!receipt
+                  ? "OFFICIAL RECEIPT"
+                  : isPromoReceipt(receipt)
                   ? "PROMO RECEIPT"
-                  : receipt?.kind === "session"
-                  ? isReservationSession(receipt)
-                    ? "RESERVATION RECEIPT"
-                    : "OFFICIAL RECEIPT"
+                  : isReservationSession(receipt)
+                  ? "RESERVATION RECEIPT"
                   : "OFFICIAL RECEIPT"}
               </p>
 
@@ -642,9 +694,9 @@ const Book_Add: React.FC = () => {
                 <p className="receipt-footer" style={{ textAlign: "center" }}>
                   No receipt found.
                 </p>
-              ) : receipt.kind === "promo" ? (
-                /* ===================== PROMO RECEIPT ===================== */
+              ) : isPromoReceipt(receipt) ? (
                 <>
+                  {/* ================= PROMO RECEIPT ================= */}
                   <div className="receipt-row">
                     <span>Date</span>
                     <span>{new Date(receipt.created_at).toLocaleString("en-PH")}</span>
@@ -685,7 +737,9 @@ const Book_Add: React.FC = () => {
                   {receipt.package_options?.duration_value && receipt.package_options?.duration_unit ? (
                     <div className="receipt-row">
                       <span>Duration</span>
-                      <span>{formatDuration(Number(receipt.package_options.duration_value), receipt.package_options.duration_unit)}</span>
+                      <span>
+                        {formatDuration(Number(receipt.package_options.duration_value), receipt.package_options.duration_unit)}
+                      </span>
                     </div>
                   ) : null}
 
@@ -767,11 +821,6 @@ const Book_Add: React.FC = () => {
                           <span>TOTAL</span>
                           <span>₱{due.toFixed(2)}</span>
                         </div>
-
-                        <div className="receipt-row">
-                          <span>Reason</span>
-                          <span>{(receipt.discount_reason ?? "").trim() || "—"}</span>
-                        </div>
                       </>
                     );
                   })()}
@@ -782,8 +831,8 @@ const Book_Add: React.FC = () => {
                   </p>
                 </>
               ) : (
-                /* ===================== CUSTOMER SESSION RECEIPT ===================== */
                 <>
+                  {/* ================= CUSTOMER SESSION RECEIPT ================= */}
                   {isReservationSession(receipt) && (
                     <div className="receipt-row">
                       <span>Reservation Date</span>
@@ -803,7 +852,7 @@ const Book_Add: React.FC = () => {
 
                   <div className="receipt-row">
                     <span>Phone</span>
-                    <span>{safePhone(receipt.phone_number ?? null)}</span>
+                    <span>{safePhone(receipt.phone_number)}</span>
                   </div>
 
                   <div className="receipt-row">
@@ -859,15 +908,13 @@ const Book_Add: React.FC = () => {
                     const disp = getDisplayAmount(receipt);
 
                     const baseCost = getBaseSystemCost(receipt);
-                    const kind = (receipt.discount_kind ?? "none") as DiscountKind;
-                    const val = toMoney(receipt.discount_value ?? 0);
-                    const discountCalc = applyDiscount(baseCost, kind, val);
+                    const calc = applyDiscount(baseCost, receipt.discount_kind, receipt.discount_value);
 
-                    const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount ?? 0)));
-                    const cash = round2(Math.max(0, toMoney(receipt.cash_amount ?? 0)));
+                    const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount)));
+                    const cash = round2(Math.max(0, toMoney(receipt.cash_amount)));
                     const totalPaid = round2(gcash + cash);
 
-                    const due = round2(Math.max(0, discountCalc.discountedCost - DOWN_PAYMENT));
+                    const due = round2(Math.max(0, calc.discountedCost - DOWN_PAYMENT));
                     const remaining = round2(Math.max(0, due - totalPaid));
 
                     return (
@@ -884,17 +931,17 @@ const Book_Add: React.FC = () => {
 
                         <div className="receipt-row">
                           <span>Discount</span>
-                          <span>{getDiscountTextFrom(kind, val)}</span>
+                          <span>{getDiscountTextFrom(receipt.discount_kind, receipt.discount_value)}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Discount Amount</span>
-                          <span>₱{discountCalc.discountAmount.toFixed(2)}</span>
+                          <span>₱{calc.discountAmount.toFixed(2)}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>System Cost</span>
-                          <span>₱{discountCalc.discountedCost.toFixed(2)}</span>
+                          <span>₱{calc.discountedCost.toFixed(2)}</span>
                         </div>
 
                         <hr />
