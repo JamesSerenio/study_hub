@@ -5318,96 +5318,146 @@ ion-content.pil-modal-content{
 }
 
 /* =========================================================
-   ADMIN ADD-ONS (AAO)
-   ✅ same palette as PIL
-   ✅ smooth animations
-   ✅ responsive: 400 / 600 / 1200
+   AAO — CLEAN COHESIVE 2-COL (NOT UGLY)
+   - one unified card look
+   - subtle divider between columns
+   - right side feels part of the card
+   - tighter spacing + modern borders
 ========================================================= */
 
 :root{
-  --aao-bg: #b9c9a3;
-  --aao-surface: rgba(248,238,220,.96);
-  --aao-surface-strong: rgba(248,238,220,.985);
-  --aao-ink: #1c1c1c;
-  --aao-line: rgba(0,0,0,.12);
-  --aao-line-soft: rgba(0,0,0,.08);
-  --aao-shadow: 0 14px 30px rgba(0,0,0,.12);
-  --aao-shadow-soft: 0 10px 22px rgba(0,0,0,.10);
+  --aao-bg1:#b9c9a3;
+  --aao-bg2:#a9bd90;
 
-  --ease-out: cubic-bezier(.16, 1, .3, 1);
-  --ease-soft: cubic-bezier(.22, 1, .36, 1);
-  --dur-fast: 180ms;
-  --dur-mid: 320ms;
-  --dur-slow: 420ms;
+  --aao-card:#f3f6ef;               /* unified light surface */
+  --aao-ink:#1b1b1b;
+  --aao-muted:rgba(0,0,0,.62);
+
+  --aao-line:rgba(0,0,0,.08);
+  --aao-line2:rgba(0,0,0,.06);
+
+  --r-lg:18px;
+  --r-md:14px;
+
+  --shadow:0 16px 34px rgba(0,0,0,.12);
+  --shadow2:0 10px 20px rgba(0,0,0,.10);
+
+  --dur:200ms;
 }
 
 @media (prefers-reduced-motion: reduce){
-  .aao-page *{
-    animation: none !important;
-    transition: none !important;
-  }
+  .aao-page *{ animation:none !important; transition:none !important; }
 }
 
-/* PAGE */
+/* PAGE BG */
 .aao-page{
-  --background: var(--aao-bg) !important;
-  background: var(--aao-bg) !important;
-  animation: aaoFade var(--dur-slow) var(--ease-soft) both;
-}
-ion-content.aao-content{
-  --background: var(--aao-bg) !important;
-  background: var(--aao-bg) !important;
+  --background: transparent !important;
+  background:
+    radial-gradient(950px 650px at 65% 15%, rgba(255,255,255,.35), rgba(255,255,255,0) 62%),
+    radial-gradient(720px 520px at 25% 85%, rgba(255,255,255,.22), rgba(255,255,255,0) 65%),
+    linear-gradient(180deg,var(--aao-bg1),var(--aao-bg2)) !important;
 }
 
-.aao-toolbar{
-  --background: rgba(255,255,255,.70);
-  --border-color: rgba(0,0,0,.08);
-  backdrop-filter: blur(10px);
-}
-.aao-title{
-  font-weight: 1000;
-  letter-spacing: .2px;
+ion-content.aao-content{
+  --background: transparent !important;
+  background: transparent !important;
 }
 
 .aao-wrap{
-  padding: 14px;
-  padding-bottom: 22px;
+  padding: 18px;
+  padding-bottom: 28px;
 }
 
+/* MAIN CARD */
 .aao-card{
-  max-width: 1200px;
+  max-width: 700px;
   margin: 0 auto;
-
-  border-radius: 16px;
-  overflow: hidden;
-  background: var(--aao-surface);
+  background: var(--aao-card);
   border: 1px solid var(--aao-line);
-  box-shadow: var(--aao-shadow);
-  backdrop-filter: blur(6px);
-
-  animation: aaoUp var(--dur-slow) var(--ease-out) both;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
+/* HEADER */
 .aao-card-head{
-  padding: 14px 14px 10px;
-  border-bottom: 1px solid var(--aao-line-soft);
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--aao-line2);
+  background: rgba(255,255,255,.45);
 }
+
 .aao-card-title{
   font-weight: 1000;
-  letter-spacing: .2px;
-  font-size: 14px;
+  font-size: 16px;
+  color: var(--aao-ink);
 }
+
 .aao-card-sub{
-  font-size: 12px;
-  opacity: .75;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--aao-muted);
+}
+
+/* GRID */
+.aao-grid{
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;   /* mobile */
+  gap: 14px;
+  padding: 16px 20px 20px;
+}
+
+@media (min-width: 900px){
+  .aao-grid{
+    grid-template-columns: 1.25fr .75fr; /* left bigger */
+    gap: 18px;
+    align-items: start;
+  }
+
+  /* subtle divider in the middle */
+  .aao-grid::after{
+    content:"";
+    position:absolute;
+    top: 16px;
+    bottom: 16px;
+    left: calc(100% * (1.25 / (1.25 + .75)));
+    width: 1px;
+    background: rgba(0,0,0,.06);
+    border-radius: 999px;
+    pointer-events:none;
+  }
+}
+
+.aao-col{ min-width: 0; }
+
+/* LEFT / RIGHT padding so divider feels good */
+@media (min-width: 900px){
+  .aao-col-left{ padding-right: 10px; }
+  .aao-col-right{ padding-left: 10px; }
+}
+
+/* RIGHT PANEL — make it feel same as left (not a floating white box) */
+.aao-rightCard{
+  background: rgba(255,255,255,.50);
+  border: 1px solid rgba(0,0,0,.07);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow2);
+  padding: 14px 14px 12px;
+}
+
+.aao-rightTitle{
+  font-weight: 1000;
+  font-size: 13px;
+  color: var(--aao-ink);
+}
+.aao-rightSub{
   margin-top: 2px;
+  font-size: 12px;
+  color: var(--aao-muted);
+  margin-bottom: 10px;
 }
 
-.aao-form{
-  padding: 14px;
-}
-
-/* ITEMS */
+/* ION ITEM RESET */
 .aao-item{
   --background: transparent;
   --padding-start: 0;
@@ -5416,218 +5466,170 @@ ion-content.aao-content{
   margin-bottom: 12px;
 }
 
-.aao-label{
-  z-index: 5;
-  font-size: 11px;
-  font-weight: 1000;
-  opacity: .82;
-}
-.aao-req{
-  color: rgba(0,0,0,.55);
-  font-weight: 1000;
+.aao-item-compact{
+  margin-bottom: 10px;
 }
 
-/* field wrapper (so inputs look like cards) */
+/* LABEL */
+.aao-label{
+  font-size: 11px;
+  font-weight: 1000;
+  letter-spacing: .15px;
+  opacity: .88;
+  z-index: 5;
+  margin-bottom: 6px;
+}
+.aao-req{ opacity: .6; }
+
+/* FIELD — cleaner, not too thick */
 .aao-field{
   position: relative;
-  border: 1px solid rgba(0,0,0,.14);
-  border-radius: 12px;
   background: rgba(255,255,255,.92);
-  transition: box-shadow var(--dur-mid) var(--ease-soft),
-              border-color var(--dur-mid) var(--ease-soft),
-              transform var(--dur-fast) var(--ease-soft);
+  border: 1px solid rgba(0,0,0,.11);
+  border-radius: var(--r-md);
+  box-shadow: 0 6px 14px rgba(0,0,0,.08);
+  transition: box-shadow var(--dur) ease, border-color var(--dur) ease, transform var(--dur) ease;
 }
+
 .aao-field:focus-within{
-  border-color: rgba(0,0,0,.22);
+  border-color: rgba(37,99,235,.55);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.14), 0 10px 22px rgba(0,0,0,.12);
+  transform: translateY(-1px);
+}
+
+.aao-field--withIcon{ padding-right: 40px; }
+
+.aao-input{
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #1f2937;
+}
+
+/* dropdown icon */
+.aao-field-icon{
+  position:absolute;
+  right:12px;
+  top:50%;
+  transform:translateY(-50%);
+  font-size:18px;
+  opacity:.6;
+  pointer-events:none;
+}
+
+/* FILE PICKER — less “big bar”, more clean */
+.aao-file{
+  width:100%;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding: 12px 14px;
+
+  border-radius: var(--r-md);
+  border: 1px dashed rgba(0,0,0,.16);
+  background: rgba(255,255,255,.55);
+
+  cursor:pointer;
+  transition: background var(--dur) ease, box-shadow var(--dur) ease, transform var(--dur) ease;
+}
+
+.aao-file:hover{
+  background: rgba(255,255,255,.78);
   box-shadow: 0 10px 18px rgba(0,0,0,.10);
 }
 
-.aao-field--withIcon{
-  padding-right: 36px;
-}
-
-.aao-input{
-  font-weight: 900;
-  padding: 12px 12px;
-}
-
-/* right icon on category */
-.aao-field-icon{
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 18px;
-  opacity: .7;
-  pointer-events: none;
-}
-
-/* file input as button */
-.aao-file{
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-
-  border: 1px dashed rgba(0,0,0,.18);
-  border-radius: 12px;
-  padding: 12px 12px;
-  background: rgba(255,255,255,.75);
-  cursor: pointer;
-  transition: transform var(--dur-fast) var(--ease-soft),
-              background var(--dur-mid) var(--ease-soft);
-}
-.aao-file:hover{
-  background: rgba(255,255,255,.88);
-}
 .aao-file:active{ transform: scale(.99); }
+.aao-file-icon{ font-size:18px; opacity:.8; }
 
-.aao-file-icon{
-  font-size: 18px;
-  opacity: .8;
-}
 .aao-file-text{
   font-weight: 900;
   font-size: 13px;
-  opacity: .9;
-  overflow: hidden;
+  opacity: .95;
+  overflow:hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.aao-file-input{
-  display: none;
-}
+
+.aao-file-input{ display:none; }
 
 .aao-help{
-  font-size: 12px;
-  opacity: .75;
   margin-top: 8px;
+  font-size: 12px;
+  color: var(--aao-muted);
 }
 
-/* layout */
-.aao-twoCol{
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-/* button */
+/* BUTTON */
 .aao-btn{
-  --border-radius: 12px;
-  border-radius: 12px;
-  transition: transform var(--dur-fast) var(--ease-soft),
-              filter var(--dur-fast) var(--ease-soft),
-              opacity var(--dur-fast) var(--ease-soft);
+  height: 46px;
+  border-radius: 14px;
+  font-weight: 1000;
+  letter-spacing: .35px;
+  transition: transform var(--dur) ease, filter var(--dur) ease;
 }
 .aao-btn:active{ transform: scale(.98); }
 
 .aao-btn--primary{
-  font-weight: 1000;
+  --background: linear-gradient(180deg,#2563eb,#1d4ed8);
+  --background-hover: linear-gradient(180deg,#3b82f6,#2563eb);
+  --color: #fff;
+  box-shadow: 0 12px 22px rgba(37,99,235,.28);
 }
 
+.aao-btn ion-icon{ font-size:18px; margin-right:4px; }
+
+.aao-btn-right{ margin-top: 10px; }
+
+/* FOOTNOTE — smaller + clean */
 .aao-footnote{
-  margin-top: 12px;
-  font-size: 12px;
-  opacity: .75;
+  margin-top: 10px;
   padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(0,0,0,.08);
-  background: rgba(181, 162, 162, 0.04);
+  border-radius: 14px;
+  border: 1px solid rgba(0,0,0,.06);
+  background: rgba(255,255,255,.45);
+  font-size: 12px;
+  color: var(--aao-muted);
 }
 
-/* POPOVER (fix “natatabunan yung words”) */
-.aao-popover{
-  --min-width: 260px;
-}
+/* POPOVER */
+.aao-popover{ --min-width: 300px; }
 .aao-popover .popover-content{
-  border-radius: 14px !important;
+  border-radius: 16px !important;
   overflow: hidden;
-  box-shadow: var(--aao-shadow) !important;
   border: 1px solid rgba(0,0,0,.10);
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 18px 40px rgba(0,0,0,.14) !important;
 }
+
 .aao-popover-content{
-  --background: var(--aao-surface-strong) !important;
-  background: var(--aao-surface-strong) !important;
+  --background: transparent !important;
+  background: transparent !important;
   padding: 12px;
 }
+
 .aao-popover-hint{
-  display: block;
-  font-size: 12px;
-  font-weight: 900;
-  opacity: .75;
-  margin-bottom: 8px;
+  display:block;
+  font-size:12px;
+  font-weight:1000;
+  opacity:.75;
+  margin-bottom:10px;
 }
-.aao-popover-list{
-  background: transparent;
-}
+
+.aao-popover-list{ background: transparent; padding: 0; }
+
 .aao-popover-item{
-  --background: rgba(255,255,255,.75);
-  border-radius: 12px;
-  margin-bottom: 8px;
+  --background: rgba(255,255,255,.85);
+  border-radius: 14px;
+  margin-bottom: 10px;
   border: 1px solid rgba(0,0,0,.08);
 }
 .aao-popover-item:last-child{ margin-bottom: 0; }
-.aao-popover-label{
-  font-weight: 1000;
-}
+.aao-popover-label{ font-weight: 1000; }
 
-/* RESPONSIVE */
-@media (min-width: 600px){
-  .aao-wrap{
-    padding-left: 100px;
-    padding-right: 100px;
-    padding-top: 20px;     /* maliit lang */
-    padding-bottom: 20px; /* maliit lang */
-  }
-
-  .aao-card{
-    margin-top: 0;        /* tanggal negative hack */
-  }
-}
-
-@media (min-width: 400px){
-  .aao-wrap{
-    padding-left: 50px;
-    padding-right: 50px;
-    padding-top: 10px;     /* maliit lang */
-    padding-bottom: 10px; /* maliit lang */
-  }
-
-  .aao-card{
-    margin-top: 0;        /* tanggal negative hack */
-  }
-}
-
-
+/* spacing on large screens */
 @media (min-width: 1200px){
-  .aao-wrap{
-    padding-left: 200px;
-    padding-right: 200px;
-    padding-top: 30px;     /* maliit lang */
-    padding-bottom: 30px; /* maliit lang */
-  }
-
-  .aao-card{
-    margin-top: 0;        /* tanggal negative hack */
-  }
+  .aao-wrap{ padding-left: 30px; padding-right: 30px; }
 }
 
-
-/* ANIMATIONS */
-@keyframes aaoFade{
-  from{ opacity: 0; }
-  to{ opacity: 1; }
-}
-@keyframes aaoUp{
-  from{
-    opacity: 0;
-    transform: translate3d(0, 14px, 0);
-  }
-  to{
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
 
 /* src/theme/admin_restock_record.css */
 
@@ -5928,6 +5930,57 @@ ion-content.aao-content{
     padding-right: 8px;
   }
 }
+
+.aao-dropbtn{
+  position:absolute;
+  right:6px;
+  top:50%;
+  transform: translateY(-50%);
+  width:34px;
+  height:34px;
+  border-radius:10px;
+  border:none;
+  background: transparent;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  z-index: 5;
+}
+
+.aao-dropbtn:hover{ background: rgba(0,0,0,.06); }
+.aao-field-icon--click{ pointer-events:none; }
+
+/* show only 5 items worth of height, then scroll */
+.aao-popover-scroll{
+  max-height: 240px;                 /* ~ 5 items */
+  overflow-y: auto;
+  padding-right: 4px;
+
+  /* smooth/momentum scroll */
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* optional: make scrolling nicer */
+.aao-popover-scroll::-webkit-scrollbar{
+  width: 8px;
+}
+.aao-popover-scroll::-webkit-scrollbar-thumb{
+  background: rgba(0,0,0,.18);
+  border-radius: 999px;
+}
+.aao-popover-scroll::-webkit-scrollbar-track{
+  background: transparent;
+}
+
+/* ensure list doesn't add extra padding that breaks height */
+.aao-popover-list{
+  margin: 0;
+  padding: 0;
+}
+
 
 /* =========================
    ADMIN DASHBOARD THEME
