@@ -44,14 +44,11 @@ import {
   addCircle,
   addCircleOutline,
   swapVerticalOutline,
-  searchOutline,
   closeOutline,
   downloadOutline,
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 import type {
-  IonInputCustomEvent,
-  InputInputEventDetail,
   IonSelectCustomEvent,
   SelectChangeEventDetail,
 } from "@ionic/core";
@@ -590,25 +587,33 @@ const Admin_Item_Lists: React.FC = () => {
             <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
           </IonButton>
 
-          {/* SEARCH */}
-          <div className="pil-search">
-            <IonItem lines="none" className="pil-search-item">
-              <IonIcon className="pil-search-ico" icon={searchOutline} />
-              <IonInput
-                className="pil-search-input"
-                value={search}
-                placeholder="Search name or category..."
-                clearInput
-                onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => setSearch(String(e.detail.value ?? ""))}
-              />
-            </IonItem>
+        {/* ✅ SAME SEARCH BAR AS BOOKING / CUSTOMER LISTS */}
+        <div className="customer-searchbar-inline">
+          <div className="customer-searchbar-inner">
+            <span className="customer-search-icon" aria-hidden="true">
+              🔎
+            </span>
+
+            <input
+              className="customer-search-input"
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+              placeholder="Search name or category..."
+            />
 
             {search.trim() && (
-              <div className="pil-search-hint">
-                Showing <b>{filteredAddOns.length}</b> result(s)
-              </div>
+              <button
+                className="customer-search-clear"
+                type="button"
+                onClick={() => setSearch("")}
+              >
+                Clear
+              </button>
             )}
           </div>
+        </div>
+
         </div>
 
         <div className="pil-card">
