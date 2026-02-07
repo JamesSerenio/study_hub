@@ -1982,7 +1982,7 @@ ion-content,
 /* =========================
    TABLET (FIT + NICE)
 ========================= */
-@media (max-width: 600px) {
+@media (min-width: 768px) and (max-width: 1366px) {
 
   /* wrapper spacing */
   .bookadd-wrapper {
@@ -1992,7 +1992,7 @@ ion-content,
   /* MAIN CARD */
   .bookadd-hero-card {
     width: 100% !important;
-    max-width: 350px !important;   /* ✅ MAS MALIIT */
+    max-width: 450px !important;   /* ✅ MAS MALIIT */
     padding: 10px !important;
     border-radius: 12px !important;
 
@@ -2238,14 +2238,14 @@ ion-content,
 }
 
 /* ✅ On tablets: slightly bigger */
-@media screen and (min-width: 600px) and (max-width: 768px) {
+@media (min-width: 768px) and (max-width: 1366px) {
   .bookadd-bear-img {
     width: clamp(180px, 50vw, 280px);
     max-width: 32vw;
   }
   .bookadd-bear {
-    left: 205px;
-    bottom: 670px;
+    left: 270px;
+    bottom: 900px;
   }
 
 }
