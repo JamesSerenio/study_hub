@@ -1,14 +1,17 @@
 // src/pages/Customer_Lists.tsx
 // ✅ Shows ONLY NON-RESERVATION records (reservation = "no")
 // ✅ Seat column REMOVED from Customer List table (but still shown on receipt; remove if you want)
-// ✅ Discount UI reverted to previous "breakdown" layout (System Cost / Discount / Final / New Balance / Auto Payment)
+// ✅ Discount UI reverted to previous "breakdown" layout
 // ✅ Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
 // ✅ Manual PAID/UNPAID toggle still works
-// ✅ Payment (GCash/Cash auto based on Total Balance AFTER discount)
-// ✅ Discount reason is SAVED but ❌ NOT shown on receipt
-// ✅ NEW: Phone # column beside Full Name (separate column)
-// ✅ NEW: View to Customer toggle via localStorage (bear always visible in Book_Add)
-// ✅ NEW: Search bar (Full Name only) — moved beside Date
+// ✅ Payment is based on TIME CONSUMED (System Cost after discount) — ❌ DOES NOT deduct Down Payment
+// ✅ Down Payment column between Discount and Payment
+// ✅ Down Payment is EDITABLE (modal) and saved to DB: customer_sessions.down_payment
+// ✅ Receipt: removed "Edit DP" button
+// ✅ Receipt auto-updates balance/change after DP edit (because row + selectedSession are updated)
+// ✅ Phone # column beside Full Name
+// ✅ View to Customer toggle via localStorage
+// ✅ Search bar (Full Name only)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -18,7 +21,6 @@ import logo from "../assets/study_hub.png";
 
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
-const DOWN_PAYMENT = 50;
 
 /* ✅ LOCAL STORAGE KEYS (shared with Book_Add) */
 const LS_VIEW_ENABLED = "customer_view_enabled";
@@ -31,7 +33,6 @@ interface CustomerSession {
   date: string; // YYYY-MM-DD
   full_name: string;
 
-  // ✅ NEW
   phone_number?: string | null;
 
   customer_type: string;
@@ -47,14 +48,17 @@ interface CustomerSession {
   reservation_date: string | null;
   seat_number: string;
 
+  // ✅ DOWN PAYMENT (DB)
+  down_payment?: number | string | null;
+
   // DISCOUNT
   discount_kind?: DiscountKind;
-  discount_value?: number;
+  discount_value?: number | string;
   discount_reason?: string | null;
 
   // PAYMENT
-  gcash_amount?: number;
-  cash_amount?: number;
+  gcash_amount?: number | string;
+  cash_amount?: number | string;
 
   // PAID STATUS
   is_paid?: boolean | number | string | null;
@@ -124,7 +128,7 @@ const applyDiscount = (
   return { discountedCost: round2(cost), discountAmount: 0 };
 };
 
-// keep gcash (clamp to due), cash = remaining
+// ✅ keep gcash (clamp to due), cash = remaining
 const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
   const d = round2(Math.max(0, due));
   if (d <= 0) return { gcash: 0, cash: 0 };
@@ -143,11 +147,8 @@ const isCustomerViewOnFor = (sessionId: string): boolean => {
 
 const setCustomerView = (enabled: boolean, sessionId: string | null): void => {
   localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
-  if (enabled && sessionId) {
-    localStorage.setItem(LS_SESSION_ID, sessionId);
-  } else {
-    localStorage.removeItem(LS_SESSION_ID);
-  }
+  if (enabled && sessionId) localStorage.setItem(LS_SESSION_ID, sessionId);
+  else localStorage.removeItem(LS_SESSION_ID);
 };
 
 const stopCustomerView = (): void => {
@@ -176,6 +177,11 @@ const Customer_Lists: React.FC = () => {
   const [discountInput, setDiscountInput] = useState<string>("0");
   const [discountReason, setDiscountReason] = useState<string>("");
   const [savingDiscount, setSavingDiscount] = useState<boolean>(false);
+
+  // ✅ Down Payment modal
+  const [dpTarget, setDpTarget] = useState<CustomerSession | null>(null);
+  const [dpInput, setDpInput] = useState<string>("0");
+  const [savingDp, setSavingDp] = useState<boolean>(false);
 
   // Payment modal
   const [paymentTarget, setPaymentTarget] = useState<CustomerSession | null>(null);
@@ -230,6 +236,8 @@ const Customer_Lists: React.FC = () => {
     return p || "N/A";
   };
 
+  const getDownPayment = (s: CustomerSession): number => round2(Math.max(0, toMoney(s.down_payment ?? 0)));
+
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
     const end = new Date(s.time_ended);
@@ -279,26 +287,30 @@ const Customer_Lists: React.FC = () => {
     return getDiscountTextFrom(di.kind, di.value);
   };
 
-  const getSessionTotalCost = (s: CustomerSession): number => {
+  // ✅ System cost AFTER discount (Payment basis)
+  const getSessionSystemCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
     return applyDiscount(base, di.kind, di.value).discountedCost;
   };
 
-  const getSessionBalance = (s: CustomerSession): number => {
-    const totalCost = getSessionTotalCost(s);
-    return round2(Math.max(0, totalCost - DOWN_PAYMENT));
+  // ✅ Balance/Change display uses DP (display only)
+  const getSessionBalanceAfterDP = (s: CustomerSession): number => {
+    const systemCost = getSessionSystemCost(s);
+    const dp = getDownPayment(s);
+    return round2(Math.max(0, systemCost - dp));
   };
 
-  const getSessionChange = (s: CustomerSession): number => {
-    const totalCost = getSessionTotalCost(s);
-    return round2(Math.max(0, DOWN_PAYMENT - totalCost));
+  const getSessionChangeAfterDP = (s: CustomerSession): number => {
+    const systemCost = getSessionSystemCost(s);
+    const dp = getDownPayment(s);
+    return round2(Math.max(0, dp - systemCost));
   };
 
   const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
-    const balance = getSessionBalance(s);
+    const balance = getSessionBalanceAfterDP(s);
     if (balance > 0) return { label: "Total Balance", value: balance };
-    return { label: "Total Change", value: getSessionChange(s) };
+    return { label: "Total Change", value: getSessionChangeAfterDP(s) };
   };
 
   const getPaidInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
@@ -387,13 +399,13 @@ const Customer_Lists: React.FC = () => {
 
     const base = getBaseSystemCost(discountTarget);
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
-    const due = round2(Math.max(0, discounted - DOWN_PAYMENT));
+    const dueForPayment = round2(Math.max(0, discounted));
 
     const prevPay = getPaidInfo(discountTarget);
-    const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
+    const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
 
     const totalPaid = round2(adjPay.gcash + adjPay.cash);
-    const autoPaid = due > 0 && totalPaid >= due;
+    const autoPaid = dueForPayment <= 0 ? true : totalPaid >= dueForPayment;
 
     try {
       setSavingDiscount(true);
@@ -404,8 +416,10 @@ const Customer_Lists: React.FC = () => {
           discount_kind: discountKind,
           discount_value: finalValue,
           discount_reason: discountReason.trim(),
+
           gcash_amount: adjPay.gcash,
           cash_amount: adjPay.cash,
+
           is_paid: autoPaid,
           paid_at: autoPaid ? new Date().toISOString() : null,
         })
@@ -431,10 +445,51 @@ const Customer_Lists: React.FC = () => {
   };
 
   // -----------------------
-  // PAYMENT MODAL
+  // ✅ DOWN PAYMENT MODAL (EDITABLE)
+  // -----------------------
+  const openDpModal = (s: CustomerSession): void => {
+    setDpTarget(s);
+    setDpInput(String(getDownPayment(s)));
+  };
+
+  const saveDownPayment = async (): Promise<void> => {
+    if (!dpTarget) return;
+
+    const raw = Number(dpInput);
+    const dp = round2(Math.max(0, Number.isFinite(raw) ? raw : 0));
+
+    try {
+      setSavingDp(true);
+
+      const { data: updated, error } = await supabase
+        .from("customer_sessions")
+        .update({ down_payment: dp })
+        .eq("id", dpTarget.id)
+        .select("*")
+        .single();
+
+      if (error || !updated) {
+        alert(`Save down payment error: ${error?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setSessions((prev) => prev.map((s) => (s.id === dpTarget.id ? (updated as CustomerSession) : s)));
+      setSelectedSession((prev) => (prev?.id === dpTarget.id ? (updated as CustomerSession) : prev));
+      setDpTarget(null);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Save down payment failed.");
+    } finally {
+      setSavingDp(false);
+    }
+  };
+
+  // -----------------------
+  // PAYMENT MODAL (DO NOT TOUCH)
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
-    const due = getSessionBalance(s);
+    const due = getSessionSystemCost(s);
     const pi = getPaidInfo(s);
 
     const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
@@ -446,7 +501,7 @@ const Customer_Lists: React.FC = () => {
   };
 
   const setGcashAndAutoCash = (s: CustomerSession, gcashStr: string): void => {
-    const due = getSessionBalance(s);
+    const due = getSessionSystemCost(s);
     const gc = Math.max(0, toMoney(gcashStr));
     const adj = recalcPaymentsToDue(due, gc);
     setGcashInput(String(adj.gcash));
@@ -454,7 +509,7 @@ const Customer_Lists: React.FC = () => {
   };
 
   const setCashAndAutoGcash = (s: CustomerSession, cashStr: string): void => {
-    const due = round2(Math.max(0, getSessionBalance(s)));
+    const due = round2(Math.max(0, getSessionSystemCost(s)));
     const ca = round2(Math.max(0, toMoney(cashStr)));
 
     const cash = round2(Math.min(due, ca));
@@ -467,12 +522,12 @@ const Customer_Lists: React.FC = () => {
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = getSessionBalance(paymentTarget);
+    const due = getSessionSystemCost(paymentTarget);
     const gcIn = Math.max(0, toMoney(gcashInput));
     const adj = recalcPaymentsToDue(due, gcIn);
 
     const totalPaid = round2(adj.gcash + adj.cash);
-    const isPaidAuto = due > 0 && totalPaid >= due;
+    const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
       setSavingPayment(true);
@@ -553,7 +608,7 @@ const Customer_Lists: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
-              {/* ✅ SEARCH BAR (moved here) */}
+              {/* ✅ SEARCH BAR */}
               <div className="customer-searchbar-inline">
                 <div className="customer-searchbar-inner">
                   <span className="customer-search-icon" aria-hidden="true">
@@ -572,7 +627,6 @@ const Customer_Lists: React.FC = () => {
                     </button>
                   )}
                 </div>
-
               </div>
 
               {/* DATE */}
@@ -614,6 +668,7 @@ const Customer_Lists: React.FC = () => {
                     <th>Total Hours</th>
                     <th>Total Balance / Change</th>
                     <th>Discount</th>
+                    <th>Down Payment</th>
                     <th>Payment</th>
                     <th>Paid?</th>
                     <th>Status</th>
@@ -623,10 +678,19 @@ const Customer_Lists: React.FC = () => {
 
                 <tbody>
                   {filteredSessions.map((session) => {
-                    const open = isOpenTimeSession(session);
+                    const open = ((): boolean => {
+                      if ((session.hour_avail || "").toUpperCase() === "OPEN") return true;
+                      const end = new Date(session.time_ended);
+                      return end.getFullYear() >= 2999;
+                    })();
+
                     const disp = getDisplayAmount(session);
-                    const due = getSessionBalance(session);
+
+                    const systemCost = getSessionSystemCost(session);
                     const pi = getPaidInfo(session);
+                    const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid));
+
+                    const dp = getDownPayment(session);
 
                     return (
                       <tr key={session.id}>
@@ -660,14 +724,26 @@ const Customer_Lists: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
+                            <span className="cell-strong">₱{dp.toFixed(2)}</span>
+                            <button className="receipt-btn" onClick={() => openDpModal(session)}>
+                              Edit DP
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* ✅ PAYMENT (DO NOT TOUCH) */}
+                        <td>
+                          <div className="cell-stack cell-center">
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remainingPay.toFixed(2)}</span>
+
                             <button
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
-                              disabled={due <= 0}
-                              title={due <= 0 ? "No balance due" : "Set GCash/Cash payment"}
+                              disabled={systemCost <= 0}
+                              title={systemCost <= 0 ? "No due" : "Set GCash/Cash payment (based on time consumed)"}
                             >
                               Payment
                             </button>
@@ -683,11 +759,7 @@ const Customer_Lists: React.FC = () => {
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                           >
-                            {togglingPaidId === session.id
-                              ? "Updating..."
-                              : toBool(session.is_paid)
-                              ? "PAID"
-                              : "UNPAID"}
+                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
                           </button>
                         </td>
 
@@ -715,6 +787,39 @@ const Customer_Lists: React.FC = () => {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* ✅ DOWN PAYMENT MODAL */}
+          {dpTarget && (
+            <div className="receipt-overlay" onClick={() => setDpTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DOWN PAYMENT</h3>
+                <p className="receipt-subtitle">{dpTarget.full_name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Down Payment (₱)</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={dpInput}
+                    onChange={(e) => setDpInput(e.currentTarget.value)}
+                  />
+                </div>
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setDpTarget(null)}>
+                    Cancel
+                  </button>
+                  <button className="receipt-btn" onClick={() => void saveDownPayment()} disabled={savingDp}>
+                    {savingDp ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -771,10 +876,10 @@ const Customer_Lists: React.FC = () => {
                   const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-                  const due = round2(Math.max(0, discountedCost - DOWN_PAYMENT));
+                  const dueForPayment = round2(Math.max(0, discountedCost));
 
                   const prevPay = getPaidInfo(discountTarget);
-                  const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
+                  const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
 
                   return (
                     <>
@@ -796,13 +901,13 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Final System Cost</span>
+                        <span>Final System Cost (Payment Basis)</span>
                         <span>₱{discountedCost.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-total">
-                        <span>NEW TOTAL BALANCE</span>
-                        <span>₱{due.toFixed(2)}</span>
+                        <span>NEW PAYMENT DUE</span>
+                        <span>₱{dueForPayment.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -827,7 +932,7 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL */}
+          {/* PAYMENT MODAL (DO NOT TOUCH) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -837,7 +942,8 @@ const Customer_Lists: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const due = getSessionBalance(paymentTarget);
+                  const due = getSessionSystemCost(paymentTarget);
+
                   const gcIn = Math.max(0, toMoney(gcashInput));
                   const adj = recalcPaymentsToDue(due, gcIn);
 
@@ -847,7 +953,7 @@ const Customer_Lists: React.FC = () => {
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>Total Balance (Due)</span>
+                        <span>Payment Due (System Cost)</span>
                         <span>₱{due.toFixed(2)}</span>
                       </div>
 
@@ -980,26 +1086,41 @@ const Customer_Lists: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const disp = getDisplayAmount(selectedSession);
+                  const dp = getDownPayment(selectedSession);
 
                   const baseCost = getBaseSystemCost(selectedSession);
                   const di = getDiscountInfo(selectedSession);
                   const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
+                  const dueForPayment = round2(Math.max(0, discountCalc.discountedCost));
+
                   const pi = getPaidInfo(selectedSession);
-                  const due = getSessionBalance(selectedSession);
-                  const remaining = round2(Math.max(0, due - pi.totalPaid));
+
+                  // ✅ AFTER DP
+                  const dpBalance = round2(Math.max(0, dueForPayment - dp));
+                  const dpChange = round2(Math.max(0, dp - dueForPayment));
+
+                  const dpDisp =
+                    dpBalance > 0
+                      ? ({ label: "Total Balance", value: dpBalance } as const)
+                      : ({ label: "Total Change", value: dpChange } as const);
+
+                  // ✅ Bottom summary switches label:
+                  // - If may balance: PAYMENT DUE = balance
+                  // - If sobra DP: TOTAL CHANGE = change
+                  const bottomLabel = dpBalance > 0 ? "PAYMENT DUE" : "TOTAL CHANGE";
+                  const bottomValue = dpBalance > 0 ? dpBalance : dpChange;
 
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>{disp.label}</span>
-                        <span>₱{disp.value.toFixed(2)}</span>
+                        <span>{dpDisp.label}</span>
+                        <span>₱{dpDisp.value.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Down Payment</span>
-                        <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
+                        <span>₱{dp.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1013,8 +1134,8 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>System Cost</span>
-                        <span>₱{discountCalc.discountedCost.toFixed(2)}</span>
+                        <span>System Cost (Payment Basis)</span>
+                        <span>₱{dueForPayment.toFixed(2)}</span>
                       </div>
 
                       <hr />
@@ -1035,8 +1156,8 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining Balance</span>
-                        <span>₱{remaining.toFixed(2)}</span>
+                        <span>Remaining Balance (After DP)</span>
+                        <span>₱{dpBalance.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1044,9 +1165,10 @@ const Customer_Lists: React.FC = () => {
                         <span className="receipt-status">{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
                       </div>
 
+                      {/* ✅ FIX: If sobra DP, label becomes TOTAL CHANGE */}
                       <div className="receipt-total">
-                        <span>{disp.label.toUpperCase()}</span>
-                        <span>₱{disp.value.toFixed(2)}</span>
+                        <span>{bottomLabel}</span>
+                        <span>₱{bottomValue.toFixed(2)}</span>
                       </div>
                     </>
                   );
