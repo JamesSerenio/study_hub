@@ -3,6 +3,7 @@
 // ✅ NO any
 // ✅ THEMED (same as Booking): IonModal className="booking-modal"
 // ✅ Uses: .bookadd-card, .form-item, .summary-section, .summary-text
+// ✅ NEW: show REMAINING stocks per item (in dropdown + selected list)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -33,7 +34,7 @@ interface AddOn {
   restocked: number;
   sold: number;
   expenses: number;
-  stocks: number; // generated
+  stocks: number; // generated / current remaining in DB
   overall_sales: number;
   expected_sales: number;
   image_url: string | null;
@@ -57,6 +58,11 @@ type Props = {
 };
 
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
+
+const toNum = (v: unknown): number => {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
 
 export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
@@ -87,7 +93,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       .order("name", { ascending: true });
 
     if (error) {
-      // parent handles alert? keep simple
       console.error(error);
       alert("Error loading add-ons.");
       return;
@@ -116,14 +121,56 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     }));
   }, [selectedAddOns]);
 
+  // ✅ NEW: remaining stocks map (from latest loaded addOns)
+  const stocksById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of addOns) m.set(a.id, Math.max(0, Math.floor(toNum(a.stocks))));
+    return m;
+  }, [addOns]);
+
+  // ✅ NEW: how many already chosen in this modal (reserved in cart)
+  const selectedQtyById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of selectedAddOns) {
+      m.set(s.id, (m.get(s.id) ?? 0) + Math.max(0, Math.floor(toNum(s.quantity))));
+    }
+    return m;
+  }, [selectedAddOns]);
+
+  const getRemainingForId = (id: string): number => {
+    const stocks = stocksById.get(id) ?? 0;
+    const chosen = selectedQtyById.get(id) ?? 0;
+    return Math.max(0, stocks - chosen);
+  };
+
   const handleAddOnQuantityChange = (id: string, quantity: number): void => {
-    const q = Math.max(0, Math.floor(quantity));
+    const wanted = Math.max(0, Math.floor(quantity));
+
     setSelectedAddOns((prev) => {
       const existing = prev.find((s) => s.id === id);
+      const addOn = addOns.find((a) => a.id === id);
+      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? addOn?.stocks ?? 0)));
+
+      // compute already chosen excluding this item
+
+      // but we need per-item exclude, not total; simpler:
+      const chosenExcludingThis = prev
+        .filter((s) => s.id === id)
+        .reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
+
+      // chosenExcludingThis includes current one too; adjust:
+      const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
+      const chosenOtherSameId = chosenExcludingThis - currentQty;
+
+      const maxAllowedForThis = Math.max(0, stocks - chosenOtherSameId);
+      const q = Math.min(wanted, maxAllowedForThis);
+
+      if (wanted > maxAllowedForThis) {
+        alert(`Only ${maxAllowedForThis} remaining for this item.`);
+      }
 
       if (q > 0) {
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
-        const addOn = addOns.find((a) => a.id === id);
         if (!addOn) return prev;
         return [...prev, { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity: q }];
       }
@@ -166,13 +213,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     if (!addOnsSeat) return alert("Seat Number is required.");
     if (selectedAddOns.length === 0) return alert("Please select at least one add-on.");
 
-    // ✅ Re-check stock before insert
+    // ✅ Re-check stock before insert (DB truth)
     for (const selected of selectedAddOns) {
-      const { data, error } = await supabase
-        .from("add_ons")
-        .select("stocks,name")
-        .eq("id", selected.id)
-        .single();
+      const { data, error } = await supabase.from("add_ons").select("stocks,name").eq("id", selected.id).single();
 
       if (error) {
         alert(`Stock check error for ${selected.name}: ${error.message}`);
@@ -180,7 +223,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       }
 
       const row = data as { stocks: number; name: string };
-      const stocksNow = Number(row.stocks ?? 0);
+      const stocksNow = Math.max(0, Math.floor(toNum(row.stocks)));
       const nameNow = row.name ?? selected.name;
 
       if (stocksNow < selected.quantity) {
@@ -239,11 +282,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
           <IonItem className="form-item">
             <IonLabel position="stacked">Seat Number *</IonLabel>
-            <IonSelect
-              value={addOnsSeat}
-              placeholder="Choose seat"
-              onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}
-            >
+            <IonSelect value={addOnsSeat} placeholder="Choose seat" onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}>
               {seatGroups.map((g) => (
                 <React.Fragment key={g.title}>
                   <IonSelectOption disabled value={`__${g.title}__`}>
@@ -265,18 +304,18 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
           {/* CATEGORY BLOCKS */}
           {selectedCategories.map((category, index) => {
-            const categoryItems = addOns.filter((a) => a.category === category && a.stocks > 0);
+            // show only items with remaining > 0 (stocks - selected in cart)
+            const categoryItems = addOns
+              .filter((a) => a.category === category)
+              .map((a) => ({ ...a, remaining: getRemainingForId(a.id) }))
+              .filter((a) => a.remaining > 0);
 
             return (
               <div key={`cat-${index}`} className="addon-block">
                 <div className="addon-row">
                   <IonItem className="form-item addon-flex">
                     <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
-                    <IonSelect
-                      value={category}
-                      placeholder="Choose a category"
-                      onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}
-                    >
+                    <IonSelect value={category} placeholder="Choose a category" onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}>
                       {categories.map((cat) => (
                         <IonSelectOption key={`${cat}-${index}`} value={cat}>
                           {cat}
@@ -303,9 +342,16 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                         const addOn = addOns.find((a) => a.id === selectedId);
                         if (!addOn) return;
 
+                        // ✅ only add if remaining > 0
+                        const remaining = getRemainingForId(selectedId);
+                        if (remaining <= 0) {
+                          alert("No remaining stock for this item.");
+                          return;
+                        }
+
                         setSelectedAddOns((prev) => {
                           const existing = prev.find((s) => s.id === selectedId);
-                          if (existing) return prev;
+                          if (existing) return prev; // already added (qty editable below)
                           return [
                             ...prev,
                             {
@@ -321,7 +367,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     >
                       {categoryItems.map((a) => (
                         <IonSelectOption key={a.id} value={a.id}>
-                          {a.name} - ₱{a.price}
+                          {a.name} - ₱{a.price} (Remaining: {a.remaining})
                         </IonSelectOption>
                       ))}
                     </IonSelect>
@@ -346,39 +392,44 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     </IonLabel>
                   </IonListHeader>
 
-                  {items.map((selected) => (
-                    <IonItem key={selected.id} className="addon-item">
-                      <IonLabel>
-                        <div style={{ fontWeight: 700 }}>{selected.name}</div>
-                        <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
-                        <div style={{ marginTop: 4, fontWeight: 700 }}>
-                          Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
+                  {items.map((selected) => {
+                    const stocks = Math.max(0, Math.floor(toNum(stocksById.get(selected.id) ?? 0)));
+                    const remainingIfKeepQty = Math.max(0, stocks - selected.quantity);
+
+                    return (
+                      <IonItem key={selected.id} className="addon-item">
+                        <IonLabel>
+                          <div style={{ fontWeight: 700 }}>{selected.name}</div>
+                          <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
+                          <div style={{ marginTop: 4, fontWeight: 700 }}>
+                            Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
+                          </div>
+                          <div style={{ marginTop: 6, opacity: 0.9 }}>
+                            Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
+                          </div>
+                        </IonLabel>
+
+                        <div className="addon-actions">
+                          <IonLabel className="qty-label">Qty:</IonLabel>
+                          <IonInput
+                            type="number"
+                            min={1}
+                            value={selected.quantity}
+                            className="qty-input"
+                            onIonChange={(e) => {
+                              const raw = (e.detail.value ?? "").toString();
+                              const v = parseInt(raw, 10);
+                              handleAddOnQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
+                            }}
+                          />
+
+                          <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
+                            Remove
+                          </IonButton>
                         </div>
-                      </IonLabel>
-
-                      <div className="addon-actions">
-                        <IonLabel className="qty-label">Qty:</IonLabel>
-                        <IonInput
-                          type="number"
-                          min={1}
-                          value={selected.quantity}
-                          className="qty-input"
-                          onIonChange={(e) => {
-                            const raw = (e.detail.value ?? "").toString();
-                            const v = parseInt(raw, 10);
-                            handleAddOnQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
-                          }}
-                        />
-
-                        <IonButton
-                          color="danger"
-                          onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}
-                        >
-                          Remove
-                        </IonButton>
-                      </div>
-                    </IonItem>
-                  ))}
+                      </IonItem>
+                    );
+                  })}
                 </React.Fragment>
               ))}
             </IonList>
