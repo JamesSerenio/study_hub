@@ -1,11 +1,25 @@
 // src/pages/Book_Add.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { IonPage, IonHeader, IonContent, IonButton, IonAlert, IonSpinner } from "@ionic/react";
+import {
+  IonPage,
+  IonHeader,
+  IonContent,
+  IonButton,
+  IonAlert,
+  IonSpinner,
+  IonModal,
+  IonToolbar,
+  IonTitle,
+  IonButtons,
+  IonIcon,
+} from "@ionic/react";
 import { useHistory } from "react-router-dom";
+import { closeOutline } from "ionicons/icons";
 
 import BookingModal from "../components/BookingModal";
 import AddOnsModal from "../components/AddOnsModal";
 import PromoModal from "../components/PromoModal";
+import Seat from "../components/Seat"; // ✅ view-only seat image component
 
 import leaves from "../assets/leave.png";
 import studyHubLogo from "../assets/study_hub.png";
@@ -276,6 +290,9 @@ const Book_Add: React.FC = () => {
   const [isAddOnsOpen, setIsAddOnsOpen] = useState<boolean>(false);
   const [isPromoOpen, setIsPromoOpen] = useState<boolean>(false);
 
+  // ✅ Seat View modal
+  const [isSeatOpen, setIsSeatOpen] = useState<boolean>(false);
+
   // BOOKING SAVED ALERT
   const [bookingSavedOpen, setBookingSavedOpen] = useState<boolean>(false);
   const [bookingSavedMessage, setBookingSavedMessage] = useState<string>("Booking saved successfully.");
@@ -327,10 +344,7 @@ const Book_Add: React.FC = () => {
       .eq("id", VIEW_STATE_ID)
       .maybeSingle();
 
-    if (error) {
-      // ✅ don't wipe anything on transient errors
-      return;
-    }
+    if (error) return;
 
     const row = (data ?? null) as CustomerViewRow | null;
     if (!row) return;
@@ -343,9 +357,7 @@ const Book_Add: React.FC = () => {
 
     applyViewState(enabled, sid);
 
-    // if staff disabled view while open, keep overlay but show waiting
     if (!enabled) {
-      // keep last receipt (optional), but usually better to clear since no longer allowed
       setReceipt(null);
       setReceiptLoading(false);
     } else if (showReceipt && enabled && sid) {
@@ -383,7 +395,6 @@ const Book_Add: React.FC = () => {
 
     channelRef.current = ch;
 
-    // polling fallback
     if (pollRef.current) window.clearInterval(pollRef.current);
     pollRef.current = window.setInterval(() => {
       void readCustomerViewFromDB();
@@ -407,15 +418,7 @@ const Book_Add: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /**
-   * ✅ FIX: This no longer clears receipt on transient errors.
-   * ✅ Only sets receipt null when BOTH queries succeed (no error) but no data found.
-   * ✅ "silent" option prevents blinking/spinner on background refresh.
-   */
-  const fetchReceiptById = async (
-    id: string,
-    opts?: { silent?: boolean }
-  ): Promise<void> => {
+  const fetchReceiptById = async (id: string, opts?: { silent?: boolean }): Promise<void> => {
     if (!id) return;
 
     const silent = Boolean(opts?.silent);
@@ -423,7 +426,6 @@ const Book_Add: React.FC = () => {
 
     if (!silent) setReceiptLoading(true);
 
-    // 1) customer_sessions
     const cs = await supabase
       .from("customer_sessions")
       .select(
@@ -432,7 +434,6 @@ const Book_Add: React.FC = () => {
       .eq("id", id)
       .maybeSingle();
 
-    // if a newer fetch started, ignore this result
     if (seq !== fetchSeqRef.current) return;
 
     if (!cs.error && cs.data) {
@@ -498,13 +499,11 @@ const Book_Add: React.FC = () => {
       return;
     }
 
-    // ✅ if customer_sessions had an error, do NOT wipe receipt (transient)
     if (cs.error) {
       if (!silent) setReceiptLoading(false);
       return;
     }
 
-    // 2) promo_bookings fallback
     const pb = await supabase
       .from("promo_bookings")
       .select(
@@ -607,18 +606,15 @@ const Book_Add: React.FC = () => {
       return;
     }
 
-    // ✅ if promo_bookings had an error, do NOT wipe receipt (transient)
     if (pb.error) {
       if (!silent) setReceiptLoading(false);
       return;
     }
 
-    // ✅ ONLY NOW: both queries succeeded (no error) but no data -> truly not found
     setReceipt(null);
     if (!silent) setReceiptLoading(false);
   };
 
-  // ✅ auto-refresh receipt while open (silent refresh; no blink)
   useEffect(() => {
     if (!showReceipt) return;
     if (!customerViewEnabled || !customerSessionId) return;
@@ -707,7 +703,7 @@ const Book_Add: React.FC = () => {
             <div className="bookadd-actions">
               <div className="bookadd-btn-card bookadd-btn-booking">
                 <span className="bookadd-btn-label">Booking</span>
-                <p className="bookadd-btn-desc">Choose your seat and booking time.</p>
+                <p className="bookadd-btn-desc">Choose your seat and preferred booking time.</p>
                 <IonButton expand="block" onClick={() => setIsBookingOpen(true)}>
                   Booking
                 </IonButton>
@@ -721,11 +717,21 @@ const Book_Add: React.FC = () => {
                 </IonButton>
               </div>
 
+              {/* ✅ Add-Ons */}
               <div className="bookadd-btn-card bookadd-btn-addons">
                 <span className="bookadd-btn-label">Add-Ons</span>
                 <p className="bookadd-btn-desc">Enter seat + name then choose add-ons.</p>
                 <IonButton expand="block" onClick={() => setIsAddOnsOpen(true)}>
                   Add-Ons
+                </IonButton>
+              </div>
+
+              {/* ✅ Seat View (MODAL view-only) */}
+              <div className="bookadd-btn-card bookadd-btn-addons">
+                <span className="bookadd-btn-label">Seat View</span>
+                <p className="bookadd-btn-desc">Check which seats are occupied or available.</p>
+                <IonButton expand="block" onClick={() => setIsSeatOpen(true)}>
+                  Seat View
                 </IonButton>
               </div>
             </div>
@@ -743,7 +749,12 @@ const Book_Add: React.FC = () => {
           seatGroups={SEAT_GROUPS}
         />
 
-        <PromoModal isOpen={isPromoOpen} onClose={() => setIsPromoOpen(false)} onSaved={handlePromoSaved} seatGroups={SEAT_GROUPS} />
+        <PromoModal
+          isOpen={isPromoOpen}
+          onClose={() => setIsPromoOpen(false)}
+          onSaved={handlePromoSaved}
+          seatGroups={SEAT_GROUPS}
+        />
 
         <AddOnsModal
           isOpen={isAddOnsOpen}
@@ -751,6 +762,30 @@ const Book_Add: React.FC = () => {
           onSaved={() => setAddOnsSentOpen(true)}
           seatGroups={SEAT_GROUPS}
         />
+
+        {/* ✅ SEAT VIEW MODAL (FIXED THEME — NO WHITE BACKGROUND) */}
+        <IonModal
+          isOpen={isSeatOpen}
+          onDidDismiss={() => setIsSeatOpen(false)}
+          className="booking-modal seatview-modal"
+        >
+          <IonHeader>
+            <IonToolbar className="seatview-modal-toolbar">
+              <IonTitle>Seat View</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setIsSeatOpen(false)}>
+                  <IonIcon icon={closeOutline} />
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+
+          <IonContent className="ion-padding">
+            <div className="seatview-modal-body">
+              <Seat />
+            </div>
+          </IonContent>
+        </IonModal>
 
         {/* ALERTS */}
         <IonAlert
@@ -886,7 +921,11 @@ const Book_Add: React.FC = () => {
 
                   {(() => {
                     const base = round2(Math.max(0, toMoney(receipt.price)));
-                    const { discountedCost, discountAmount } = applyDiscount(base, receipt.discount_kind, receipt.discount_value);
+                    const { discountedCost, discountAmount } = applyDiscount(
+                      base,
+                      receipt.discount_kind,
+                      receipt.discount_value
+                    );
                     const due = round2(discountedCost);
 
                     const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount)));
