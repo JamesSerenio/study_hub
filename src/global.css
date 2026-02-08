@@ -2264,7 +2264,17 @@ ion-content,
   }
 }
 
-
+@media (orientation: landscape) and (max-height: 600px)
+{
+  .bookadd-bear {
+    left: 502px;
+    bottom: 400px;
+  }
+  .bookadd-bear-img {
+    width: 200px;
+    max-width: 280px;
+  }
+}
 /* =========================================================
    BOOKING MODAL - FINAL (NO DUPLICATES)
    Requires: IonModal className="booking-modal"
