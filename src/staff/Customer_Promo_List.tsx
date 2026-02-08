@@ -7,14 +7,13 @@
 // ❌ NO Delete by Date
 // ✅ strict TS (NO "any")
 // ✅ ADD: phone_number field (separate column) + Receipt shows Customer Name + Phone #
-// ✅ FIX: View to Customer EXACT same behavior as Customer_Lists.tsx
-//    - uses ONLY: customer_view_enabled + customer_view_session_id
-//    - no "source" key
+// ✅ FIX: View to Customer REALTIME + EXACT same localStorage keys as Customer_Lists.tsx
+//    - uses ONLY: customer_view_enabled + customer_view_session_id (localStorage)
 //    - label switches instantly (force re-render)
-//    - Close stops view (same as Customer_Lists)
+//    - Close stops view
 // ✅ NEW: Search bar (Full Name) beside Date (same classnames as Customer_Lists)
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
@@ -94,6 +93,19 @@ interface PromoBookingPaidUpdateRow {
 */
 const LS_VIEW_ENABLED = "customer_view_enabled";
 const LS_SESSION_ID = "customer_view_session_id";
+
+/* ================= REALTIME VIEW STATE TABLE =================
+   ✅ shared across devices
+*/
+const VIEW_STATE_TABLE = "customer_view_state";
+const VIEW_STATE_ID = 1;
+
+type ViewStateRow = {
+  id: number;
+  enabled: boolean | number | string | null;
+  session_id: string | null;
+  updated_at?: string | null;
+};
 
 /* ================= HELPERS ================= */
 
@@ -251,28 +263,19 @@ const safePhone = (v: string | null | undefined): string => {
   return p ? p : "—";
 };
 
-/* ✅ VIEW-TO-CUSTOMER helpers (same as Customer_Lists) */
-const isCustomerViewOnFor = (sessionId: string): boolean => {
+/* ================= VIEW-TO-CUSTOMER (REALTIME + localStorage keys stay same) ================= */
+
+const readLocalView = (): { enabled: boolean; sessionId: string } => {
   const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
   const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
-  return enabled && sid === sessionId;
+  return { enabled, sessionId: sid };
 };
 
-const setCustomerView = (enabled: boolean, sessionId: string | null): void => {
+const writeLocalView = (enabled: boolean, sessionId: string | null): void => {
   localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
-  if (enabled && sessionId) {
-    localStorage.setItem(LS_SESSION_ID, sessionId);
-  } else {
-    localStorage.removeItem(LS_SESSION_ID);
-  }
+  if (enabled && sessionId) localStorage.setItem(LS_SESSION_ID, sessionId);
+  else localStorage.removeItem(LS_SESSION_ID);
 };
-
-const stopCustomerView = (): void => {
-  localStorage.setItem(LS_VIEW_ENABLED, "false");
-  localStorage.removeItem(LS_SESSION_ID);
-};
-
-/* ================= COMPONENT ================= */
 
 const Customer_Discount_List: React.FC = () => {
   const [rows, setRows] = useState<PromoBookingRow[]>([]);
@@ -295,16 +298,110 @@ const Customer_Discount_List: React.FC = () => {
   // ✅ force rerender for view-to-customer label switching
   const [, setViewTick] = useState<number>(0);
 
-  // listen storage changes (other tab / same app events)
+  // ✅ realtime view state in memory (for instant isCustomerViewOnFor)
+  const [viewEnabled, setViewEnabled] = useState<boolean>(false);
+  const [viewSessionId, setViewSessionId] = useState<string>("");
+
+  const viewHydratedRef = useRef<boolean>(false);
+
+  const applyViewState = (enabled: boolean, sessionId: string): void => {
+    setViewEnabled(enabled);
+    setViewSessionId(sessionId);
+    // keep EXACT localStorage keys
+    writeLocalView(enabled, enabled ? sessionId : null);
+    // force instant label switch
+    setViewTick((x) => x + 1);
+  };
+
+  const hydrateViewState = async (): Promise<void> => {
+    // try DB
+    const { data, error } = await supabase
+      .from(VIEW_STATE_TABLE)
+      .select("id, enabled, session_id, updated_at")
+      .eq("id", VIEW_STATE_ID)
+      .maybeSingle();
+
+    if (!error && data) {
+      const row = data as unknown as ViewStateRow;
+      const enabled = toBool(row.enabled);
+      const sid = String(row.session_id ?? "").trim();
+      applyViewState(enabled, sid);
+      viewHydratedRef.current = true;
+      return;
+    }
+
+    // fallback local
+    const local = readLocalView();
+    applyViewState(local.enabled, local.sessionId);
+    viewHydratedRef.current = true;
+  };
+
+  const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
+    const sid = enabled && sessionId ? sessionId : null;
+
+    // optimistic UI
+    applyViewState(Boolean(enabled), String(sid ?? ""));
+
+    const { error } = await supabase
+      .from(VIEW_STATE_TABLE)
+      .upsert(
+        { id: VIEW_STATE_ID, enabled: Boolean(enabled), session_id: sid, updated_at: new Date().toISOString() },
+        { onConflict: "id" }
+      );
+
+    if (error) {
+      // DB failed → still keep local
+      // eslint-disable-next-line no-console
+      console.warn("setCustomerViewRealtime error:", error.message);
+      writeLocalView(Boolean(enabled), sid);
+      setViewTick((x) => x + 1);
+    }
+  };
+
+  const stopCustomerViewRealtime = async (): Promise<void> => {
+    await setCustomerViewRealtime(false, null);
+  };
+
+  const isCustomerViewOnFor = (sessionId: string): boolean => {
+    return viewEnabled && viewSessionId === sessionId;
+  };
+
+  // listen realtime + storage
   useEffect(() => {
+    void hydrateViewState();
+
+    const channel = supabase
+      .channel("realtime_customer_view_state_discount_list")
+      .on("postgres_changes", { event: "*", schema: "public", table: VIEW_STATE_TABLE }, (payload) => {
+        const next = (payload.new ?? null) as unknown as ViewStateRow | null;
+        if (!next) return;
+        if (Number(next.id) !== VIEW_STATE_ID) return;
+
+        const enabled = toBool(next.enabled);
+        const sid = String(next.session_id ?? "").trim();
+
+        if (!viewHydratedRef.current) viewHydratedRef.current = true;
+        applyViewState(enabled, sid);
+      })
+      .subscribe();
+
     const onStorage = (e: StorageEvent): void => {
       if (!e.key) return;
       if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) {
         setViewTick((x) => x + 1);
+        // if DB not hydrated (offline/dev) apply local
+        if (!viewHydratedRef.current) {
+          const local = readLocalView();
+          applyViewState(local.enabled, local.sessionId);
+        }
       }
     };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
   // payment modal
@@ -659,7 +756,6 @@ const Customer_Discount_List: React.FC = () => {
     }
   };
 
-
   return (
     <IonPage>
       <IonContent className="staff-content">
@@ -673,7 +769,7 @@ const Customer_Discount_List: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
-              {/* ✅ SEARCH BAR (same classnames as Customer_Lists) */}
+              {/* ✅ SEARCH BAR */}
               <div className="customer-searchbar-inline">
                 <div className="customer-searchbar-inner">
                   <span className="customer-search-icon" aria-hidden="true">
@@ -1170,7 +1266,7 @@ const Customer_Discount_List: React.FC = () => {
                   );
                 })()}
 
-                {/* ✅ SAME BUTTON AREA AS Customer_Lists */}
+                {/* ✅ SAME BUTTON AREA AS Customer_Lists (but REALTIME) */}
                 <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
                   <button
                     className="receipt-btn"
@@ -1178,8 +1274,7 @@ const Customer_Discount_List: React.FC = () => {
                       if (!selected) return;
 
                       const on = isCustomerViewOnFor(selected.id);
-                      setCustomerView(!on, !on ? selected.id : null);
-                      setViewTick((x) => x + 1); // instant label switch
+                      void setCustomerViewRealtime(!on, !on ? selected.id : null);
                     }}
                   >
                     {isCustomerViewOnFor(selected.id) ? "Stop View to Customer" : "View to Customer"}
@@ -1188,8 +1283,7 @@ const Customer_Discount_List: React.FC = () => {
                   <button
                     className="close-btn"
                     onClick={() => {
-                      stopCustomerView(); // ✅ Close stops view (same as Customer_Lists)
-                      setViewTick((x) => x + 1);
+                      void stopCustomerViewRealtime(); // ✅ close stops view
                       setSelected(null);
                     }}
                   >

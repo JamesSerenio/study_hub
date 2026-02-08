@@ -1,7 +1,7 @@
 // src/pages/Customer_Reservations.tsx
 // ✅ SAME STYLE/CLASSNAMES as Customer_Lists.tsx
 // ✅ Shows ONLY RESERVATION records (reservation = "yes")
-// ✅ Seat column INCLUDED (reservations need seats)
+// ✅ Seat column INCLUDED
 // ✅ Discount UI same as Customer_Lists (breakdown)
 // ✅ Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
 // ✅ Manual PAID/UNPAID toggle still works
@@ -11,13 +11,13 @@
 // ✅ Receipt: removed "Edit DP" button
 // ✅ Receipt auto-updates balance/change after DP edit (row + selectedSession updated)
 // ✅ Phone # column beside Full Name
-// ✅ View to Customer toggle via localStorage
+// ✅ View to Customer is REALTIME (Supabase) + localStorage fallback
 // ✅ Search bar (Full Name only)
 // ✅ Date filter uses reservation_date
 // ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now)
 // ✅ No "any"
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
@@ -25,16 +25,19 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 
-/* ✅ LOCAL STORAGE KEYS (shared with Book_Add) */
+/* ✅ LOCAL STORAGE KEYS (fallback) */
 const LS_VIEW_ENABLED = "customer_view_enabled";
 const LS_SESSION_ID = "customer_view_session_id";
+
+/* ✅ REALTIME TABLE */
+const VIEW_STATE_TABLE = "customer_view_state";
+const VIEW_STATE_ID = 1;
 
 type DiscountKind = "none" | "percent" | "amount";
 
 interface CustomerSession {
   id: string;
 
-  // Reservation uses reservation_date, but keep date as fallback
   date: string; // fallback
   reservation_date: string | null; // filter basis
 
@@ -56,19 +59,15 @@ interface CustomerSession {
   reservation: string; // "yes"
   seat_number: string;
 
-  // ✅ DOWN PAYMENT (DB)
   down_payment?: number | string | null;
 
-  // DISCOUNT
   discount_kind?: DiscountKind;
   discount_value?: number | string;
   discount_reason?: string | null;
 
-  // PAYMENT
   gcash_amount?: number | string;
   cash_amount?: number | string;
 
-  // PAID STATUS
   is_paid?: boolean | number | string | null;
   paid_at?: string | null;
 }
@@ -80,6 +79,13 @@ type SeatBlockedRow = {
   end_at: string;
   source: string;
   note: string | null;
+};
+
+type ViewStateRow = {
+  id: number;
+  enabled: boolean | null;
+  session_id: string | null;
+  updated_at?: string | null;
 };
 
 const yyyyMmDdLocal = (d: Date): string => {
@@ -155,24 +161,6 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
   return { gcash: g, cash: c };
 };
 
-/* ✅ VIEW-TO-CUSTOMER helpers */
-const isCustomerViewOnFor = (sessionId: string): boolean => {
-  const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
-  const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
-  return enabled && sid === sessionId;
-};
-
-const setCustomerView = (enabled: boolean, sessionId: string | null): void => {
-  localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
-  if (enabled && sessionId) localStorage.setItem(LS_SESSION_ID, sessionId);
-  else localStorage.removeItem(LS_SESSION_ID);
-};
-
-const stopCustomerView = (): void => {
-  localStorage.setItem(LS_VIEW_ENABLED, "false");
-  localStorage.removeItem(LS_SESSION_ID);
-};
-
 const splitSeats = (seatStr: string): string[] => {
   return String(seatStr ?? "")
     .split(",")
@@ -216,10 +204,145 @@ const Customer_Reservations: React.FC = () => {
   // Paid toggle busy id
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
+  // ✅ view state (realtime)
+  const [viewEnabled, setViewEnabled] = useState<boolean>(false);
+  const [viewSessionId, setViewSessionId] = useState<string>("");
+
+  // guard (avoid flicker)
+  const viewHydratedRef = useRef<boolean>(false);
+
   useEffect(() => {
     void fetchReservationSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* =========================
+     REALTIME VIEW STATE
+  ========================= */
+
+  const writeLocalFallback = (enabled: boolean, sessionId: string | null): void => {
+    localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
+    if (enabled && sessionId) localStorage.setItem(LS_SESSION_ID, sessionId);
+    else localStorage.removeItem(LS_SESSION_ID);
+  };
+
+  const readLocalFallback = (): { enabled: boolean; sessionId: string } => {
+    const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
+    const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
+    return { enabled, sessionId: sid };
+  };
+
+  const applyViewState = (enabled: boolean, sessionId: string): void => {
+    setViewEnabled(enabled);
+    setViewSessionId(sessionId);
+    writeLocalFallback(enabled, enabled ? sessionId : null);
+    setViewTick((x) => x + 1);
+  };
+
+  const hydrateViewState = async (): Promise<void> => {
+    // 1) try DB state
+    const { data, error } = await supabase
+      .from(VIEW_STATE_TABLE)
+      .select("id, enabled, session_id, updated_at")
+      .eq("id", VIEW_STATE_ID)
+      .maybeSingle();
+
+    if (!error && data) {
+      const row = data as ViewStateRow;
+      const enabled = toBool(row.enabled);
+      const sid = String(row.session_id ?? "").trim();
+      applyViewState(enabled, sid);
+      viewHydratedRef.current = true;
+      return;
+    }
+
+    // 2) fallback local
+    const local = readLocalFallback();
+    applyViewState(local.enabled, local.sessionId);
+    viewHydratedRef.current = true;
+  };
+
+  useEffect(() => {
+    void hydrateViewState();
+
+    // Realtime subscribe (postgres changes)
+    const channel = supabase
+      .channel("realtime_customer_view_state_reservations")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: VIEW_STATE_TABLE },
+        (payload) => {
+          const next = (payload.new ?? null) as ViewStateRow | null;
+          if (!next) return;
+
+          // only use our single row
+          if (Number(next.id) !== VIEW_STATE_ID) return;
+
+          const enabled = toBool(next.enabled);
+          const sid = String(next.session_id ?? "").trim();
+
+          // avoid first-load double apply flicker
+          if (!viewHydratedRef.current) {
+            viewHydratedRef.current = true;
+          }
+
+          applyViewState(enabled, sid);
+        }
+      )
+      .subscribe();
+
+    // also listen to local storage changes (same device other tabs)
+    const onStorage = (e: StorageEvent): void => {
+      if (!e.key) return;
+      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) {
+        const local = readLocalFallback();
+        // only apply local if DB not hydrated or no realtime
+        if (!viewHydratedRef.current) applyViewState(local.enabled, local.sessionId);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      void supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isCustomerViewOnFor = (sessionId: string): boolean => {
+    return viewEnabled && viewSessionId === sessionId;
+  };
+
+  const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
+    const sid = enabled && sessionId ? sessionId : null;
+
+    // optimistic UI
+    applyViewState(Boolean(enabled), String(sid ?? ""));
+
+    // upsert single row
+    const { error } = await supabase
+      .from(VIEW_STATE_TABLE)
+      .upsert(
+        { id: VIEW_STATE_ID, enabled: Boolean(enabled), session_id: sid, updated_at: new Date().toISOString() },
+        { onConflict: "id" }
+      );
+
+    if (error) {
+      // fallback keep local only
+      // eslint-disable-next-line no-console
+      console.warn("setCustomerViewRealtime error:", error.message);
+      writeLocalFallback(Boolean(enabled), sid);
+      setViewTick((x) => x + 1);
+    }
+  };
+
+  const stopCustomerViewRealtime = async (): Promise<void> => {
+    await setCustomerViewRealtime(false, null);
+  };
+
+  /* =========================
+     LIST / FILTER
+  ========================= */
 
   const filteredSessions = useMemo(() => {
     const q = searchName.trim().toLowerCase();
@@ -311,14 +434,14 @@ const Customer_Reservations: React.FC = () => {
     return getDiscountTextFrom(di.kind, di.value);
   };
 
-  // ✅ System cost AFTER discount (Payment basis)  ❌ NO DP deduction (same as Customer_Lists)
+  // ✅ Payment basis = system cost after discount (NO DP deduction)
   const getSessionSystemCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
     return applyDiscount(base, di.kind, di.value).discountedCost;
   };
 
-  // ✅ Balance/Change display uses DP (display only)
+  // ✅ display balance/change uses DP (display only)
   const getSessionBalanceAfterDP = (s: CustomerSession): number => {
     const systemCost = getSessionSystemCost(s);
     const dp = getDownPayment(s);
@@ -344,7 +467,7 @@ const Customer_Reservations: React.FC = () => {
     return { gcash, cash, totalPaid };
   };
 
-  // ✅ Release reserved seat blocks when stop time is pressed (same behavior)
+  // ✅ Release reserved seat blocks when stop time is pressed
   const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
@@ -365,7 +488,6 @@ const Customer_Reservations: React.FC = () => {
 
     const rows = (data ?? []) as SeatBlockedRow[];
     if (rows.length === 0) {
-      // fallback: try update by seat list
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
         .update({ end_at: nowIso, note: "stopped (fallback)" })
@@ -381,10 +503,7 @@ const Customer_Reservations: React.FC = () => {
     }
 
     const ids = rows.map((r) => r.id);
-    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in(
-      "id",
-      ids
-    );
+    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in("id", ids);
 
     if (upErr) {
       // eslint-disable-next-line no-console
@@ -473,7 +592,7 @@ const Customer_Reservations: React.FC = () => {
 
     const base = getBaseSystemCost(discountTarget);
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
-    const dueForPayment = round2(Math.max(0, discounted)); // ✅ payment basis (NO DP)
+    const dueForPayment = round2(Math.max(0, discounted));
 
     const prevPay = getPaidInfo(discountTarget);
     const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
@@ -519,7 +638,7 @@ const Customer_Reservations: React.FC = () => {
   };
 
   // -----------------------
-  // ✅ DOWN PAYMENT MODAL (EDITABLE) (same as Customer_Lists)
+  // ✅ DOWN PAYMENT MODAL
   // -----------------------
   const openDpModal = (s: CustomerSession): void => {
     setDpTarget(s);
@@ -560,10 +679,10 @@ const Customer_Reservations: React.FC = () => {
   };
 
   // -----------------------
-  // PAYMENT MODAL (same behavior as Customer_Lists)  ✅ DO NOT DEDUCT DP
+  // PAYMENT MODAL
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
-    const due = getSessionSystemCost(s); // ✅ payment basis = system cost after discount (NO DP)
+    const due = getSessionSystemCost(s);
     const pi = getPaidInfo(s);
 
     const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
@@ -682,7 +801,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
-              {/* ✅ SEARCH BAR */}
+              {/* SEARCH */}
               <div className="customer-searchbar-inline">
                 <div className="customer-searchbar-inner">
                   <span className="customer-search-icon" aria-hidden="true">
@@ -703,7 +822,7 @@ const Customer_Reservations: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE (reservation_date) */}
+              {/* DATE */}
               <label className="date-pill">
                 <span className="date-pill-label">Date</span>
                 <input
@@ -757,7 +876,7 @@ const Customer_Reservations: React.FC = () => {
 
                     const disp = getDisplayAmount(session);
 
-                    const systemCost = getSessionSystemCost(session); // payment basis (NO DP)
+                    const systemCost = getSessionSystemCost(session);
                     const pi = getPaidInfo(session);
                     const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid));
 
@@ -802,7 +921,7 @@ const Customer_Reservations: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* ✅ PAYMENT (same as Customer_Lists) */}
+                        {/* PAYMENT */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">
@@ -840,11 +959,7 @@ const Customer_Reservations: React.FC = () => {
                         <td>
                           <div className="action-stack">
                             {open && (
-                              <button
-                                className="receipt-btn"
-                                disabled={stoppingId === session.id}
-                                onClick={() => void stopOpenTime(session)}
-                              >
+                              <button className="receipt-btn" disabled={stoppingId === session.id} onClick={() => void stopOpenTime(session)}>
                                 {stoppingId === session.id ? "Stopping..." : "Stop Time"}
                               </button>
                             )}
@@ -873,14 +988,7 @@ const Customer_Reservations: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Down Payment (₱)</span>
-                  <input
-                    className="money-input"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={dpInput}
-                    onChange={(e) => setDpInput(e.currentTarget.value)}
-                  />
+                  <input className="money-input" type="number" min="0" step="0.01" value={dpInput} onChange={(e) => setDpInput(e.currentTarget.value)} />
                 </div>
 
                 <div className="modal-actions">
@@ -916,9 +1024,7 @@ const Customer_Reservations: React.FC = () => {
                 <div className="receipt-row">
                   <span>Value</span>
                   <div className="inline-input">
-                    <span className="inline-input-prefix">
-                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
-                    </span>
+                    <span className="inline-input-prefix">{discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}</span>
                     <input
                       className="small-input"
                       type="number"
@@ -948,7 +1054,7 @@ const Customer_Reservations: React.FC = () => {
                   const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-                  const dueForPayment = round2(Math.max(0, discountedCost)); // ✅ payment basis (NO DP)
+                  const dueForPayment = round2(Math.max(0, discountedCost));
 
                   const prevPay = getPaidInfo(discountTarget);
                   const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
@@ -1004,7 +1110,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL (same as Customer_Lists) */}
+          {/* PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1031,26 +1137,12 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={gcashInput}
-                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={gcashInput} onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)} />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={cashInput}
-                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={cashInput} onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)} />
                       </div>
 
                       <hr />
@@ -1080,7 +1172,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL (same breakdown + DP effect) */}
+          {/* RECEIPT MODAL */}
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1145,11 +1237,7 @@ const Customer_Reservations: React.FC = () => {
 
                 {isOpenTimeSession(selectedSession) && (
                   <div className="block-top">
-                    <button
-                      className="receipt-btn btn-full"
-                      disabled={stoppingId === selectedSession.id}
-                      onClick={() => void stopOpenTime(selectedSession)}
-                    >
+                    <button className="receipt-btn btn-full" disabled={stoppingId === selectedSession.id} onClick={() => void stopOpenTime(selectedSession)}>
                       {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
@@ -1164,11 +1252,10 @@ const Customer_Reservations: React.FC = () => {
                   const di = getDiscountInfo(selectedSession);
                   const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
-                  const dueForPayment = round2(Math.max(0, discountCalc.discountedCost)); // ✅ payment basis (NO DP)
+                  const dueForPayment = round2(Math.max(0, discountCalc.discountedCost));
 
                   const pi = getPaidInfo(selectedSession);
 
-                  // ✅ AFTER DP (display only)
                   const dpBalance = round2(Math.max(0, dueForPayment - dp));
                   const dpChange = round2(Math.max(0, dp - dueForPayment));
 
@@ -1177,9 +1264,6 @@ const Customer_Reservations: React.FC = () => {
                       ? ({ label: "Total Balance", value: dpBalance } as const)
                       : ({ label: "Total Change", value: dpChange } as const);
 
-                  // ✅ Bottom summary switches label:
-                  // - If may balance: PAYMENT DUE = balance
-                  // - If sobra DP: TOTAL CHANGE = change
                   const bottomLabel = dpBalance > 0 ? "PAYMENT DUE" : "TOTAL CHANGE";
                   const bottomValue = dpBalance > 0 ? dpBalance : dpChange;
 
@@ -1237,7 +1321,6 @@ const Customer_Reservations: React.FC = () => {
                         <span className="receipt-status">{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
                       </div>
 
-                      {/* ✅ FIX: If sobra DP, label becomes TOTAL CHANGE */}
                       <div className="receipt-total">
                         <span>{bottomLabel}</span>
                         <span>₱{bottomValue.toFixed(2)}</span>
@@ -1256,23 +1339,17 @@ const Customer_Reservations: React.FC = () => {
                     className="receipt-btn"
                     onClick={() => {
                       if (!selectedSession) return;
-
                       const on = isCustomerViewOnFor(selectedSession.id);
-                      setCustomerView(!on, !on ? selectedSession.id : null);
-
-                      setViewTick((x) => x + 1);
+                      void setCustomerViewRealtime(!on, !on ? selectedSession.id : null);
                     }}
                   >
-                    {selectedSession && isCustomerViewOnFor(selectedSession.id)
-                      ? "Stop View to Customer"
-                      : "View to Customer"}
+                    {selectedSession && isCustomerViewOnFor(selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
                   </button>
 
                   <button
                     className="close-btn"
                     onClick={() => {
-                      stopCustomerView();
-                      setViewTick((x) => x + 1);
+                      void stopCustomerViewRealtime();
                       setSelectedSession(null);
                     }}
                   >
