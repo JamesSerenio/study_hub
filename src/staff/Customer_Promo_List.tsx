@@ -10,7 +10,7 @@
 // ✅ FIX: View to Customer REALTIME + EXACT same localStorage keys as Customer_Lists.tsx
 //    - uses ONLY: customer_view_enabled + customer_view_session_id (localStorage)
 //    - label switches instantly (force re-render)
-//    - Close stops view
+//    - Close stops view (only if it is currently viewing this receipt)
 // ✅ NEW: Search bar (Full Name) beside Date (same classnames as Customer_Lists)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -96,6 +96,7 @@ const LS_SESSION_ID = "customer_view_session_id";
 
 /* ================= REALTIME VIEW STATE TABLE =================
    ✅ shared across devices
+   ✅ SINGLE ROW (id=1)
 */
 const VIEW_STATE_TABLE = "customer_view_state";
 const VIEW_STATE_ID = 1;
@@ -314,7 +315,6 @@ const Customer_Discount_List: React.FC = () => {
   };
 
   const hydrateViewState = async (): Promise<void> => {
-    // try DB
     const { data, error } = await supabase
       .from(VIEW_STATE_TABLE)
       .select("id, enabled, session_id, updated_at")
@@ -336,6 +336,7 @@ const Customer_Discount_List: React.FC = () => {
     viewHydratedRef.current = true;
   };
 
+  // ✅ IMPORTANT: SINGLE ROW TABLE -> use UPDATE not UPSERT
   const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
     const sid = enabled && sessionId ? sessionId : null;
 
@@ -344,10 +345,12 @@ const Customer_Discount_List: React.FC = () => {
 
     const { error } = await supabase
       .from(VIEW_STATE_TABLE)
-      .upsert(
-        { id: VIEW_STATE_ID, enabled: Boolean(enabled), session_id: sid, updated_at: new Date().toISOString() },
-        { onConflict: "id" }
-      );
+      .update({
+        enabled: Boolean(enabled),
+        session_id: sid,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", VIEW_STATE_ID);
 
     if (error) {
       // DB failed → still keep local
@@ -389,7 +392,6 @@ const Customer_Discount_List: React.FC = () => {
       if (!e.key) return;
       if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) {
         setViewTick((x) => x + 1);
-        // if DB not hydrated (offline/dev) apply local
         if (!viewHydratedRef.current) {
           const local = readLocalView();
           applyViewState(local.enabled, local.sessionId);
@@ -543,7 +545,7 @@ const Customer_Discount_List: React.FC = () => {
     const adj = recalcPaymentsToDue(due, gcIn);
 
     const totalPaid = round2(adj.gcash + adj.cash);
-    const isPaidAuto = due <= 0 ? false : totalPaid >= due;
+    const isPaidAuto = due <= 0 ? true : totalPaid >= due; // ✅ FIX (was false)
 
     try {
       setSavingPayment(true);
@@ -635,7 +637,7 @@ const Customer_Discount_List: React.FC = () => {
     const gcIn = Math.max(0, toNumber(gcashInput));
     const adjPay = recalcPaymentsToDue(newDue, gcIn);
     const totalPaid = round2(adjPay.gcash + adjPay.cash);
-    const isPaidAuto = newDue <= 0 ? false : totalPaid >= newDue;
+    const isPaidAuto = newDue <= 0 ? true : totalPaid >= newDue; // ✅ FIX (was false)
 
     try {
       setSavingDiscount(true);
@@ -756,6 +758,18 @@ const Customer_Discount_List: React.FC = () => {
     }
   };
 
+  const closeReceipt = async (): Promise<void> => {
+    // ✅ only stop view if this receipt is the one being viewed
+    if (selected && isCustomerViewOnFor(selected.id)) {
+      try {
+        await stopCustomerViewRealtime();
+      } catch {
+        // ignore
+      }
+    }
+    setSelected(null);
+  };
+
   return (
     <IonPage>
       <IonContent className="staff-content">
@@ -765,6 +779,13 @@ const Customer_Discount_List: React.FC = () => {
               <h2 className="customer-lists-title">Customer Promo Records</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
+              </div>
+
+              <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
+                Customer View:{" "}
+                <strong>
+                  {viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}
+                </strong>
               </div>
             </div>
 
@@ -908,6 +929,12 @@ const Customer_Discount_List: React.FC = () => {
                             <button className="receipt-btn" onClick={() => setSelected(r)}>
                               View Receipt
                             </button>
+                            <button
+                              className="receipt-btn"
+                              onClick={() => void setCustomerViewRealtime(!isCustomerViewOnFor(r.id), !isCustomerViewOnFor(r.id) ? r.id : null)}
+                            >
+                              {isCustomerViewOnFor(r.id) ? "Stop View" : "View"}
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -939,7 +966,7 @@ const Customer_Discount_List: React.FC = () => {
 
                   const totalPaid = round2(adj.gcash + adj.cash);
                   const remaining = round2(Math.max(0, due - totalPaid));
-                  const willPaid = due > 0 && totalPaid >= due;
+                  const willPaid = due <= 0 ? true : totalPaid >= due;
 
                   return (
                     <>
@@ -1064,7 +1091,7 @@ const Customer_Discount_List: React.FC = () => {
                   const adjPay = recalcPaymentsToDue(discountedCost, gcIn);
 
                   const totalPaid = round2(adjPay.gcash + adjPay.cash);
-                  const willPaid = discountedCost > 0 && totalPaid >= discountedCost;
+                  const willPaid = discountedCost <= 0 ? true : totalPaid >= discountedCost;
 
                   return (
                     <>
@@ -1124,7 +1151,7 @@ const Customer_Discount_List: React.FC = () => {
 
           {/* RECEIPT */}
           {selected && (
-            <div className="receipt-overlay" onClick={() => setSelected(null)}>
+            <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <img src={logo} className="receipt-logo" alt="logo" />
 
@@ -1174,10 +1201,7 @@ const Customer_Discount_List: React.FC = () => {
                   <div className="receipt-row">
                     <span>Duration</span>
                     <span>
-                      {formatDuration(
-                        Number(selected.package_options.duration_value),
-                        selected.package_options.duration_unit
-                      )}
+                      {formatDuration(Number(selected.package_options.duration_value), selected.package_options.duration_unit)}
                     </span>
                   </div>
                 ) : null}
@@ -1198,11 +1222,7 @@ const Customer_Discount_List: React.FC = () => {
 
                 {(() => {
                   const base = round2(Math.max(0, toNumber(selected.price)));
-                  const { discountedCost, discountAmount } = applyDiscount(
-                    base,
-                    selected.discount_kind,
-                    selected.discount_value
-                  );
+                  const { discountedCost, discountAmount } = applyDiscount(base, selected.discount_kind, selected.discount_value);
                   const due = round2(discountedCost);
 
                   const pi = getPaidInfo(selected);
@@ -1266,13 +1286,11 @@ const Customer_Discount_List: React.FC = () => {
                   );
                 })()}
 
-                {/* ✅ SAME BUTTON AREA AS Customer_Lists (but REALTIME) */}
+                {/* ✅ SAME BUTTON AREA AS Customer_Lists (REALTIME) */}
                 <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
                   <button
                     className="receipt-btn"
                     onClick={() => {
-                      if (!selected) return;
-
                       const on = isCustomerViewOnFor(selected.id);
                       void setCustomerViewRealtime(!on, !on ? selected.id : null);
                     }}
@@ -1280,13 +1298,7 @@ const Customer_Discount_List: React.FC = () => {
                     {isCustomerViewOnFor(selected.id) ? "Stop View to Customer" : "View to Customer"}
                   </button>
 
-                  <button
-                    className="close-btn"
-                    onClick={() => {
-                      void stopCustomerViewRealtime(); // ✅ close stops view
-                      setSelected(null);
-                    }}
-                  >
+                  <button className="close-btn" onClick={() => void closeReceipt()}>
                     Close
                   </button>
                 </div>

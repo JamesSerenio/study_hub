@@ -10,9 +10,9 @@
 // ✅ Receipt: removed "Edit DP" button
 // ✅ Receipt auto-updates balance/change after DP edit (because row + selectedSession are updated)
 // ✅ Phone # column beside Full Name
-// ✅ View to Customer toggle now supports CROSS-DEVICE via Supabase table: customer_view_state
+// ✅ View to Customer toggle now supports CROSS-DEVICE via Supabase table: customer_view_state (SINGLE ROW id=1)
 // ✅ Search bar (Full Name only)
-// ✅ No "any"
+// ✅ strict TS (NO "any")
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -23,12 +23,19 @@ const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 
 /**
- * ✅ CROSS-DEVICE CUSTOMER VIEW (Supabase)
- * Create table:
- *   customer_view_state(session_id uuid primary key, enabled boolean, updated_at timestamptz)
+ * ✅ CROSS-DEVICE CUSTOMER VIEW (Supabase) — SINGLE ROW
+ * Table design:
+ *   customer_view_state(
+ *     id int primary key default 1,
+ *     session_id uuid null,
+ *     enabled boolean not null default false,
+ *     updated_at timestamptz not null default now()
+ *   )
+ * Must have exactly 1 row with id=1
  */
 type CustomerViewRow = {
-  session_id: string;
+  id: number;
+  session_id: string | null;
   enabled: boolean;
   updated_at: string;
 };
@@ -146,30 +153,27 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
 };
 
 /* =========================
-   CROSS-DEVICE VIEW HELPERS
+   CROSS-DEVICE VIEW HELPERS (SINGLE ROW id=1)
 ========================= */
-const stopAllCustomerViews = async (): Promise<void> => {
-  // turn OFF any enabled rows (simple global stop)
-  const { error } = await supabase.from("customer_view_state").update({ enabled: false }).eq("enabled", true);
-  if (error) throw error;
-};
 
-const setCustomerViewForSession = async (enabled: boolean, sessionId: string): Promise<void> => {
-  // Ensure single active "view" (optional but recommended):
-  // 1) disable any existing enabled row
-  // 2) upsert current session row
-  if (enabled) await stopAllCustomerViews();
+const VIEW_ROW_ID = 1;
 
+const setCustomerViewState = async (enabled: boolean, sessionId: string | null): Promise<void> => {
   const { error } = await supabase
     .from("customer_view_state")
-    .upsert({ session_id: sessionId, enabled }, { onConflict: "session_id" });
+    .update({
+      enabled,
+      session_id: enabled ? sessionId : null,
+    })
+    .eq("id", VIEW_ROW_ID);
 
   if (error) throw error;
 };
 
 const isCustomerViewOnForSession = (active: CustomerViewRow | null, sessionId: string): boolean => {
   if (!active) return false;
-  return active.enabled === true && String(active.session_id) === String(sessionId);
+  if (!active.enabled) return false;
+  return String(active.session_id ?? "") === String(sessionId);
 };
 
 const Customer_Lists: React.FC = () => {
@@ -216,7 +220,6 @@ const Customer_Lists: React.FC = () => {
     const unsub = subscribeCustomerViewRealtime();
 
     return () => {
-      // cleanup realtime
       try {
         if (typeof unsub === "function") unsub();
       } catch {
@@ -266,10 +269,9 @@ const Customer_Lists: React.FC = () => {
   const readActiveCustomerView = async (): Promise<void> => {
     const { data, error } = await supabase
       .from("customer_view_state")
-      .select("session_id, enabled, updated_at")
-      .eq("enabled", true)
-      .order("updated_at", { ascending: false })
-      .limit(1);
+      .select("id, session_id, enabled, updated_at")
+      .eq("id", VIEW_ROW_ID)
+      .maybeSingle();
 
     if (error) {
       // eslint-disable-next-line no-console
@@ -278,20 +280,16 @@ const Customer_Lists: React.FC = () => {
       return;
     }
 
-    const row = (data?.[0] ?? null) as CustomerViewRow | null;
+    const row = (data ?? null) as CustomerViewRow | null;
     setActiveView(row);
   };
 
   const subscribeCustomerViewRealtime = (): (() => void) => {
     const channel = supabase
-      .channel("customer_view_state_changes")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "customer_view_state" },
-        () => {
-          void readActiveCustomerView();
-        }
-      )
+      .channel("customer_view_state_changes_customer_lists")
+      .on("postgres_changes", { event: "*", schema: "public", table: "customer_view_state" }, () => {
+        void readActiveCustomerView();
+      })
       .subscribe();
 
     return () => {
@@ -672,11 +670,13 @@ const Customer_Lists: React.FC = () => {
 
     try {
       setViewBusy(true);
+
       if (currentlyOn) {
-        await setCustomerViewForSession(false, selectedSession.id);
+        await setCustomerViewState(false, null);
       } else {
-        await setCustomerViewForSession(true, selectedSession.id);
+        await setCustomerViewState(true, selectedSession.id);
       }
+
       await readActiveCustomerView();
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -688,11 +688,11 @@ const Customer_Lists: React.FC = () => {
   };
 
   const closeReceipt = async (): Promise<void> => {
-    // Only stop if this selected session is the active one
+    // ✅ If this selected session is the active one, turning off view should happen here
     if (selectedSession && isCustomerViewOnForSession(activeView, selectedSession.id)) {
       try {
         setViewBusy(true);
-        await setCustomerViewForSession(false, selectedSession.id);
+        await setCustomerViewState(false, null);
         await readActiveCustomerView();
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -715,10 +715,15 @@ const Customer_Lists: React.FC = () => {
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
               </div>
+
               {/* ✅ Show current active view info */}
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
                 Customer View:{" "}
-                <strong>{activeView?.enabled ? `ON (${String(activeView.session_id).slice(0, 8)}...)` : "OFF"}</strong>
+                <strong>
+                  {activeView?.enabled
+                    ? `ON (${String(activeView.session_id ?? "").slice(0, 8)}...)`
+                    : "OFF"}
+                </strong>
               </div>
             </div>
 
@@ -854,7 +859,9 @@ const Customer_Lists: React.FC = () => {
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remainingPay.toFixed(2)}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              Remaining ₱{remainingPay.toFixed(2)}
+                            </span>
 
                             <button
                               className="receipt-btn"
@@ -869,12 +876,18 @@ const Customer_Lists: React.FC = () => {
 
                         <td>
                           <button
-                            className={`receipt-btn pay-badge ${toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            className={`receipt-btn pay-badge ${
+                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
+                            }`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                           >
-                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                            {togglingPaidId === session.id
+                              ? "Updating..."
+                              : toBool(session.is_paid)
+                              ? "PAID"
+                              : "UNPAID"}
                           </button>
                         </td>
 
@@ -1037,6 +1050,11 @@ const Customer_Lists: React.FC = () => {
                         <span>
                           GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
                         </span>
+                      </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
+                        <span>Note</span>
+                        <span>Payment basis is System Cost after discount (DP not deducted)</span>
                       </div>
                     </>
                   );
@@ -1299,7 +1317,9 @@ const Customer_Lists: React.FC = () => {
 
                 <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
                   <button className="receipt-btn" onClick={() => void toggleCustomerViewForSelected()} disabled={viewBusy}>
-                    {isCustomerViewOnForSession(activeView, selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
+                    {isCustomerViewOnForSession(activeView, selectedSession.id)
+                      ? "Stop View to Customer"
+                      : "View to Customer"}
                   </button>
 
                   <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy}>

@@ -11,7 +11,7 @@
 // ✅ Receipt: removed "Edit DP" button
 // ✅ Receipt auto-updates balance/change after DP edit (row + selectedSession updated)
 // ✅ Phone # column beside Full Name
-// ✅ View to Customer is REALTIME (Supabase) + localStorage fallback
+// ✅ View to Customer is REALTIME using SINGLE ROW customer_view_state (id=1)
 // ✅ Search bar (Full Name only)
 // ✅ Date filter uses reservation_date
 // ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now)
@@ -29,7 +29,7 @@ const FREE_MINUTES = 0;
 const LS_VIEW_ENABLED = "customer_view_enabled";
 const LS_SESSION_ID = "customer_view_session_id";
 
-/* ✅ REALTIME TABLE */
+/* ✅ REALTIME TABLE (single row) */
 const VIEW_STATE_TABLE = "customer_view_state";
 const VIEW_STATE_ID = 1;
 
@@ -83,9 +83,9 @@ type SeatBlockedRow = {
 
 type ViewStateRow = {
   id: number;
-  enabled: boolean | null;
+  enabled: boolean;
   session_id: string | null;
-  updated_at?: string | null;
+  updated_at: string;
 };
 
 const yyyyMmDdLocal = (d: Date): string => {
@@ -268,27 +268,20 @@ const Customer_Reservations: React.FC = () => {
     // Realtime subscribe (postgres changes)
     const channel = supabase
       .channel("realtime_customer_view_state_reservations")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: VIEW_STATE_TABLE },
-        (payload) => {
-          const next = (payload.new ?? null) as ViewStateRow | null;
-          if (!next) return;
+      .on("postgres_changes", { event: "*", schema: "public", table: VIEW_STATE_TABLE }, (payload) => {
+        const next = (payload.new ?? null) as ViewStateRow | null;
+        if (!next) return;
 
-          // only use our single row
-          if (Number(next.id) !== VIEW_STATE_ID) return;
+        // only use our single row
+        if (Number(next.id) !== VIEW_STATE_ID) return;
 
-          const enabled = toBool(next.enabled);
-          const sid = String(next.session_id ?? "").trim();
+        const enabled = toBool(next.enabled);
+        const sid = String(next.session_id ?? "").trim();
 
-          // avoid first-load double apply flicker
-          if (!viewHydratedRef.current) {
-            viewHydratedRef.current = true;
-          }
+        if (!viewHydratedRef.current) viewHydratedRef.current = true;
 
-          applyViewState(enabled, sid);
-        }
-      )
+        applyViewState(enabled, sid);
+      })
       .subscribe();
 
     // also listen to local storage changes (same device other tabs)
@@ -296,7 +289,6 @@ const Customer_Reservations: React.FC = () => {
       if (!e.key) return;
       if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) {
         const local = readLocalFallback();
-        // only apply local if DB not hydrated or no realtime
         if (!viewHydratedRef.current) applyViewState(local.enabled, local.sessionId);
       }
     };
@@ -309,23 +301,22 @@ const Customer_Reservations: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isCustomerViewOnFor = (sessionId: string): boolean => {
-    return viewEnabled && viewSessionId === sessionId;
-  };
+  const isCustomerViewOnFor = (sessionId: string): boolean => viewEnabled && viewSessionId === sessionId;
 
+  // ✅ IMPORTANT: since DB is SINGLE ROW with id=1, use UPDATE (NOT UPSERT)
   const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
     const sid = enabled && sessionId ? sessionId : null;
 
     // optimistic UI
     applyViewState(Boolean(enabled), String(sid ?? ""));
 
-    // upsert single row
     const { error } = await supabase
       .from(VIEW_STATE_TABLE)
-      .upsert(
-        { id: VIEW_STATE_ID, enabled: Boolean(enabled), session_id: sid, updated_at: new Date().toISOString() },
-        { onConflict: "id" }
-      );
+      .update({
+        enabled: Boolean(enabled),
+        session_id: sid,
+      })
+      .eq("id", VIEW_STATE_ID);
 
     if (error) {
       // fallback keep local only
@@ -503,7 +494,10 @@ const Customer_Reservations: React.FC = () => {
     }
 
     const ids = rows.map((r) => r.id);
-    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in("id", ids);
+    const { error: upErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped" })
+      .in("id", ids);
 
     if (upErr) {
       // eslint-disable-next-line no-console
@@ -787,6 +781,18 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
+  const closeReceipt = async (): Promise<void> => {
+    // ✅ only stop view if this receipt is the active view
+    if (selectedSession && isCustomerViewOnFor(selectedSession.id)) {
+      try {
+        await stopCustomerViewRealtime();
+      } catch {
+        // ignore
+      }
+    }
+    setSelectedSession(null);
+  };
+
   return (
     <IonPage>
       <IonContent className="staff-content">
@@ -797,6 +803,13 @@ const Customer_Reservations: React.FC = () => {
               <h2 className="customer-lists-title">Customer Reservations</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
+              </div>
+
+              <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
+                Customer View:{" "}
+                <strong>
+                  {viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}
+                </strong>
               </div>
             </div>
 
@@ -949,7 +962,11 @@ const Customer_Reservations: React.FC = () => {
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                           >
-                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                            {togglingPaidId === session.id
+                              ? "Updating..."
+                              : toBool(session.is_paid)
+                              ? "PAID"
+                              : "UNPAID"}
                           </button>
                         </td>
 
@@ -959,7 +976,11 @@ const Customer_Reservations: React.FC = () => {
                         <td>
                           <div className="action-stack">
                             {open && (
-                              <button className="receipt-btn" disabled={stoppingId === session.id} onClick={() => void stopOpenTime(session)}>
+                              <button
+                                className="receipt-btn"
+                                disabled={stoppingId === session.id}
+                                onClick={() => void stopOpenTime(session)}
+                              >
                                 {stoppingId === session.id ? "Stopping..." : "Stop Time"}
                               </button>
                             )}
@@ -967,6 +988,12 @@ const Customer_Reservations: React.FC = () => {
                             <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
                               View Receipt
                             </button>
+
+                            {isCustomerViewOnFor(session.id) ? (
+                              <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span>
+                            ) : (
+                              <span style={{ fontSize: 11, opacity: 0.45 }}>—</span>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -988,7 +1015,14 @@ const Customer_Reservations: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Down Payment (₱)</span>
-                  <input className="money-input" type="number" min="0" step="0.01" value={dpInput} onChange={(e) => setDpInput(e.currentTarget.value)} />
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={dpInput}
+                    onChange={(e) => setDpInput(e.currentTarget.value)}
+                  />
                 </div>
 
                 <div className="modal-actions">
@@ -1024,7 +1058,9 @@ const Customer_Reservations: React.FC = () => {
                 <div className="receipt-row">
                   <span>Value</span>
                   <div className="inline-input">
-                    <span className="inline-input-prefix">{discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}</span>
+                    <span className="inline-input-prefix">
+                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
+                    </span>
                     <input
                       className="small-input"
                       type="number"
@@ -1094,6 +1130,11 @@ const Customer_Reservations: React.FC = () => {
                           GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
                         </span>
                       </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
+                        <span>Note</span>
+                        <span>Payment basis is System Cost after discount (DP not deducted)</span>
+                      </div>
                     </>
                   );
                 })()}
@@ -1137,12 +1178,26 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <input className="money-input" type="number" min="0" step="0.01" value={gcashInput} onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)} />
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashInput}
+                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                        />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <input className="money-input" type="number" min="0" step="0.01" value={cashInput} onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)} />
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={cashInput}
+                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                        />
                       </div>
 
                       <hr />
@@ -1174,7 +1229,7 @@ const Customer_Reservations: React.FC = () => {
 
           {/* RECEIPT MODAL */}
           {selectedSession && (
-            <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
+            <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
 
@@ -1237,7 +1292,11 @@ const Customer_Reservations: React.FC = () => {
 
                 {isOpenTimeSession(selectedSession) && (
                   <div className="block-top">
-                    <button className="receipt-btn btn-full" disabled={stoppingId === selectedSession.id} onClick={() => void stopOpenTime(selectedSession)}>
+                    <button
+                      className="receipt-btn btn-full"
+                      disabled={stoppingId === selectedSession.id}
+                      onClick={() => void stopOpenTime(selectedSession)}
+                    >
                       {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
@@ -1337,22 +1396,19 @@ const Customer_Reservations: React.FC = () => {
                 <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
                   <button
                     className="receipt-btn"
+                    disabled={!selectedSession}
                     onClick={() => {
                       if (!selectedSession) return;
                       const on = isCustomerViewOnFor(selectedSession.id);
                       void setCustomerViewRealtime(!on, !on ? selectedSession.id : null);
                     }}
                   >
-                    {selectedSession && isCustomerViewOnFor(selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
+                    {selectedSession && isCustomerViewOnFor(selectedSession.id)
+                      ? "Stop View to Customer"
+                      : "View to Customer"}
                   </button>
 
-                  <button
-                    className="close-btn"
-                    onClick={() => {
-                      void stopCustomerViewRealtime();
-                      setSelectedSession(null);
-                    }}
-                  >
+                  <button className="close-btn" onClick={() => void closeReceipt()}>
                     Close
                   </button>
                 </div>
