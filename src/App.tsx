@@ -9,6 +9,8 @@ import Home from "./pages/Home";
 import Staff_menu from "./staff/Staff_menu";
 import Admin_menu from "./admin/Admin_menu";
 import Book_Add from "./pages/Book_Add";
+import Seat_Map from "./pages/Seat_Map";
+
 
 /* Components */
 import TimeAlertModal from "./components/TimeAlertModal";
@@ -128,6 +130,7 @@ const App: React.FC = () => {
       <IonReactRouter>
         <IonRouterOutlet>
           <Route exact path="/book-add" component={Book_Add} />
+          <Route exact path="/seat_map" component={Seat_Map} />
           <Route exact path="/login" component={Login} />
           <Route exact path="/staff-menu" component={Staff_menu} />
           <Route exact path="/admin-menu" component={Admin_menu} />
