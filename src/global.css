@@ -6555,3 +6555,223 @@ ion-content.aao-content{
   padding: 18px;
 }
   
+/* =========================
+   MODAL SIZE (STABLE)
+========================= */
+/* =========================
+   FIX: SECTION HEIGHT AUTO
+========================= */
+
+/* wag i-stretch ang grid items */
+.calendar-day-sections {
+  align-items: start; /* KEY FIX */
+}
+
+/* siguradong auto height lang */
+.calendar-day-section {
+  height: fit-content;
+  align-self: flex-start;
+}
+
+/* safety: pag konti laman */
+.calendar-day-list {
+  height: auto;
+}
+
+
+.calendar-day-modal {
+  --width: min(90vw, 500px);
+  --height: min(70vh, 700px);
+  --border-radius: 18px;
+}
+
+.calendar-day-modal::part(content) {
+  width: var(--width);
+  height: var(--height);
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+
+.calendar-day-modal::part(backdrop) {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+/* =========================
+   MODAL HEADER (DARK BAR)
+========================= */
+
+.calendar-day-modal ion-toolbar {
+  --background: #0f172a;
+  --color: #ffffff;
+}
+
+.calendar-day-modal ion-title {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+/* =========================
+   MODAL BODY BG (MATCH PAGE)
+========================= */
+
+.calendar-day-modal ion-content {
+  --background: #b9c79a; /* SAME green page bg */
+}
+
+.calendar-day-modal-content {
+  padding: 14px 16px 20px;
+}
+
+/* =========================
+   TOP ACTION BAR
+========================= */
+
+.calendar-day-top {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+/* =========================
+   SECTION CONTAINER
+========================= */
+
+.calendar-day-sections {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+/* =========================
+   SECTION CARD (TABLE LOOK)
+========================= */
+
+.calendar-day-section {
+  background: #f6eed9; /* SAME table body */
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid #d8cfb6;
+}
+
+/* =========================
+   SECTION HEADER (LIKE TABLE HEADER)
+========================= */
+
+.calendar-day-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #efe5c7; /* table header color */
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+
+.calendar-day-section-head img {
+  width: 26px;
+  height: 26px;
+}
+
+.calendar-day-section-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: #1f2937;
+  margin: 0;
+}
+
+/* =========================
+   EMPTY STATE
+========================= */
+
+.calendar-day-empty {
+  text-align: center;
+  padding: 16px 8px;
+  font-size: 14px;
+  color: #6b7280;
+}
+
+/* =========================
+   LIST
+========================= */
+
+.calendar-day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* =========================
+   ROW (TABLE ROW STYLE)
+========================= */
+
+.calendar-day-item {
+  background: #f6eed9;
+  border: 1px solid #e0d6b8;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+/* hover like table */
+.calendar-day-item:hover {
+  background: #f1e6c3;
+}
+
+/* =========================
+   NAME CELL
+========================= */
+
+.calendar-day-item-name {
+  font-size: 14px;
+  font-weight: 800;
+  color: #1f2937;
+  margin-bottom: 4px;
+}
+
+/* =========================
+   META INFO (TABLE TEXT)
+========================= */
+
+.calendar-day-item-meta {
+  font-size: 13px;
+  color: #374151;
+  display: grid;
+  gap: 3px;
+}
+
+.calendar-day-item-meta strong {
+  font-weight: 700;
+  color: #111827;
+}
+
+/* =========================
+   RESPONSIVE (2 COLUMNS)
+========================= */
+
+@media (min-width: 720px) {
+  .calendar-day-sections {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* =========================
+   BUTTON (MATCH TABLE ACTION)
+========================= */
+
+.calendar-day-modal .receipt-btn {
+  background: #374151; /* same dark gray */
+  color: #ffffff;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+}
+
+.calendar-day-modal .receipt-btn:hover {
+  background: #1f2937;
+}
+
+.calendar-day-modal .receipt-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
