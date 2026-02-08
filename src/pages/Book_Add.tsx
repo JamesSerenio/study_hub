@@ -1,5 +1,5 @@
 // src/pages/Book_Add.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonPage, IonHeader, IonContent, IonButton, IonAlert, IonSpinner } from "@ionic/react";
 import { useHistory } from "react-router-dom";
 
@@ -18,29 +18,25 @@ import { supabase } from "../utils/supabaseClient";
 type SeatGroup = { title: string; seats: string[] };
 
 const SEAT_GROUPS: SeatGroup[] = [
-  {
-    title: "1stF",
-    seats: ["1", "2", "3", "4", "5", "6", "7a", "7b", "8a", "8b", "9", "10", "11"],
-  },
+  { title: "1stF", seats: ["1", "2", "3", "4", "5", "6", "7a", "7b", "8a", "8b", "9", "10", "11"] },
   { title: "TATAMI AREA", seats: ["12a", "12b", "12c"] },
-  {
-    title: "2ndF",
-    seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"],
-  },
+  { title: "2ndF", seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"] },
 ];
-
-// ✅ same keys with Customer_Lists / Customer_Discount_List
-const LS_VIEW_ENABLED = "customer_view_enabled";
-const LS_SESSION_ID = "customer_view_session_id";
 
 // ✅ same billing constants as Customer_Lists
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
-const DOWN_PAYMENT = 50;
 
 type DiscountKind = "none" | "percent" | "amount";
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
+
+/* ===================== CUSTOMER VIEW (DB) ===================== */
+type CustomerViewRow = {
+  session_id: string;
+  enabled: boolean;
+  updated_at: string;
+};
 
 /* ===================== RECEIPT TYPES ===================== */
 
@@ -64,6 +60,10 @@ interface CustomerSessionReceipt {
   reservation_date: string | null; // YYYY-MM-DD
 
   total_amount: number;
+
+  // ✅ from DB (same as Customer_Lists)
+  down_payment: number;
+
   discount_kind: DiscountKind;
   discount_value: number;
 
@@ -240,16 +240,19 @@ const getBaseSystemCost = (s: CustomerSessionReceipt): number => {
   return toMoney(s.total_amount);
 };
 
+// ✅ display balance/change using DB down_payment (NOT fixed 50)
 const getDisplayAmount = (s: CustomerSessionReceipt): { label: "Total Balance" | "Total Change"; value: number } => {
   const base = getBaseSystemCost(s);
   const kind = s.discount_kind ?? "none";
   const val = toMoney(s.discount_value ?? 0);
   const disc = applyDiscount(base, kind, val);
 
-  const balance = round2(Math.max(0, disc.discountedCost - DOWN_PAYMENT));
+  const dp = round2(Math.max(0, toMoney(s.down_payment ?? 0)));
+
+  const balance = round2(Math.max(0, disc.discountedCost - dp));
   if (balance > 0) return { label: "Total Balance", value: balance };
 
-  const change = round2(Math.max(0, DOWN_PAYMENT - disc.discountedCost));
+  const change = round2(Math.max(0, dp - disc.discountedCost));
   return { label: "Total Change", value: change };
 };
 
@@ -277,7 +280,7 @@ const Book_Add: React.FC = () => {
   // ADD-ONS SENT ALERT
   const [addOnsSentOpen, setAddOnsSentOpen] = useState<boolean>(false);
 
-  // ✅ CUSTOMER VIEW (from staff)
+  // ✅ CUSTOMER VIEW (from staff) via DB
   const [customerViewEnabled, setCustomerViewEnabled] = useState<boolean>(false);
   const [customerSessionId, setCustomerSessionId] = useState<string>("");
 
@@ -285,6 +288,10 @@ const Book_Add: React.FC = () => {
   const [showReceipt, setShowReceipt] = useState<boolean>(false);
   const [receiptLoading, setReceiptLoading] = useState<boolean>(false);
   const [receipt, setReceipt] = useState<ReceiptUnion | null>(null);
+
+  // ✅ realtime channel ref (cleanup)
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   const canOpenReceipt = useMemo(
     () => customerViewEnabled && customerSessionId.length > 0,
@@ -295,28 +302,74 @@ const Book_Add: React.FC = () => {
     return canOpenReceipt ? "Ready to view your receipt" : "Ready for booking";
   }, [canOpenReceipt]);
 
-  const readCustomerViewFromStorage = (): void => {
-    const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
-    const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
-    setCustomerViewEnabled(enabled);
-    setCustomerSessionId(sid);
+  /* =====================
+     CUSTOMER VIEW (DB)
+  ===================== */
+  const readCustomerViewFromDB = async (): Promise<void> => {
+    const { data, error } = await supabase
+      .from("customer_view_state")
+      .select("session_id, enabled, updated_at")
+      .eq("enabled", true)
+      .order("updated_at", { ascending: false })
+      .limit(1);
 
-    if (!enabled) {
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error(error);
+      setCustomerViewEnabled(false);
+      setCustomerSessionId("");
       setShowReceipt(false);
       setReceipt(null);
+      return;
     }
+
+    const row = (data?.[0] ?? null) as CustomerViewRow | null;
+
+    if (!row || !row.enabled) {
+      setCustomerViewEnabled(false);
+      setCustomerSessionId("");
+      setShowReceipt(false);
+      setReceipt(null);
+      return;
+    }
+
+    setCustomerViewEnabled(true);
+    setCustomerSessionId(String(row.session_id));
+  };
+
+  const startCustomerViewRealtime = (): void => {
+    // realtime (best)
+    const ch = supabase
+      .channel("customer_view_state_changes_bookadd")
+      .on("postgres_changes", { event: "*", schema: "public", table: "customer_view_state" }, () => {
+        void readCustomerViewFromDB();
+      })
+      .subscribe();
+
+    channelRef.current = ch;
+
+    // polling fallback (works even if realtime not enabled)
+    if (pollRef.current) window.clearInterval(pollRef.current);
+    pollRef.current = window.setInterval(() => {
+      void readCustomerViewFromDB();
+    }, 1500);
   };
 
   useEffect(() => {
-    readCustomerViewFromStorage();
+    void readCustomerViewFromDB();
+    startCustomerViewRealtime();
 
-    const onStorage = (e: StorageEvent): void => {
-      if (!e.key) return;
-      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) readCustomerViewFromStorage();
+    return () => {
+      if (channelRef.current) {
+        void supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
-
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ✅ 1) try customer_sessions 2) fallback promo_bookings
@@ -329,7 +382,7 @@ const Book_Add: React.FC = () => {
     const cs = await supabase
       .from("customer_sessions")
       .select(
-        "id,date,full_name,phone_number,customer_type,customer_field,seat_number,time_started,time_ended,hour_avail,reservation,reservation_date,total_amount,discount_kind,discount_value,gcash_amount,cash_amount,is_paid"
+        "id,date,full_name,phone_number,customer_type,customer_field,seat_number,time_started,time_ended,hour_avail,reservation,reservation_date,total_amount,down_payment,discount_kind,discount_value,gcash_amount,cash_amount,is_paid"
       )
       .eq("id", id)
       .maybeSingle();
@@ -353,6 +406,8 @@ const Book_Add: React.FC = () => {
         reservation_date: string | null;
 
         total_amount: number | string | null;
+        down_payment: number | string | null;
+
         discount_kind: unknown;
         discount_value: unknown;
 
@@ -380,6 +435,8 @@ const Book_Add: React.FC = () => {
         reservation_date: d.reservation_date ?? null,
 
         total_amount: toMoney(d.total_amount),
+        down_payment: round2(Math.max(0, toMoney(d.down_payment ?? 0))),
+
         discount_kind: normalizeDiscountKind(d.discount_kind),
         discount_value: round2(toMoney(d.discount_value)),
 
@@ -427,16 +484,8 @@ const Book_Add: React.FC = () => {
     if (!pb.error && pb.data) {
       type PackageJoin = { title: string | null } | { title: string | null }[] | null;
       type OptionJoin =
-        | {
-            option_name: string | null;
-            duration_value: number | null;
-            duration_unit: string | null;
-          }
-        | {
-            option_name: string | null;
-            duration_value: number | null;
-            duration_unit: string | null;
-          }[]
+        | { option_name: string | null; duration_value: number | null; duration_unit: string | null }
+        | { option_name: string | null; duration_value: number | null; duration_unit: string | null }[]
         | null;
 
       const d = pb.data as {
@@ -505,6 +554,18 @@ const Book_Add: React.FC = () => {
     setReceipt(null);
     setReceiptLoading(false);
   };
+
+  // ✅ auto-refresh receipt while open (for OPEN sessions)
+  useEffect(() => {
+    if (!showReceipt || !canOpenReceipt) return;
+
+    const t = window.setInterval(() => {
+      void fetchReceiptById(customerSessionId);
+    }, 2000);
+
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showReceipt, canOpenReceipt, customerSessionId]);
 
   const openReceipt = async (): Promise<void> => {
     if (!canOpenReceipt) return;
@@ -910,12 +971,18 @@ const Book_Add: React.FC = () => {
                     const baseCost = getBaseSystemCost(receipt);
                     const calc = applyDiscount(baseCost, receipt.discount_kind, receipt.discount_value);
 
+                    const dp = round2(Math.max(0, toMoney(receipt.down_payment ?? 0)));
+
                     const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount)));
                     const cash = round2(Math.max(0, toMoney(receipt.cash_amount)));
                     const totalPaid = round2(gcash + cash);
 
-                    const due = round2(Math.max(0, calc.discountedCost - DOWN_PAYMENT));
-                    const remaining = round2(Math.max(0, due - totalPaid));
+                    // ✅ remaining after dp (same logic as Customer_Lists receipt)
+                    const dpBalance = round2(Math.max(0, calc.discountedCost - dp));
+                    const remaining = round2(Math.max(0, dpBalance - totalPaid));
+
+                    const bottomLabel = dpBalance > 0 ? "PAYMENT DUE" : "TOTAL CHANGE";
+                    const bottomValue = dpBalance > 0 ? dpBalance : round2(Math.max(0, dp - calc.discountedCost));
 
                     return (
                       <>
@@ -926,7 +993,7 @@ const Book_Add: React.FC = () => {
 
                         <div className="receipt-row">
                           <span>Down Payment</span>
-                          <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
+                          <span>₱{dp.toFixed(2)}</span>
                         </div>
 
                         <div className="receipt-row">
@@ -940,7 +1007,7 @@ const Book_Add: React.FC = () => {
                         </div>
 
                         <div className="receipt-row">
-                          <span>System Cost</span>
+                          <span>System Cost (Payment Basis)</span>
                           <span>₱{calc.discountedCost.toFixed(2)}</span>
                         </div>
 
@@ -962,7 +1029,7 @@ const Book_Add: React.FC = () => {
                         </div>
 
                         <div className="receipt-row">
-                          <span>Remaining Balance</span>
+                          <span>Remaining Balance (After DP)</span>
                           <span>₱{remaining.toFixed(2)}</span>
                         </div>
 
@@ -972,8 +1039,8 @@ const Book_Add: React.FC = () => {
                         </div>
 
                         <div className="receipt-total">
-                          <span>{disp.label.toUpperCase()}</span>
-                          <span>₱{disp.value.toFixed(2)}</span>
+                          <span>{bottomLabel}</span>
+                          <span>₱{bottomValue.toFixed(2)}</span>
                         </div>
                       </>
                     );

@@ -10,7 +10,7 @@
 // ✅ Receipt: removed "Edit DP" button
 // ✅ Receipt auto-updates balance/change after DP edit (because row + selectedSession are updated)
 // ✅ Phone # column beside Full Name
-// ✅ View to Customer toggle via localStorage
+// ✅ View to Customer toggle now supports CROSS-DEVICE via Supabase table: customer_view_state
 // ✅ Search bar (Full Name only)
 // ✅ No "any"
 
@@ -22,9 +22,16 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 
-/* ✅ LOCAL STORAGE KEYS (shared with Book_Add) */
-const LS_VIEW_ENABLED = "customer_view_enabled";
-const LS_SESSION_ID = "customer_view_session_id";
+/**
+ * ✅ CROSS-DEVICE CUSTOMER VIEW (Supabase)
+ * Create table:
+ *   customer_view_state(session_id uuid primary key, enabled boolean, updated_at timestamptz)
+ */
+type CustomerViewRow = {
+  session_id: string;
+  enabled: boolean;
+  updated_at: string;
+};
 
 type DiscountKind = "none" | "percent" | "amount";
 
@@ -138,22 +145,31 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
   return { gcash: g, cash: c };
 };
 
-/* ✅ VIEW-TO-CUSTOMER helpers */
-const isCustomerViewOnFor = (sessionId: string): boolean => {
-  const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
-  const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
-  return enabled && sid === sessionId;
+/* =========================
+   CROSS-DEVICE VIEW HELPERS
+========================= */
+const stopAllCustomerViews = async (): Promise<void> => {
+  // turn OFF any enabled rows (simple global stop)
+  const { error } = await supabase.from("customer_view_state").update({ enabled: false }).eq("enabled", true);
+  if (error) throw error;
 };
 
-const setCustomerView = (enabled: boolean, sessionId: string | null): void => {
-  localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
-  if (enabled && sessionId) localStorage.setItem(LS_SESSION_ID, sessionId);
-  else localStorage.removeItem(LS_SESSION_ID);
+const setCustomerViewForSession = async (enabled: boolean, sessionId: string): Promise<void> => {
+  // Ensure single active "view" (optional but recommended):
+  // 1) disable any existing enabled row
+  // 2) upsert current session row
+  if (enabled) await stopAllCustomerViews();
+
+  const { error } = await supabase
+    .from("customer_view_state")
+    .upsert({ session_id: sessionId, enabled }, { onConflict: "session_id" });
+
+  if (error) throw error;
 };
 
-const stopCustomerView = (): void => {
-  localStorage.setItem(LS_VIEW_ENABLED, "false");
-  localStorage.removeItem(LS_SESSION_ID);
+const isCustomerViewOnForSession = (active: CustomerViewRow | null, sessionId: string): boolean => {
+  if (!active) return false;
+  return active.enabled === true && String(active.session_id) === String(sessionId);
 };
 
 const Customer_Lists: React.FC = () => {
@@ -163,7 +179,9 @@ const Customer_Lists: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
 
-  const [, setViewTick] = useState<number>(0);
+  // ✅ customer view status (from DB)
+  const [activeView, setActiveView] = useState<CustomerViewRow | null>(null);
+  const [viewBusy, setViewBusy] = useState<boolean>(false);
 
   // Date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
@@ -194,6 +212,17 @@ const Customer_Lists: React.FC = () => {
 
   useEffect(() => {
     void fetchCustomerSessions();
+    void readActiveCustomerView();
+    const unsub = subscribeCustomerViewRealtime();
+
+    return () => {
+      // cleanup realtime
+      try {
+        if (typeof unsub === "function") unsub();
+      } catch {
+        // ignore
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -229,6 +258,45 @@ const Customer_Lists: React.FC = () => {
 
     setSessions((data as CustomerSession[]) || []);
     setLoading(false);
+  };
+
+  /* =========================
+     CUSTOMER VIEW STATE (DB)
+  ========================= */
+  const readActiveCustomerView = async (): Promise<void> => {
+    const { data, error } = await supabase
+      .from("customer_view_state")
+      .select("session_id, enabled, updated_at")
+      .eq("enabled", true)
+      .order("updated_at", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error(error);
+      setActiveView(null);
+      return;
+    }
+
+    const row = (data?.[0] ?? null) as CustomerViewRow | null;
+    setActiveView(row);
+  };
+
+  const subscribeCustomerViewRealtime = (): (() => void) => {
+    const channel = supabase
+      .channel("customer_view_state_changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "customer_view_state" },
+        () => {
+          void readActiveCustomerView();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   };
 
   const phoneText = (s: CustomerSession): string => {
@@ -594,6 +662,48 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
+  /* =========================
+     STAFF BUTTON ACTIONS
+  ========================= */
+  const toggleCustomerViewForSelected = async (): Promise<void> => {
+    if (!selectedSession) return;
+
+    const currentlyOn = isCustomerViewOnForSession(activeView, selectedSession.id);
+
+    try {
+      setViewBusy(true);
+      if (currentlyOn) {
+        await setCustomerViewForSession(false, selectedSession.id);
+      } else {
+        await setCustomerViewForSession(true, selectedSession.id);
+      }
+      await readActiveCustomerView();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Failed to update View to Customer.");
+    } finally {
+      setViewBusy(false);
+    }
+  };
+
+  const closeReceipt = async (): Promise<void> => {
+    // Only stop if this selected session is the active one
+    if (selectedSession && isCustomerViewOnForSession(activeView, selectedSession.id)) {
+      try {
+        setViewBusy(true);
+        await setCustomerViewForSession(false, selectedSession.id);
+        await readActiveCustomerView();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(e);
+      } finally {
+        setViewBusy(false);
+      }
+    }
+    setSelectedSession(null);
+  };
+
   return (
     <IonPage>
       <IonContent className="staff-content">
@@ -604,6 +714,11 @@ const Customer_Lists: React.FC = () => {
               <h2 className="customer-lists-title">Customer Lists - Non Reservation</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
+              </div>
+              {/* ✅ Show current active view info */}
+              <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
+                Customer View:{" "}
+                <strong>{activeView?.enabled ? `ON (${String(activeView.session_id).slice(0, 8)}...)` : "OFF"}</strong>
               </div>
             </div>
 
@@ -692,6 +807,8 @@ const Customer_Lists: React.FC = () => {
 
                     const dp = getDownPayment(session);
 
+                    const viewOn = isCustomerViewOnForSession(activeView, session.id);
+
                     return (
                       <tr key={session.id}>
                         <td>{session.date}</td>
@@ -752,9 +869,7 @@ const Customer_Lists: React.FC = () => {
 
                         <td>
                           <button
-                            className={`receipt-btn pay-badge ${
-                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
-                            }`}
+                            className={`receipt-btn pay-badge ${toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"}`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
@@ -780,6 +895,13 @@ const Customer_Lists: React.FC = () => {
                             <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
                               View Receipt
                             </button>
+
+                            {/* ✅ quick indicator */}
+                            {viewOn ? (
+                              <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span>
+                            ) : (
+                              <span style={{ fontSize: 11, opacity: 0.45 }}>—</span>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1010,7 +1132,7 @@ const Customer_Lists: React.FC = () => {
 
           {/* RECEIPT MODAL */}
           {selectedSession && (
-            <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
+            <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
 
@@ -1105,9 +1227,6 @@ const Customer_Lists: React.FC = () => {
                       ? ({ label: "Total Balance", value: dpBalance } as const)
                       : ({ label: "Total Change", value: dpChange } as const);
 
-                  // ✅ Bottom summary switches label:
-                  // - If may balance: PAYMENT DUE = balance
-                  // - If sobra DP: TOTAL CHANGE = change
                   const bottomLabel = dpBalance > 0 ? "PAYMENT DUE" : "TOTAL CHANGE";
                   const bottomValue = dpBalance > 0 ? dpBalance : dpChange;
 
@@ -1165,7 +1284,6 @@ const Customer_Lists: React.FC = () => {
                         <span className="receipt-status">{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
                       </div>
 
-                      {/* ✅ FIX: If sobra DP, label becomes TOTAL CHANGE */}
                       <div className="receipt-total">
                         <span>{bottomLabel}</span>
                         <span>₱{bottomValue.toFixed(2)}</span>
@@ -1180,30 +1298,11 @@ const Customer_Lists: React.FC = () => {
                 </p>
 
                 <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
-                  <button
-                    className="receipt-btn"
-                    onClick={() => {
-                      if (!selectedSession) return;
-
-                      const on = isCustomerViewOnFor(selectedSession.id);
-                      setCustomerView(!on, !on ? selectedSession.id : null);
-
-                      setViewTick((x) => x + 1);
-                    }}
-                  >
-                    {selectedSession && isCustomerViewOnFor(selectedSession.id)
-                      ? "Stop View to Customer"
-                      : "View to Customer"}
+                  <button className="receipt-btn" onClick={() => void toggleCustomerViewForSelected()} disabled={viewBusy}>
+                    {isCustomerViewOnForSession(activeView, selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
                   </button>
 
-                  <button
-                    className="close-btn"
-                    onClick={() => {
-                      stopCustomerView();
-                      setViewTick((x) => x + 1);
-                      setSelectedSession(null);
-                    }}
-                  >
+                  <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy}>
                     Close
                   </button>
                 </div>
