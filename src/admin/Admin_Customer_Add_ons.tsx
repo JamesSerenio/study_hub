@@ -1,3 +1,14 @@
+// src/pages/Admin_Customer_Add_ons.tsx
+// ✅ UI MATCHES Customer_Lists (TOPBAR + DATE PILL CALENDAR + TABLE WRAP + NOTES)
+// ✅ Same className + UI style as Customer_Lists
+// ✅ Payment modal: GCash/Cash auto updates to match Due
+// ✅ Save Payment auto sets PAID/UNPAID (paid >= due) + paid_at
+// ✅ Manual PAID/UNPAID toggle works (can return to UNPAID even if fully paid)
+// ✅ Receipt status follows manual is_paid
+// ✅ Excel export (REAL XLSX + images)
+// ✅ NEW: show SIZE in items table + receipt
+// ✅ No "any"
+
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
@@ -34,7 +45,8 @@ interface AddOnLookup {
   id: string;
   name: string;
   category: string;
-  image_url: string | null; // ✅ NEW (for excel image)
+  size: string | null; // ✅ NEW
+  image_url: string | null; // ✅ for excel image
 }
 
 interface CustomerAddOnMerged {
@@ -48,7 +60,8 @@ interface CustomerAddOnMerged {
   seat_number: string;
   item_name: string;
   category: string;
-  image_url: string | null; // ✅ NEW
+  size: string | null; // ✅ NEW
+  image_url: string | null;
 
   gcash_amount: number;
   cash_amount: number;
@@ -60,6 +73,7 @@ type OrderItem = {
   id: string; // customer_session_add_ons.id
   add_on_id: string;
   category: string;
+  size: string | null; // ✅ NEW
   item_name: string;
   quantity: number;
   price: number;
@@ -126,6 +140,11 @@ const ms = (iso: string): number => {
 const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
 
 const moneyText = (n: number): string => `₱${round2(n).toFixed(2)}`;
+
+const sizeText = (s: string | null | undefined): string => {
+  const v = String(s ?? "").trim();
+  return v.length > 0 ? v : "—";
+};
 
 const formatDateTime = (iso: string): string => {
   const d = new Date(iso);
@@ -239,7 +258,6 @@ const guessImageExtension = (url: string, contentType: string | null): "png" | "
   const ct = (contentType ?? "").toLowerCase();
   if (ct.includes("png")) return "png";
   if (ct.includes("jpg") || ct.includes("jpeg")) return "jpeg";
-
   const u = url.toLowerCase();
   if (u.endsWith(".png")) return "png";
   return "jpeg";
@@ -326,10 +344,10 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
     const addOnIds = Array.from(new Set(sessionRows.map((r) => r.add_on_id)));
 
-    // ✅ include image_url
+    // ✅ include size + image_url
     const { data: addOnRows, error: addOnErr } = await supabase
       .from("add_ons")
-      .select("id, name, category, image_url")
+      .select("id, name, category, size, image_url")
       .in("id", addOnIds)
       .returns<AddOnLookup[]>();
 
@@ -355,6 +373,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         seat_number: r.seat_number,
         item_name: addOn?.name ?? "-",
         category: addOn?.category ?? "-",
+        size: addOn?.size ?? null, // ✅ NEW
         image_url: addOn?.image_url ?? null,
 
         gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
@@ -411,6 +430,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         id: row.id,
         add_on_id: row.add_on_id,
         category: row.category,
+        size: row.size, // ✅ NEW
         item_name: row.item_name,
         quantity: Number(row.quantity) || 0,
         price: row.price,
@@ -429,10 +449,10 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
 
     return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
-  }, [filteredRecords, records]);
+  }, [filteredRecords]);
 
   /* =========================================================
-     ✅ NEW: Export to EXCEL (.xlsx) with IMAGES + nice UI
+     ✅ Export to EXCEL (.xlsx) with IMAGES + SIZE
   ========================================================= */
   const exportToExcelByDate = async (): Promise<void> => {
     if (!selectedDate) {
@@ -452,8 +472,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       const ws = wb.addWorksheet("AddOns", { views: [{ state: "frozen", ySplit: 7 }] });
 
-      // columns
-      // A Image | B Date | C Time | D Full Name | E Seat | F Category | G Item | H Qty | I Price | J Total
+      // A Image | B Date | C Time | D Full Name | E Seat | F Category | G Size | H Item | I Qty | J Price | K Total
       ws.columns = [
         { header: "Image", key: "img", width: 12 }, // A
         { header: "Date", key: "date", width: 12 }, // B
@@ -461,17 +480,18 @@ const Admin_Customer_Add_ons: React.FC = () => {
         { header: "Full Name", key: "name", width: 22 }, // D
         { header: "Seat", key: "seat", width: 10 }, // E
         { header: "Category", key: "cat", width: 14 }, // F
-        { header: "Item", key: "item", width: 22 }, // G
-        { header: "Qty", key: "qty", width: 6 }, // H
-        { header: "Price", key: "price", width: 12 }, // I
-        { header: "Total", key: "total", width: 12 }, // J
+        { header: "Size", key: "size", width: 10 }, // G ✅
+        { header: "Item", key: "item", width: 22 }, // H
+        { header: "Qty", key: "qty", width: 6 }, // I
+        { header: "Price", key: "price", width: 12 }, // J
+        { header: "Total", key: "total", width: 12 }, // K
       ];
 
       // Title block
-      ws.mergeCells(1, 1, 1, 10);
-      ws.mergeCells(2, 1, 2, 10);
-      ws.mergeCells(3, 1, 3, 10);
-      ws.mergeCells(4, 1, 4, 10);
+      ws.mergeCells(1, 1, 1, 11);
+      ws.mergeCells(2, 1, 2, 11);
+      ws.mergeCells(3, 1, 3, 11);
+      ws.mergeCells(4, 1, 4, 11);
 
       ws.getCell("A1").value = "ADMIN ADD-ONS REPORT";
       ws.getCell("A2").value = `Date: ${selectedDate}`;
@@ -492,8 +512,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
       // Header row 6
       const headerRowIndex = 6;
       const h = ws.getRow(headerRowIndex);
-      h.values = ["Image", "Date", "Time", "Full Name", "Seat", "Category", "Item", "Qty", "Price", "Total"];
-      applyHeaderStyle(h, 1, 10);
+      h.values = ["Image", "Date", "Time", "Full Name", "Seat", "Category", "Size", "Item", "Qty", "Price", "Total"];
+      applyHeaderStyle(h, 1, 11);
       h.commit();
 
       // Data starts row 7
@@ -513,43 +533,46 @@ const Admin_Customer_Add_ons: React.FC = () => {
         row.getCell(4).value = r.full_name || "-";
         row.getCell(5).value = r.seat_number || "-";
         row.getCell(6).value = r.category || "-";
-        row.getCell(7).value = r.item_name || "-";
-        row.getCell(8).value = Number(r.quantity ?? 0);
+        row.getCell(7).value = sizeText(r.size); // ✅ SIZE
+        row.getCell(8).value = r.item_name || "-";
+        row.getCell(9).value = Number(r.quantity ?? 0);
 
-        row.getCell(9).value = Number(r.price ?? 0);
-        row.getCell(9).numFmt = '"₱"#,##0.00';
-
-        row.getCell(10).value = Number(r.total ?? 0);
+        row.getCell(10).value = Number(r.price ?? 0);
         row.getCell(10).numFmt = '"₱"#,##0.00';
+
+        row.getCell(11).value = Number(r.total ?? 0);
+        row.getCell(11).numFmt = '"₱"#,##0.00';
 
         row.height = 46;
 
         // alignments
-        for (let c = 1; c <= 10; c++) {
+        for (let c = 1; c <= 11; c++) {
           const cell = row.getCell(c);
           cell.alignment =
-            c === 7 || c === 4
+            c === 8 || c === 4
               ? { vertical: "middle", horizontal: "left", wrapText: true }
-              : { vertical: "middle", horizontal: c === 8 ? "center" : "left", wrapText: true };
+              : { vertical: "middle", horizontal: c === 9 ? "center" : "left", wrapText: true };
         }
 
         // borders
-        applyBorders(row, 1, 10);
+        applyBorders(row, 1, 11);
 
         // ✅ IMAGE in column A
         const url = (r.image_url ?? "").trim();
         if (url) {
-          // try use cache
           const cached = imageCache.get(url);
           if (cached) {
             ws.addImage(cached.imageId, {
-              tl: { col: 0.15, row: rIdx - 0.85 }, // A cell area
+              tl: { col: 0.15, row: rIdx - 0.85 },
               ext: { width: 52, height: 52 },
             });
           } else {
             const img = await fetchImageBase64(url);
             if (img) {
-              const imageId = wb.addImage({ base64: `data:image/${img.extension};base64,${img.base64}`, extension: img.extension });
+              const imageId = wb.addImage({
+                base64: `data:image/${img.extension};base64,${img.base64}`,
+                extension: img.extension,
+              });
               imageCache.set(url, { imageId, ext: img.extension });
 
               ws.addImage(imageId, {
@@ -567,53 +590,30 @@ const Admin_Customer_Add_ons: React.FC = () => {
       // TOTAL row
       const totalRowIndex = rIdx + 1;
       const totalRow = ws.getRow(totalRowIndex);
-      totalRow.getCell(9).value = "TOTAL:";
-      totalRow.getCell(9).font = { bold: true };
-      totalRow.getCell(9).alignment = { vertical: "middle", horizontal: "right" };
-
-      // sum totals in column J (10)
-      totalRow.getCell(10).value = { formula: `SUM(J7:J${rIdx - 1})` };
-      totalRow.getCell(10).numFmt = '"₱"#,##0.00';
+      totalRow.getCell(10).value = "TOTAL:";
       totalRow.getCell(10).font = { bold: true };
+      totalRow.getCell(10).alignment = { vertical: "middle", horizontal: "right" };
+
+      totalRow.getCell(11).value = { formula: `SUM(K7:K${rIdx - 1})` };
+      totalRow.getCell(11).numFmt = '"₱"#,##0.00';
+      totalRow.getCell(11).font = { bold: true };
       totalRow.height = 20;
 
-      applyBorders(totalRow, 1, 10);
+      applyBorders(totalRow, 1, 11);
       totalRow.commit();
 
-      // ✅ auto-fit columns (except image col A)
+      // auto-fit columns (except image col A)
       autoFitColumns(
         ws,
         6,
         totalRowIndex,
-        [2, 3, 4, 5, 6, 7, 8, 9, 10],
-        {
-          2: 10,
-          3: 8,
-          4: 16,
-          5: 8,
-          6: 10,
-          7: 14,
-          8: 6,
-          9: 10,
-          10: 10,
-        },
-        {
-          2: 14,
-          3: 12,
-          4: 28,
-          5: 12,
-          6: 18,
-          7: 30,
-          8: 8,
-          9: 14,
-          10: 14,
-        }
+        [2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        { 2: 10, 3: 8, 4: 16, 5: 8, 6: 10, 7: 8, 8: 14, 9: 6, 10: 10, 11: 10 },
+        { 2: 14, 3: 12, 4: 28, 5: 12, 6: 18, 7: 12, 8: 30, 9: 8, 10: 14, 11: 14 }
       );
 
-      // keep image col fixed
       ws.getColumn(1).width = 12;
 
-      // Download
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -882,11 +882,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                   Refresh
                 </button>
 
-                <button
-                  className="receipt-btn"
-                  onClick={() => void exportToExcelByDate()}
-                  disabled={filteredRecords.length === 0}
-                >
+                <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={filteredRecords.length === 0}>
                   Export to Excel
                 </button>
 
@@ -941,7 +937,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
                               <div className="item-row" key={it.id}>
                                 <div className="item-left">
                                   <div className="item-title">
-                                    {it.item_name} <span className="item-cat">({it.category})</span>
+                                    {it.item_name}{" "}
+                                    <span className="item-cat">
+                                      ({it.category}
+                                      {String(it.size ?? "").trim() ? ` • ${sizeText(it.size)}` : ""})
+                                    </span>
                                   </div>
                                   <div className="item-sub">
                                     Qty: {it.quantity} • {moneyText(it.price)}
@@ -997,11 +997,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                               {voidingId === o.key ? "Voiding..." : "Void"}
                             </button>
 
-                            <button
-                              className="receipt-btn admin-neutral"
-                              disabled={busyOrder}
-                              onClick={() => void deleteOrder(o)}
-                            >
+                            <button className="receipt-btn admin-neutral" disabled={busyOrder} onClick={() => void deleteOrder(o)}>
                               {deletingId === o.key ? "Deleting..." : "Delete"}
                             </button>
                           </div>
@@ -1122,7 +1118,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
                     <div className="receipt-item-row" key={it.id}>
                       <div className="receipt-item-left">
                         <div className="receipt-item-title">
-                          {it.item_name} <span className="item-cat">({it.category})</span>
+                          {it.item_name}{" "}
+                          <span className="item-cat">
+                            ({it.category}
+                            {String(it.size ?? "").trim() ? ` • ${sizeText(it.size)}` : ""})
+                          </span>
                         </div>
                         <div className="receipt-item-sub">
                           {it.quantity} × {moneyText(it.price)}
