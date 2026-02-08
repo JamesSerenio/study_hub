@@ -60,12 +60,11 @@ interface CustomerSessionReceipt {
   time_ended: string;
   hour_avail: string;
 
-  reservation: string | null; // "yes" | "no"
-  reservation_date: string | null; // YYYY-MM-DD
+  reservation: string | null;
+  reservation_date: string | null;
 
   total_amount: number;
 
-  // ✅ from DB (same as Customer_Lists)
   down_payment: number;
 
   discount_kind: DiscountKind;
@@ -244,7 +243,7 @@ const getBaseSystemCost = (s: CustomerSessionReceipt): number => {
   return toMoney(s.total_amount);
 };
 
-// ✅ display balance/change using DB down_payment (NOT fixed 50)
+// ✅ display balance/change using DB down_payment
 const getDisplayAmount = (s: CustomerSessionReceipt): { label: "Total Balance" | "Total Change"; value: number } => {
   const base = getBaseSystemCost(s);
   const kind = s.discount_kind ?? "none";
@@ -297,8 +296,11 @@ const Book_Add: React.FC = () => {
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  // ✅ keep last good view state (prevents blinking on transient errors)
+  // ✅ keep last good view state (prevents blinking)
   const lastGoodRef = useRef<{ enabled: boolean; sessionId: string }>({ enabled: false, sessionId: "" });
+
+  // ✅ prevent older requests overwriting newer UI (race guard)
+  const fetchSeqRef = useRef<number>(0);
 
   const canOpenReceipt = useMemo(
     () => customerViewEnabled && customerSessionId.length > 0,
@@ -326,41 +328,32 @@ const Book_Add: React.FC = () => {
       .maybeSingle();
 
     if (error) {
-      // ✅ IMPORTANT: do NOT auto-close / do NOT wipe UI
-      // keep last good state
+      // ✅ don't wipe anything on transient errors
       return;
     }
 
     const row = (data ?? null) as CustomerViewRow | null;
-
-    if (!row) {
-      // row missing -> keep last good state (no blinking)
-      return;
-    }
+    if (!row) return;
 
     const enabled = toBool(row.enabled);
     const sid = String(row.session_id ?? "").trim();
 
-    // ✅ Only change state if different (prevents rerender spam)
     const prev = lastGoodRef.current;
     if (prev.enabled === enabled && prev.sessionId === sid) return;
 
     applyViewState(enabled, sid);
 
-    // If receipt is open and session changed -> refresh receipt
-    if (showReceipt && enabled && sid) {
-      void fetchReceiptById(sid);
-    }
-
-    // If staff disabled view -> keep overlay open but clear the receipt data (optional)
+    // if staff disabled view while open, keep overlay but show waiting
     if (!enabled) {
+      // keep last receipt (optional), but usually better to clear since no longer allowed
       setReceipt(null);
       setReceiptLoading(false);
+    } else if (showReceipt && enabled && sid) {
+      void fetchReceiptById(sid, { silent: true });
     }
   };
 
   const startCustomerViewRealtime = (): void => {
-    // realtime (best)
     const ch = supabase
       .channel("customer_view_state_changes_bookadd_stable")
       .on("postgres_changes", { event: "*", schema: "public", table: VIEW_STATE_TABLE }, (payload) => {
@@ -376,19 +369,21 @@ const Book_Add: React.FC = () => {
 
         applyViewState(enabled, sid);
 
-        if (showReceipt && enabled && sid) {
-          void fetchReceiptById(sid);
-        }
         if (!enabled) {
           setReceipt(null);
           setReceiptLoading(false);
+          return;
+        }
+
+        if (showReceipt && enabled && sid) {
+          void fetchReceiptById(sid, { silent: true });
         }
       })
       .subscribe();
 
     channelRef.current = ch;
 
-    // polling fallback (gentle)
+    // polling fallback
     if (pollRef.current) window.clearInterval(pollRef.current);
     pollRef.current = window.setInterval(() => {
       void readCustomerViewFromDB();
@@ -412,11 +407,21 @@ const Book_Add: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ 1) try customer_sessions 2) fallback promo_bookings
-  const fetchReceiptById = async (id: string): Promise<void> => {
+  /**
+   * ✅ FIX: This no longer clears receipt on transient errors.
+   * ✅ Only sets receipt null when BOTH queries succeed (no error) but no data found.
+   * ✅ "silent" option prevents blinking/spinner on background refresh.
+   */
+  const fetchReceiptById = async (
+    id: string,
+    opts?: { silent?: boolean }
+  ): Promise<void> => {
     if (!id) return;
 
-    setReceiptLoading(true);
+    const silent = Boolean(opts?.silent);
+    const seq = ++fetchSeqRef.current;
+
+    if (!silent) setReceiptLoading(true);
 
     // 1) customer_sessions
     const cs = await supabase
@@ -426,6 +431,9 @@ const Book_Add: React.FC = () => {
       )
       .eq("id", id)
       .maybeSingle();
+
+    // if a newer fetch started, ignore this result
+    if (seq !== fetchSeqRef.current) return;
 
     if (!cs.error && cs.data) {
       const d = cs.data as {
@@ -486,7 +494,13 @@ const Book_Add: React.FC = () => {
       };
 
       setReceipt(rec);
-      setReceiptLoading(false);
+      if (!silent) setReceiptLoading(false);
+      return;
+    }
+
+    // ✅ if customer_sessions had an error, do NOT wipe receipt (transient)
+    if (cs.error) {
+      if (!silent) setReceiptLoading(false);
       return;
     }
 
@@ -520,6 +534,8 @@ const Book_Add: React.FC = () => {
       )
       .eq("id", id)
       .maybeSingle();
+
+    if (seq !== fetchSeqRef.current) return;
 
     if (!pb.error && pb.data) {
       type PackageJoin = { title: string | null } | { title: string | null }[] | null;
@@ -587,22 +603,28 @@ const Book_Add: React.FC = () => {
       };
 
       setReceipt(rec);
-      setReceiptLoading(false);
+      if (!silent) setReceiptLoading(false);
       return;
     }
 
-    // ✅ do NOT force-close overlay; just show "No receipt found."
+    // ✅ if promo_bookings had an error, do NOT wipe receipt (transient)
+    if (pb.error) {
+      if (!silent) setReceiptLoading(false);
+      return;
+    }
+
+    // ✅ ONLY NOW: both queries succeeded (no error) but no data -> truly not found
     setReceipt(null);
-    setReceiptLoading(false);
+    if (!silent) setReceiptLoading(false);
   };
 
-  // ✅ auto-refresh receipt while open (for OPEN sessions)
+  // ✅ auto-refresh receipt while open (silent refresh; no blink)
   useEffect(() => {
     if (!showReceipt) return;
     if (!customerViewEnabled || !customerSessionId) return;
 
     const t = window.setInterval(() => {
-      void fetchReceiptById(customerSessionId);
+      void fetchReceiptById(customerSessionId, { silent: true });
     }, 2000);
 
     return () => window.clearInterval(t);
@@ -612,7 +634,7 @@ const Book_Add: React.FC = () => {
   const openReceipt = async (): Promise<void> => {
     if (!customerViewEnabled || !customerSessionId) return;
     setShowReceipt(true);
-    await fetchReceiptById(customerSessionId);
+    await fetchReceiptById(customerSessionId, { silent: false });
   };
 
   const handlePromoSaved = (): void => {
@@ -638,15 +660,13 @@ const Book_Add: React.FC = () => {
           <img src={leaves} className="leaf-img" alt="leaf" />
         </div>
 
-        {/* ✅ WHITE BEAR (DISPLAY ONLY) */}
+        {/* ✅ WHITE BEAR */}
         <div className="bookadd-bear" aria-hidden="true">
           <img src={whiteBear} className="bookadd-bear-img" alt="" draggable={false} />
         </div>
 
-        {/* ✅ CONTENT */}
         <div className="bookadd-wrapper">
           <div className="bookadd-hero-card">
-            {/* HEADER */}
             <div className="bookadd-hero-header">
               <div className="bookadd-hero-brand">
                 <button
@@ -666,7 +686,6 @@ const Book_Add: React.FC = () => {
                 </div>
               </div>
 
-              {/* ✅ CHIP = click to open receipt when enabled */}
               <button
                 type="button"
                 className={`bookadd-hero-chip ${canOpenReceipt ? "is-receipt" : ""}`}
@@ -680,13 +699,11 @@ const Book_Add: React.FC = () => {
               </button>
             </div>
 
-            {/* TOPBAR */}
             <div className="bookadd-topbar">
               <p className="bookadd-topbar-title">Choose Action</p>
               <p className="bookadd-topbar-subtitle">Book your seat, choose promos, or order add-ons separately.</p>
             </div>
 
-            {/* ACTION BUTTONS */}
             <div className="bookadd-actions">
               <div className="bookadd-btn-card bookadd-btn-booking">
                 <span className="bookadd-btn-label">Booking</span>
@@ -726,12 +743,7 @@ const Book_Add: React.FC = () => {
           seatGroups={SEAT_GROUPS}
         />
 
-        <PromoModal
-          isOpen={isPromoOpen}
-          onClose={() => setIsPromoOpen(false)}
-          onSaved={handlePromoSaved}
-          seatGroups={SEAT_GROUPS}
-        />
+        <PromoModal isOpen={isPromoOpen} onClose={() => setIsPromoOpen(false)} onSaved={handlePromoSaved} seatGroups={SEAT_GROUPS} />
 
         <AddOnsModal
           isOpen={isAddOnsOpen}
@@ -771,10 +783,7 @@ const Book_Add: React.FC = () => {
           ]}
         />
 
-        {/* ✅ RECEIPT OVERLAY
-            ✅ FIXED: does NOT depend on canOpenReceipt
-            ✅ stays open (no blinking) even if state momentarily fails
-        */}
+        {/* ✅ RECEIPT OVERLAY */}
         {showReceipt && (
           <div className="receipt-overlay" onClick={() => setShowReceipt(false)}>
             <div
@@ -797,7 +806,6 @@ const Book_Add: React.FC = () => {
 
               <hr />
 
-              {/* If view disabled while overlay open, show steady message */}
               {!customerViewEnabled || !customerSessionId ? (
                 <p className="receipt-footer" style={{ textAlign: "center" }}>
                   Waiting for staff to enable <strong>View to Customer</strong>...
@@ -812,7 +820,7 @@ const Book_Add: React.FC = () => {
                 </p>
               ) : isPromoReceipt(receipt) ? (
                 <>
-                  {/* ================= PROMO RECEIPT ================= */}
+                  {/* PROMO RECEIPT */}
                   <div className="receipt-row">
                     <span>Date</span>
                     <span>{new Date(receipt.created_at).toLocaleString("en-PH")}</span>
@@ -878,11 +886,7 @@ const Book_Add: React.FC = () => {
 
                   {(() => {
                     const base = round2(Math.max(0, toMoney(receipt.price)));
-                    const { discountedCost, discountAmount } = applyDiscount(
-                      base,
-                      receipt.discount_kind,
-                      receipt.discount_value
-                    );
+                    const { discountedCost, discountAmount } = applyDiscount(base, receipt.discount_kind, receipt.discount_value);
                     const due = round2(discountedCost);
 
                     const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount)));
@@ -955,7 +959,7 @@ const Book_Add: React.FC = () => {
                 </>
               ) : (
                 <>
-                  {/* ================= CUSTOMER SESSION RECEIPT ================= */}
+                  {/* CUSTOMER SESSION RECEIPT */}
                   {isReservationSession(receipt) && (
                     <div className="receipt-row">
                       <span>Reservation Date</span>
