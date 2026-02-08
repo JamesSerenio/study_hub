@@ -9,6 +9,7 @@
 // ✅ Export to Excel (.xlsx) with nice layout
 // ✅ Excel NO ID column
 // ✅ Excel embeds actual images (not URL) using ExcelJS
+// ✅ NEW: SIZE column (DB add_ons.size) shown in table + edit modal + Excel
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -35,6 +36,8 @@ import {
   IonText,
   IonButtons,
   IonSpinner,
+  IonSelect,
+  IonSelectOption,
 } from "@ionic/react";
 import {
   trash,
@@ -48,11 +51,7 @@ import {
   downloadOutline,
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
-import type {
-  IonSelectCustomEvent,
-  SelectChangeEventDetail,
-} from "@ionic/core";
-import { IonSelect, IonSelectOption } from "@ionic/react";
+import type { IonSelectCustomEvent, SelectChangeEventDetail } from "@ionic/core";
 
 // ✅ Excel with images
 import ExcelJS from "exceljs";
@@ -64,6 +63,7 @@ interface AddOn {
   id: string;
   category: string;
   name: string;
+  size: string | null; // ✅ NEW
   price: number;
   restocked: number;
   sold: number;
@@ -83,6 +83,11 @@ const ymd = (d: Date): string => {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yy}-${mm}-${dd}`;
+};
+
+const normSize = (s: string | null | undefined): string | null => {
+  const v = String(s ?? "").trim();
+  return v.length ? v : null;
 };
 
 const Admin_Item_Lists: React.FC = () => {
@@ -116,10 +121,12 @@ const Admin_Item_Lists: React.FC = () => {
   const fetchAddOns = async (): Promise<void> => {
     setLoading(true);
     try {
+      // ✅ include size in select (using "*", it will be included if column exists)
       const { data, error } = await supabase.from("add_ons").select("*").order("created_at", { ascending: false });
       if (error) throw error;
       setAddOns((data as AddOn[]) || []);
     } catch (error: unknown) {
+      // eslint-disable-next-line no-console
       console.error("Error fetching add-ons:", error);
       setToastMessage("Error loading add-ons. Please try again.");
       setShowToast(true);
@@ -161,7 +168,8 @@ const Admin_Item_Lists: React.FC = () => {
     return sortedAddOns.filter((a) => {
       const name = (a.name ?? "").toString().toLowerCase();
       const cat = (a.category ?? "").toString().toLowerCase();
-      return name.includes(q) || cat.includes(q);
+      const size = (a.size ?? "").toString().toLowerCase();
+      return name.includes(q) || cat.includes(q) || size.includes(q); // ✅ include size in search
     });
   }, [sortedAddOns, search]);
 
@@ -172,7 +180,7 @@ const Admin_Item_Lists: React.FC = () => {
   const handleEdit = (id: string): void => {
     const addOnToEdit = addOns.find((a) => a.id === id);
     if (!addOnToEdit) return;
-    setEditingAddOn({ ...addOnToEdit });
+    setEditingAddOn({ ...addOnToEdit, size: normSize(addOnToEdit.size) });
     setNewImageFile(null);
     setShowEditModal(true);
   };
@@ -241,6 +249,9 @@ const Admin_Item_Lists: React.FC = () => {
 
     if (!editingAddOn.name.trim()) return void (setToastMessage("Name is required."), setShowToast(true));
     if (!editingAddOn.category.trim()) return void (setToastMessage("Category is required."), setShowToast(true));
+
+    const fixedSize = normSize(editingAddOn.size);
+
     if (Number.isNaN(editingAddOn.price) || editingAddOn.price < 0)
       return void (setToastMessage("Price must be a valid positive number."), setShowToast(true));
     if (Number.isNaN(editingAddOn.sold) || editingAddOn.sold < 0)
@@ -259,11 +270,13 @@ const Admin_Item_Lists: React.FC = () => {
       }
 
       // ✅ restocked REMOVED from edit update
+      // ✅ size added
       const { error } = await supabase
         .from("add_ons")
         .update({
           category: editingAddOn.category,
           name: editingAddOn.name,
+          size: fixedSize, // ✅ NEW
           price: editingAddOn.price,
           sold: editingAddOn.sold,
           expenses: editingAddOn.expenses,
@@ -277,7 +290,7 @@ const Admin_Item_Lists: React.FC = () => {
         await deleteOldImageIfAny(oldImageUrl);
       }
 
-      const updated: AddOn = { ...editingAddOn, image_url: finalImageUrl };
+      const updated: AddOn = { ...editingAddOn, size: fixedSize, image_url: finalImageUrl };
       setAddOns((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
 
       setToastMessage("Add-on updated successfully.");
@@ -287,6 +300,7 @@ const Admin_Item_Lists: React.FC = () => {
       setEditingAddOn(null);
       setNewImageFile(null);
     } catch (error: unknown) {
+      // eslint-disable-next-line no-console
       console.error("Error updating add-on:", error);
       setToastMessage(`Error updating add-on: ${error instanceof Error ? error.message : "Please try again."}`);
       setShowToast(true);
@@ -323,6 +337,7 @@ const Admin_Item_Lists: React.FC = () => {
 
       void fetchAddOns();
     } catch (error: unknown) {
+      // eslint-disable-next-line no-console
       console.error("Error restocking:", error);
       setToastMessage(`Error restocking: ${error instanceof Error ? error.message : "Please try again."}`);
       setShowToast(true);
@@ -348,6 +363,7 @@ const Admin_Item_Lists: React.FC = () => {
       setToastMessage("Add-on deleted successfully.");
       setShowToast(true);
     } catch (error: unknown) {
+      // eslint-disable-next-line no-console
       console.error("Error deleting add-on:", error);
       setToastMessage(`Error deleting add-on: ${error instanceof Error ? error.message : "Please try again."}`);
       setShowToast(true);
@@ -358,7 +374,7 @@ const Admin_Item_Lists: React.FC = () => {
   };
 
   // =========================
-  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED)
+  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED) + SIZE
   // =========================
 
   const blobToBase64 = (blob: Blob): Promise<string> =>
@@ -399,10 +415,12 @@ const Admin_Item_Lists: React.FC = () => {
         views: [{ state: "frozen", ySplit: 5 }],
       });
 
+      // ✅ Added SIZE column
       ws.columns = [
         { header: "Image", key: "image", width: 14 },
         { header: "Name", key: "name", width: 28 },
         { header: "Category", key: "category", width: 18 },
+        { header: "Size", key: "size", width: 10 }, // ✅ NEW
         { header: "Price", key: "price", width: 12 },
         { header: "Restocked", key: "restocked", width: 12 },
         { header: "Sold", key: "sold", width: 10 },
@@ -413,9 +431,9 @@ const Admin_Item_Lists: React.FC = () => {
       ];
 
       // Title rows
-      ws.mergeCells(1, 1, 1, 10);
-      ws.mergeCells(2, 1, 2, 10);
-      ws.mergeCells(3, 1, 3, 10);
+      ws.mergeCells(1, 1, 1, 11);
+      ws.mergeCells(2, 1, 2, 11);
+      ws.mergeCells(3, 1, 3, 11);
 
       ws.getCell("A1").value = title;
       ws.getCell("A2").value = generated;
@@ -433,6 +451,7 @@ const Admin_Item_Lists: React.FC = () => {
         "Image",
         "Name",
         "Category",
+        "Size",
         "Price",
         "Restocked",
         "Sold",
@@ -452,11 +471,7 @@ const Admin_Item_Lists: React.FC = () => {
           bottom: { style: "thin" },
           right: { style: "thin" },
         };
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFEFEFEF" },
-        };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEFEF" } };
       });
 
       // Data starts at row 6
@@ -468,23 +483,24 @@ const Admin_Item_Lists: React.FC = () => {
         // A column (Image) left blank; image will be placed over it
         r.getCell(2).value = a.name ?? "";
         r.getCell(3).value = a.category ?? "";
-        r.getCell(4).value = Number(a.price ?? 0);
-        r.getCell(5).value = Number(a.restocked ?? 0);
-        r.getCell(6).value = Number(a.sold ?? 0);
-        r.getCell(7).value = Number(a.stocks ?? 0);
-        r.getCell(8).value = Number(a.expenses ?? 0);
-        r.getCell(9).value = Number(a.overall_sales ?? 0);
-        r.getCell(10).value = Number(a.expected_sales ?? 0);
+        r.getCell(4).value = normSize(a.size) ?? "—"; // ✅ SIZE
+        r.getCell(5).value = Number(a.price ?? 0);
+        r.getCell(6).value = Number(a.restocked ?? 0);
+        r.getCell(7).value = Number(a.sold ?? 0);
+        r.getCell(8).value = Number(a.stocks ?? 0);
+        r.getCell(9).value = Number(a.expenses ?? 0);
+        r.getCell(10).value = Number(a.overall_sales ?? 0);
+        r.getCell(11).value = Number(a.expected_sales ?? 0);
 
         r.height = 52;
 
         // Borders + alignment
-        for (let c = 1; c <= 10; c++) {
+        for (let c = 1; c <= 11; c++) {
           const cell = r.getCell(c);
           cell.alignment =
             c === 2
               ? { vertical: "middle", horizontal: "left", wrapText: true }
-              : { vertical: "middle", horizontal: c === 1 ? "center" : "center" };
+              : { vertical: "middle", horizontal: c === 1 ? "center" : "center", wrapText: true };
           cell.border = {
             top: { style: "thin" },
             left: { style: "thin" },
@@ -494,10 +510,10 @@ const Admin_Item_Lists: React.FC = () => {
         }
 
         // Currency formats
-        r.getCell(4).numFmt = '₱#,##0.00'; // Price
-        r.getCell(8).numFmt = '₱#,##0.00'; // Expenses
-        r.getCell(9).numFmt = '₱#,##0.00'; // Overall
-        r.getCell(10).numFmt = '₱#,##0.00'; // Expected
+        r.getCell(5).numFmt = '₱#,##0.00'; // Price
+        r.getCell(9).numFmt = '₱#,##0.00'; // Expenses
+        r.getCell(10).numFmt = '₱#,##0.00'; // Overall
+        r.getCell(11).numFmt = '₱#,##0.00'; // Expected
 
         // ✅ Embed image in column A if available
         if (a.image_url) {
@@ -505,13 +521,12 @@ const Admin_Item_Lists: React.FC = () => {
             const { base64, ext } = await fetchImageBase64(a.image_url);
             const imgId = workbook.addImage({ base64, extension: ext });
 
-            // place image inside cell A(rowIndex)
             ws.addImage(imgId, {
               tl: { col: 0.15, row: rowIndex - 1 + 0.15 },
               ext: { width: 48, height: 48 },
             });
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          } catch (e) {
+          } catch {
+            // eslint-disable-next-line no-console
             console.warn("Image embed failed for:", a.image_url);
           }
         }
@@ -525,13 +540,12 @@ const Admin_Item_Lists: React.FC = () => {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
-      
-
       saveAs(blob, `Item_List_${ymd(now)}.xlsx`);
 
       setToastMessage("Exported to Excel successfully.");
       setShowToast(true);
     } catch (e: unknown) {
+      // eslint-disable-next-line no-console
       console.error("Export Excel error:", e);
       setToastMessage(`Export failed: ${e instanceof Error ? e.message : "Please try again."}`);
       setShowToast(true);
@@ -542,7 +556,11 @@ const Admin_Item_Lists: React.FC = () => {
 
   return (
     <IonPage className="pil-page">
-      <IonHeader className="pil-header"></IonHeader>
+      <IonHeader className="pil-header">
+        <IonToolbar className="pil-toolbar">
+          <IonTitle className="pil-title">Admin Item Lists</IonTitle>
+        </IonToolbar>
+      </IonHeader>
 
       <IonContent className="pil-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
@@ -572,9 +590,7 @@ const Admin_Item_Lists: React.FC = () => {
             <IonSelect
               className="pil-sort-select"
               value={sortKey}
-              onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
-                setSortKey(String(e.detail.value) as SortKey)
-              }
+              onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setSortKey(String(e.detail.value) as SortKey)}
             >
               <IonSelectOption value="category">Category</IonSelectOption>
               <IonSelectOption value="stocks">Stocks</IonSelectOption>
@@ -587,33 +603,28 @@ const Admin_Item_Lists: React.FC = () => {
             <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
           </IonButton>
 
-        {/* ✅ SAME SEARCH BAR AS BOOKING / CUSTOMER LISTS */}
-        <div className="customer-searchbar-inline">
-          <div className="customer-searchbar-inner">
-            <span className="customer-search-icon" aria-hidden="true">
-              🔎
-            </span>
+          {/* ✅ SAME SEARCH BAR AS BOOKING / CUSTOMER LISTS */}
+          <div className="customer-searchbar-inline">
+            <div className="customer-searchbar-inner">
+              <span className="customer-search-icon" aria-hidden="true">
+                🔎
+              </span>
 
-            <input
-              className="customer-search-input"
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
-              placeholder="Search name or category..."
-            />
+              <input
+                className="customer-search-input"
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+                placeholder="Search name, category, or size..."
+              />
 
-            {search.trim() && (
-              <button
-                className="customer-search-clear"
-                type="button"
-                onClick={() => setSearch("")}
-              >
-                Clear
-              </button>
-            )}
+              {search.trim() && (
+                <button className="customer-search-clear" type="button" onClick={() => setSearch("")}>
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-
         </div>
 
         <div className="pil-card">
@@ -642,6 +653,7 @@ const Admin_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col pil-col--img">Image</IonCol>
                   <IonCol className="pil-col pil-col--strong">Name</IonCol>
                   <IonCol className="pil-col">Category</IonCol>
+                  <IonCol className="pil-col">Size</IonCol>
                   <IonCol className="pil-col">Price</IonCol>
                   <IonCol className="pil-col">Restocked</IonCol>
                   <IonCol className="pil-col">Sold</IonCol>
@@ -664,6 +676,7 @@ const Admin_Item_Lists: React.FC = () => {
 
                     <IonCol className="pil-col pil-col--strong">{addOn.name}</IonCol>
                     <IonCol className="pil-col">{addOn.category}</IonCol>
+                    <IonCol className="pil-col">{normSize(addOn.size) ?? "—"}</IonCol>
                     <IonCol className="pil-col">{money2(Number(addOn.price))}</IonCol>
                     <IonCol className="pil-col">{addOn.restocked}</IonCol>
                     <IonCol className="pil-col">{addOn.sold}</IonCol>
@@ -828,6 +841,24 @@ const Admin_Item_Lists: React.FC = () => {
                         setEditingAddOn({
                           ...editingAddOn,
                           category: (e.detail.value ?? "").toString(),
+                        })
+                      }
+                    />
+                  </IonItem>
+
+                  {/* ✅ NEW: SIZE */}
+                  <IonItem className="pil-item">
+                    <IonLabel position="stacked" className="pil-label">
+                      Size (optional)
+                    </IonLabel>
+                    <IonInput
+                      className="pil-input"
+                      value={editingAddOn.size ?? ""}
+                      placeholder='e.g. "Small", "Medium", "Large", "16oz"'
+                      onIonChange={(e) =>
+                        setEditingAddOn({
+                          ...editingAddOn,
+                          size: (e.detail.value ?? "").toString(),
                         })
                       }
                     />
