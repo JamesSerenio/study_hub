@@ -2264,11 +2264,10 @@ ion-content,
   }
 }
 
-@media (orientation: landscape) and (max-height: 600px)
-{
+@media (width: 1028px) and (height: 652px) {
   .bookadd-bear {
-    left: 502px;
-    bottom: 400px;
+    left: 415px;
+    bottom: 480px;
   }
   .bookadd-bear-img {
     width: 200px;
