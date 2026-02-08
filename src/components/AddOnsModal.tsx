@@ -45,7 +45,7 @@ interface SelectedAddOn {
   size: string | null;
   price: number;
   quantity: number;
-  image_url: string | null; // ✅ keep image
+  image_url: string | null;
 }
 
 type SeatGroup = { title: string; seats: string[] };
@@ -56,6 +56,8 @@ type Props = {
   onSaved: () => void;
   seatGroups: SeatGroup[];
 };
+
+type RpcItem = { add_on_id: string; quantity: number };
 
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
 
@@ -69,13 +71,13 @@ const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 
 export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   const [addOnsFullName, setAddOnsFullName] = useState<string>("");
   const [addOnsSeat, setAddOnsSeat] = useState<string>("");
 
   const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
   const [selectedSizes, setSelectedSizes] = useState<string[]>([""]);
-
   const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
 
   // ✅ Item Picker modal states
@@ -94,7 +96,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
   }, [isOpen]);
 
   const fetchAddOns = async (): Promise<void> => {
-    // ✅ show only in-stock items
     const { data, error } = await supabase
       .from("add_ons")
       .select("*")
@@ -106,16 +107,23 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     if (error) {
       // eslint-disable-next-line no-console
       console.error(error);
-      alert("Error loading add-ons.");
+      alert(`Error loading add-ons: ${error.message}`);
       return;
     }
 
     setAddOns((data as AddOn[]) || []);
   };
 
-  const categories = useMemo(() => [...new Set(addOns.map((a) => a.category))], [addOns]);
+  const categories = useMemo(() => {
+    const uniq = Array.from(new Set(addOns.map((a) => a.category).filter((c) => c.trim().length > 0)));
+    uniq.sort((a, b) => a.localeCompare(b));
+    return uniq;
+  }, [addOns]);
 
-  const addOnsTotal = useMemo<number>(() => selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0), [selectedAddOns]);
+  const addOnsTotal = useMemo<number>(
+    () => selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0),
+    [selectedAddOns]
+  );
 
   const selectedSummaryByCategory = useMemo(() => {
     const map = new Map<string, SelectedAddOn[]>();
@@ -172,6 +180,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       if (q > 0) {
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
         if (!addOn) return prev;
+
         return [
           ...prev,
           {
@@ -263,7 +272,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   const categoryHasSizes = (category: string): boolean => getSizesForCategory(category).length > 0;
 
-  // ✅ Items for picker modal (filtered)
   const pickerItems = useMemo(() => {
     const cat = pickerCategory;
     const hasSizes = categoryHasSizes(cat);
@@ -300,7 +308,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
     setSelectedAddOns((prev) => {
       const existing = prev.find((s) => s.id === addOn.id);
-      if (existing) return prev; // already added, change qty in list
+      if (existing) return prev;
       return [
         ...prev,
         {
@@ -318,48 +326,40 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     setIsPickerOpen(false);
   };
 
+  // ✅ FIXED: use RPC so it works on Vercel (RLS-safe)
   const handleSubmitAddOns = async (): Promise<void> => {
     const name = addOnsFullName.trim();
     if (!name) return alert("Full Name is required.");
     if (!addOnsSeat) return alert("Seat Number is required.");
     if (selectedAddOns.length === 0) return alert("Please select at least one add-on.");
 
-    for (const selected of selectedAddOns) {
-      const { data, error } = await supabase.from("add_ons").select("stocks,name").eq("id", selected.id).single();
+    const items: RpcItem[] = selectedAddOns.map((s) => ({
+      add_on_id: s.id,
+      quantity: Math.max(1, Math.floor(toNum(s.quantity))),
+    }));
 
-      if (error) {
-        alert(`Stock check error for ${selected.name}: ${error.message}`);
-        return;
-      }
-
-      const row = data as { stocks: number; name: string };
-      const stocksNow = Math.max(0, Math.floor(toNum(row.stocks)));
-      const nameNow = row.name ?? selected.name;
-
-      if (stocksNow < selected.quantity) {
-        alert(`Insufficient stock for ${nameNow}. Available: ${stocksNow}`);
-        return;
-      }
-    }
-
-    for (const selected of selectedAddOns) {
-      const { error } = await supabase.from("customer_session_add_ons").insert({
-        add_on_id: selected.id,
-        quantity: selected.quantity,
-        price: selected.price,
-        full_name: name,
-        seat_number: addOnsSeat,
+    setIsSaving(true);
+    try {
+      const { error } = await supabase.rpc("place_addon_order", {
+        p_full_name: name,
+        p_seat_number: addOnsSeat,
+        p_items: items,
       });
 
       if (error) {
-        alert(`Error adding ${selected.name}: ${error.message}`);
+        // eslint-disable-next-line no-console
+        console.error(error);
+        alert(`Order failed: ${error.message}`);
         return;
       }
-    }
 
-    void fetchAddOns();
-    onSaved();
-    resetAddOnsForm();
+      await fetchAddOns();
+      onSaved();
+      resetAddOnsForm();
+      onClose();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -380,12 +380,20 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
           <div className="bookadd-card">
             <IonItem className="form-item">
               <IonLabel position="stacked">Full Name *</IonLabel>
-              <IonInput value={addOnsFullName} placeholder="Enter full name" onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")} />
+              <IonInput
+                value={addOnsFullName}
+                placeholder="Enter full name"
+                onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")}
+              />
             </IonItem>
 
             <IonItem className="form-item">
               <IonLabel position="stacked">Seat Number *</IonLabel>
-              <IonSelect value={addOnsSeat} placeholder="Choose seat" onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}>
+              <IonSelect
+                value={addOnsSeat}
+                placeholder="Choose seat"
+                onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}
+              >
                 {seatGroups.map((g) => (
                   <React.Fragment key={g.title}>
                     <IonSelectOption disabled value={`__${g.title}__`}>
@@ -409,7 +417,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
               const hasSizes = categoryHasSizes(category);
               const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
               const pickedSize = (selectedSizes[index] ?? "").trim();
-
               const allowPick = category ? (hasSizes ? pickedSize.length > 0 : true) : false;
 
               return (
@@ -417,7 +424,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   <div className="addon-row">
                     <IonItem className="form-item addon-flex">
                       <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
-                      <IonSelect value={category} placeholder="Choose a category" onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}>
+                      <IonSelect
+                        value={category}
+                        placeholder="Choose a category"
+                        onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}
+                      >
                         {categories.map((cat) => (
                           <IonSelectOption key={`${cat}-${index}`} value={cat}>
                             {cat}
@@ -434,7 +445,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   {category && hasSizes ? (
                     <IonItem className="form-item">
                       <IonLabel position="stacked">Select Size</IonLabel>
-                      <IonSelect value={pickedSize} placeholder="Choose size" onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}>
+                      <IonSelect
+                        value={pickedSize}
+                        placeholder="Choose size"
+                        onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}
+                      >
                         {sizeOptions.map((sz) => (
                           <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
                             {sz}
@@ -445,11 +460,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   ) : null}
 
                   {allowPick ? (
-                    <IonButton
-                      expand="block"
-                      onClick={() => openPicker(category, hasSizes ? pickedSize : "")}
-                      style={{ marginTop: 8 }}
-                    >
+                    <IonButton expand="block" onClick={() => openPicker(category, hasSizes ? pickedSize : "")} style={{ marginTop: 8 }}>
                       Choose {category} Item{hasSizes ? ` (${pickedSize})` : ""}
                     </IonButton>
                   ) : category && hasSizes ? (
@@ -493,7 +504,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                           <IonLabel>
                             <div style={{ fontWeight: 700 }}>
                               {selected.name}{" "}
-                              {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
+                              {cleanSize(selected.size) ? (
+                                <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span>
+                              ) : null}
                             </div>
                             <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
                             <div style={{ marginTop: 4, fontWeight: 700 }}>
@@ -536,8 +549,20 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
               </p>
             </div>
 
-            <IonButton expand="block" onClick={() => void handleSubmitAddOns()}>
-              Submit Order
+            <IonButton expand="block" disabled={isSaving} onClick={() => void handleSubmitAddOns()}>
+              {isSaving ? "Saving..." : "Submit Order"}
+            </IonButton>
+
+            <IonButton
+              expand="block"
+              fill="clear"
+              onClick={() => {
+                resetAddOnsForm();
+                onClose();
+              }}
+              style={{ marginTop: 6 }}
+            >
+              Reset
             </IonButton>
           </div>
         </IonContent>

@@ -1,4 +1,5 @@
 // src/pages/Add_Ons.tsx
+// ✅ FIX: uses RPC (place_addon_order) so SOLD/STOCKS update works on Vercel too
 // ✅ Scroll FIX: page can scroll + card has max-height + internal scroll
 // ✅ Leaves background (Login style)
 // ✅ STRICT TS, NO any
@@ -35,6 +36,7 @@ interface AddOn {
   price: number;
   restocked: number;
   sold: number;
+  expenses_cost: number;
   expenses: number;
   stocks: number;
   overall_sales: number;
@@ -68,6 +70,8 @@ const toNum = (v: unknown): number => {
 
 const norm = (s: string): string => s.trim().toLowerCase();
 const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
+
+type RpcItem = { add_on_id: string; quantity: number };
 
 const Add_Ons: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -125,7 +129,7 @@ const Add_Ons: React.FC = () => {
       if (error) {
         // eslint-disable-next-line no-console
         console.error(error);
-        showError("Error loading add-ons.");
+        showError(`Error loading add-ons: ${error.message}`);
         return;
       }
 
@@ -369,43 +373,24 @@ const Add_Ons: React.FC = () => {
     if (!addOnsSeat) return showError("Seat Number is required.");
     if (selectedAddOns.length === 0) return showError("Please select at least one add-on.");
 
+    // Build RPC payload
+    const items: RpcItem[] = selectedAddOns.map((s) => ({
+      add_on_id: s.id,
+      quantity: Math.max(1, Math.floor(toNum(s.quantity))),
+    }));
+
     setIsLoading(true);
     try {
-      for (const selected of selectedAddOns) {
-        const { data, error } = await supabase
-          .from("add_ons")
-          .select("stocks,name")
-          .eq("id", selected.id)
-          .single();
+      const { error } = await supabase.rpc("place_addon_order", {
+        p_full_name: name,
+        p_seat_number: addOnsSeat,
+        p_items: items,
+      });
 
-        if (error) {
-          showError(`Stock check error for ${selected.name}: ${error.message}`);
-          return;
-        }
-
-        const row = data as { stocks: number; name: string };
-        const stocksNow = Math.max(0, Math.floor(toNum(row.stocks)));
-        const nameNow = row.name ?? selected.name;
-
-        if (stocksNow < selected.quantity) {
-          showError(`Insufficient stock for ${nameNow}. Available: ${stocksNow}`);
-          return;
-        }
-      }
-
-      for (const selected of selectedAddOns) {
-        const { error } = await supabase.from("customer_session_add_ons").insert({
-          add_on_id: selected.id,
-          quantity: selected.quantity,
-          price: selected.price,
-          full_name: name,
-          seat_number: addOnsSeat,
-        });
-
-        if (error) {
-          showError(`Error adding ${selected.name}: ${error.message}`);
-          return;
-        }
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error(error);
+        return showError(`Order failed: ${error.message}`);
       }
 
       await fetchAddOns();
@@ -418,7 +403,6 @@ const Add_Ons: React.FC = () => {
 
   return (
     <IonPage>
-      {/* ✅ IMPORTANT: remove center-lock. Let IonContent scroll naturally */}
       <IonContent fullscreen className="login-content ao-page-scroll">
         {/* Leaves */}
         <div className="leaf leaf-top-left">
@@ -434,9 +418,7 @@ const Add_Ons: React.FC = () => {
           <img src={leaves} className="leaf-img" alt="" />
         </div>
 
-        {/* ✅ wrapper is top-aligned, not centered */}
         <div className="ao-wrapper">
-          {/* ✅ card can internally scroll when long */}
           <div className="ao-card">
             <div className="ao-topbar">
               <IonText className="ao-title">Add-Ons</IonText>
@@ -635,7 +617,9 @@ const Add_Ons: React.FC = () => {
                           <IonLabel>
                             <div style={{ fontWeight: 700 }}>
                               {selected.name}{" "}
-                              {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
+                              {cleanSize(selected.size) ? (
+                                <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span>
+                              ) : null}
                             </div>
                             <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
                             <div style={{ marginTop: 4, fontWeight: 700 }}>
@@ -695,7 +679,7 @@ const Add_Ons: React.FC = () => {
           isOpen={showToast}
           onDidDismiss={() => setShowToast(false)}
           message={toastMsg}
-          duration={2000}
+          duration={2200}
           color={toastColor}
         />
       </IonContent>
