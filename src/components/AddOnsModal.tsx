@@ -4,6 +4,8 @@
 // ✅ THEMED (same as Booking): IonModal className="booking-modal"
 // ✅ Uses: .bookadd-card, .form-item, .summary-section, .summary-text
 // ✅ NEW: show REMAINING stocks per item (in dropdown + selected list)
+// ✅ NEW: SIZE FILTER per category (only shows if that category has sizes)
+// ✅ Items list depends on selected Category + (optional) Size
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -29,6 +31,7 @@ import { supabase } from "../utils/supabaseClient";
 interface AddOn {
   id: string;
   category: string;
+  size: string | null; // ✅ NEW (nullable)
   name: string;
   price: number;
   restocked: number;
@@ -44,6 +47,7 @@ interface SelectedAddOn {
   id: string;
   name: string;
   category: string;
+  size: string | null; // ✅ keep size in chosen items
   price: number;
   quantity: number;
 }
@@ -64,6 +68,9 @@ const toNum = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+const norm = (s: string): string => s.trim().toLowerCase();
+const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
+
 export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
 
@@ -72,6 +79,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   // Each block stores chosen category (duplicates allowed)
   const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
+  // ✅ NEW: size per block ("" means no size filter / not selected)
+  const [selectedSizes, setSelectedSizes] = useState<string[]>([""]);
+
   const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
 
   useEffect(() => {
@@ -80,6 +90,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
     // Ensure at least 1 block on open
     setSelectedCategories((prev) => (prev.length === 0 ? [""] : prev));
+    setSelectedSizes((prev) => (prev.length === 0 ? [""] : prev));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
@@ -90,9 +101,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       .select("*")
       .gt("stocks", 0)
       .order("category", { ascending: true })
+      .order("size", { ascending: true })
       .order("name", { ascending: true });
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error(error);
       alert("Error loading add-ons.");
       return;
@@ -110,11 +123,13 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   const selectedSummaryByCategory = useMemo(() => {
     const map = new Map<string, SelectedAddOn[]>();
+
     for (const item of selectedAddOns) {
       const cat = item.category || "Uncategorized";
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat)!.push(item);
     }
+
     return Array.from(map.entries()).map(([category, items]) => ({
       category,
       items: items.slice().sort((a, b) => a.name.localeCompare(b.name)),
@@ -151,28 +166,22 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       const addOn = addOns.find((a) => a.id === id);
       const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? addOn?.stocks ?? 0)));
 
-      // compute already chosen excluding this item
-
-      // but we need per-item exclude, not total; simpler:
-      const chosenExcludingThis = prev
+      // chosen excluding this item qty
+      const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
+      const chosenTotalSameId = prev
         .filter((s) => s.id === id)
         .reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
 
-      // chosenExcludingThis includes current one too; adjust:
-      const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
-      const chosenOtherSameId = chosenExcludingThis - currentQty;
-
+      const chosenOtherSameId = Math.max(0, chosenTotalSameId - currentQty);
       const maxAllowedForThis = Math.max(0, stocks - chosenOtherSameId);
       const q = Math.min(wanted, maxAllowedForThis);
 
-      if (wanted > maxAllowedForThis) {
-        alert(`Only ${maxAllowedForThis} remaining for this item.`);
-      }
+      if (wanted > maxAllowedForThis) alert(`Only ${maxAllowedForThis} remaining for this item.`);
 
       if (q > 0) {
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
         if (!addOn) return prev;
-        return [...prev, { id, name: addOn.name, category: addOn.category, price: addOn.price, quantity: q }];
+        return [...prev, { id, name: addOn.name, category: addOn.category, size: addOn.size, price: addOn.price, quantity: q }];
       }
 
       return prev.filter((s) => s.id !== id);
@@ -186,6 +195,21 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       next[index] = category;
       return next;
     });
+
+    // ✅ reset size when category changes (so user re-picks size)
+    setSelectedSizes((prev) => {
+      const next = [...prev];
+      next[index] = "";
+      return next;
+    });
+  };
+
+  const handleSizeChange = (index: number, size: string): void => {
+    setSelectedSizes((prev) => {
+      const next = [...prev];
+      next[index] = size;
+      return next;
+    });
   };
 
   // ✅ Removing a block should NOT delete items
@@ -194,10 +218,16 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       const next = prev.filter((_, i) => i !== index);
       return next.length === 0 ? [""] : next;
     });
+
+    setSelectedSizes((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length === 0 ? [""] : next;
+    });
   };
 
   const addAnotherCategory = (): void => {
     setSelectedCategories((prev) => [...prev, ""]);
+    setSelectedSizes((prev) => [...prev, ""]);
   };
 
   const resetAddOnsForm = (): void => {
@@ -205,7 +235,34 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     setAddOnsSeat("");
     setSelectedAddOns([]);
     setSelectedCategories([""]);
+    setSelectedSizes([""]);
   };
+
+  // ✅ helper: get available sizes for a category (based on in-stock addOns)
+  const getSizesForCategory = (category: string): string[] => {
+    if (!category) return [];
+    const sizes = addOns
+      .filter((a) => a.category === category)
+      .map((a) => cleanSize(a.size))
+      .filter((s) => s.length > 0);
+
+    // unique + sort (XS,S,M,L,XL,2XL...) then alpha fallback
+    const uniq = Array.from(new Set(sizes));
+    const order = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+    uniq.sort((a, b) => {
+      const ia = order.indexOf(a.toUpperCase());
+      const ib = order.indexOf(b.toUpperCase());
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      if (ia !== -1) return -1;
+      if (ib !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    return uniq;
+  };
+
+  // ✅ helper: does this category have sizes at all?
+  const categoryHasSizes = (category: string): boolean => getSizesForCategory(category).length > 0;
 
   const handleSubmitAddOns = async (): Promise<void> => {
     const name = addOnsFullName.trim();
@@ -240,6 +297,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         price: selected.price,
         full_name: name,
         seat_number: addOnsSeat,
+        // optional: if your table has these columns, you can store them too
+        // category: selected.category,
+        // size: selected.size,
       });
 
       if (error) {
@@ -273,11 +333,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         <div className="bookadd-card">
           <IonItem className="form-item">
             <IonLabel position="stacked">Full Name *</IonLabel>
-            <IonInput
-              value={addOnsFullName}
-              placeholder="Enter full name"
-              onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")}
-            />
+            <IonInput value={addOnsFullName} placeholder="Enter full name" onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")} />
           </IonItem>
 
           <IonItem className="form-item">
@@ -304,9 +360,29 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
           {/* CATEGORY BLOCKS */}
           {selectedCategories.map((category, index) => {
-            // show only items with remaining > 0 (stocks - selected in cart)
+            const hasSizes = categoryHasSizes(category);
+            const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
+            const pickedSize = (selectedSizes[index] ?? "").trim();
+
+            // ✅ rule:
+            // - if category has sizes -> show SIZE select
+            // - items dropdown only appears after size is selected
+            const allowItems = category
+              ? hasSizes
+                ? pickedSize.length > 0
+                : true
+              : false;
+
+            // show only items:
+            // - in same category
+            // - if hasSizes => match picked size
+            // - remaining > 0 (stocks - chosen)
             const categoryItems = addOns
-              .filter((a) => a.category === category)
+              .filter((a) => (category ? a.category === category : false))
+              .filter((a) => {
+                if (!hasSizes) return true;
+                return norm(cleanSize(a.size)) === norm(pickedSize);
+              })
               .map((a) => ({ ...a, remaining: getRemainingForId(a.id) }))
               .filter((a) => a.remaining > 0);
 
@@ -329,9 +405,30 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   </IonButton>
                 </div>
 
-                {category ? (
+                {/* ✅ SIZE appears under category if category has sizes */}
+                {category && hasSizes ? (
                   <IonItem className="form-item">
-                    <IonLabel position="stacked">Select {category} Item</IonLabel>
+                    <IonLabel position="stacked">Select Size</IonLabel>
+                    <IonSelect
+                      value={pickedSize}
+                      placeholder="Choose size"
+                      onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}
+                    >
+                      {sizeOptions.map((sz) => (
+                        <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
+                          {sz}
+                        </IonSelectOption>
+                      ))}
+                    </IonSelect>
+                  </IonItem>
+                ) : null}
+
+                {/* ✅ ITEM only shows after category AND (if needed) size is selected */}
+                {allowItems ? (
+                  <IonItem className="form-item">
+                    <IonLabel position="stacked">
+                      Select {category} Item{hasSizes ? ` (${pickedSize})` : ""}
+                    </IonLabel>
                     <IonSelect
                       placeholder={categoryItems.length > 0 ? "Choose an item" : "No available items"}
                       disabled={categoryItems.length === 0}
@@ -342,7 +439,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                         const addOn = addOns.find((a) => a.id === selectedId);
                         if (!addOn) return;
 
-                        // ✅ only add if remaining > 0
                         const remaining = getRemainingForId(selectedId);
                         if (remaining <= 0) {
                           alert("No remaining stock for this item.");
@@ -358,6 +454,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                               id: selectedId,
                               name: addOn.name,
                               category: addOn.category,
+                              size: addOn.size,
                               price: addOn.price,
                               quantity: 1,
                             },
@@ -372,6 +469,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                       ))}
                     </IonSelect>
                   </IonItem>
+                ) : category && hasSizes ? (
+                  <IonItem className="form-item" lines="none">
+                    <IonLabel style={{ opacity: 0.85 }}>Select a size first to show items.</IonLabel>
+                  </IonItem>
                 ) : null}
               </div>
             );
@@ -384,11 +485,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                 <IonLabel>Selected Items</IonLabel>
               </IonListHeader>
 
-              {selectedSummaryByCategory.map(({ category, items }) => (
-                <React.Fragment key={category}>
+              {selectedSummaryByCategory.map(({ category: catTitle, items }) => (
+                <React.Fragment key={catTitle}>
                   <IonListHeader>
                     <IonLabel>
-                      <strong>{category}</strong>
+                      <strong>{catTitle}</strong>
                     </IonLabel>
                   </IonListHeader>
 
@@ -399,7 +500,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     return (
                       <IonItem key={selected.id} className="addon-item">
                         <IonLabel>
-                          <div style={{ fontWeight: 700 }}>{selected.name}</div>
+                          <div style={{ fontWeight: 700 }}>
+                            {selected.name}{" "}
+                            {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
+                          </div>
                           <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
                           <div style={{ marginTop: 4, fontWeight: 700 }}>
                             Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
