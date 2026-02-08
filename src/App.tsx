@@ -10,6 +10,7 @@ import Staff_menu from "./staff/Staff_menu";
 import Admin_menu from "./admin/Admin_menu";
 import Book_Add from "./pages/Book_Add";
 import Seat_Map from "./pages/Seat_Map";
+import Add_Ons from "./pages/Add_Ons";
 
 
 /* Components */
@@ -129,6 +130,7 @@ const App: React.FC = () => {
 
       <IonReactRouter>
         <IonRouterOutlet>
+          <Route exact path="/add_ons" component={Add_Ons} />
           <Route exact path="/book-add" component={Book_Add} />
           <Route exact path="/seat_map" component={Seat_Map} />
           <Route exact path="/login" component={Login} />

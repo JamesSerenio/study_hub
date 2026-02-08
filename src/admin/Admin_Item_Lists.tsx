@@ -16,10 +16,10 @@ import {
   IonPage,
   IonHeader,
   IonToolbar,
-  IonTitle,
   IonContent,
   IonGrid,
   IonRow,
+  IonTitle,
   IonCol,
   IonLabel,
   IonButton,
@@ -557,9 +557,7 @@ const Admin_Item_Lists: React.FC = () => {
   return (
     <IonPage className="pil-page">
       <IonHeader className="pil-header">
-        <IonToolbar className="pil-toolbar">
-          <IonTitle className="pil-title">Admin Item Lists</IonTitle>
-        </IonToolbar>
+
       </IonHeader>
 
       <IonContent className="pil-content">
