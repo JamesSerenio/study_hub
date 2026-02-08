@@ -1,12 +1,3 @@
-// src/components/AddOnsModal.tsx
-// ✅ STRICT TS
-// ✅ NO any
-// ✅ THEMED (same as Booking): IonModal className="booking-modal"
-// ✅ Uses: .bookadd-card, .form-item, .summary-section, .summary-text
-// ✅ NEW: show REMAINING stocks per item (in dropdown + selected list)
-// ✅ NEW: SIZE FILTER per category (only shows if that category has sizes)
-// ✅ Items list depends on selected Category + (optional) Size
-
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonModal,
@@ -24,6 +15,10 @@ import {
   IonSelectOption,
   IonList,
   IonListHeader,
+  IonSearchbar,
+  IonThumbnail,
+  IonImg,
+  IonText,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -31,13 +26,13 @@ import { supabase } from "../utils/supabaseClient";
 interface AddOn {
   id: string;
   category: string;
-  size: string | null; // ✅ NEW (nullable)
+  size: string | null;
   name: string;
   price: number;
   restocked: number;
   sold: number;
   expenses: number;
-  stocks: number; // generated / current remaining in DB
+  stocks: number;
   overall_sales: number;
   expected_sales: number;
   image_url: string | null;
@@ -47,9 +42,10 @@ interface SelectedAddOn {
   id: string;
   name: string;
   category: string;
-  size: string | null; // ✅ keep size in chosen items
+  size: string | null;
   price: number;
   quantity: number;
+  image_url: string | null; // ✅ keep image
 }
 
 type SeatGroup = { title: string; seats: string[] };
@@ -57,7 +53,7 @@ type SeatGroup = { title: string; seats: string[] };
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void; // parent will show alert + close on OK
+  onSaved: () => void;
   seatGroups: SeatGroup[];
 };
 
@@ -77,25 +73,28 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
   const [addOnsFullName, setAddOnsFullName] = useState<string>("");
   const [addOnsSeat, setAddOnsSeat] = useState<string>("");
 
-  // Each block stores chosen category (duplicates allowed)
   const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
-  // ✅ NEW: size per block ("" means no size filter / not selected)
   const [selectedSizes, setSelectedSizes] = useState<string[]>([""]);
 
   const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
+
+  // ✅ Item Picker modal states
+  const [isPickerOpen, setIsPickerOpen] = useState<boolean>(false);
+  const [pickerCategory, setPickerCategory] = useState<string>("");
+  const [pickerSize, setPickerSize] = useState<string>("");
+  const [pickerSearch, setPickerSearch] = useState<string>("");
 
   useEffect(() => {
     if (!isOpen) return;
     void fetchAddOns();
 
-    // Ensure at least 1 block on open
     setSelectedCategories((prev) => (prev.length === 0 ? [""] : prev));
     setSelectedSizes((prev) => (prev.length === 0 ? [""] : prev));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   const fetchAddOns = async (): Promise<void> => {
-    // ✅ Customer: show only in-stock items
+    // ✅ show only in-stock items
     const { data, error } = await supabase
       .from("add_ons")
       .select("*")
@@ -116,34 +115,27 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   const categories = useMemo(() => [...new Set(addOns.map((a) => a.category))], [addOns]);
 
-  const addOnsTotal = useMemo<number>(
-    () => selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0),
-    [selectedAddOns]
-  );
+  const addOnsTotal = useMemo<number>(() => selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0), [selectedAddOns]);
 
   const selectedSummaryByCategory = useMemo(() => {
     const map = new Map<string, SelectedAddOn[]>();
-
     for (const item of selectedAddOns) {
       const cat = item.category || "Uncategorized";
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat)!.push(item);
     }
-
     return Array.from(map.entries()).map(([category, items]) => ({
       category,
       items: items.slice().sort((a, b) => a.name.localeCompare(b.name)),
     }));
   }, [selectedAddOns]);
 
-  // ✅ NEW: remaining stocks map (from latest loaded addOns)
   const stocksById = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of addOns) m.set(a.id, Math.max(0, Math.floor(toNum(a.stocks))));
     return m;
   }, [addOns]);
 
-  // ✅ NEW: how many already chosen in this modal (reserved in cart)
   const selectedQtyById = useMemo(() => {
     const m = new Map<string, number>();
     for (const s of selectedAddOns) {
@@ -166,7 +158,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       const addOn = addOns.find((a) => a.id === id);
       const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? addOn?.stocks ?? 0)));
 
-      // chosen excluding this item qty
       const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
       const chosenTotalSameId = prev
         .filter((s) => s.id === id)
@@ -181,14 +172,24 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       if (q > 0) {
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
         if (!addOn) return prev;
-        return [...prev, { id, name: addOn.name, category: addOn.category, size: addOn.size, price: addOn.price, quantity: q }];
+        return [
+          ...prev,
+          {
+            id,
+            name: addOn.name,
+            category: addOn.category,
+            size: addOn.size,
+            price: addOn.price,
+            quantity: q,
+            image_url: addOn.image_url ?? null,
+          },
+        ];
       }
 
       return prev.filter((s) => s.id !== id);
     });
   };
 
-  // ✅ Do NOT delete selected items when switching category
   const handleCategoryChange = (index: number, category: string): void => {
     setSelectedCategories((prev) => {
       const next = [...prev];
@@ -196,7 +197,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       return next;
     });
 
-    // ✅ reset size when category changes (so user re-picks size)
     setSelectedSizes((prev) => {
       const next = [...prev];
       next[index] = "";
@@ -212,7 +212,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     });
   };
 
-  // ✅ Removing a block should NOT delete items
   const removeCategoryBlock = (index: number): void => {
     setSelectedCategories((prev) => {
       const next = prev.filter((_, i) => i !== index);
@@ -236,9 +235,12 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     setSelectedAddOns([]);
     setSelectedCategories([""]);
     setSelectedSizes([""]);
+    setPickerSearch("");
+    setPickerCategory("");
+    setPickerSize("");
+    setIsPickerOpen(false);
   };
 
-  // ✅ helper: get available sizes for a category (based on in-stock addOns)
   const getSizesForCategory = (category: string): string[] => {
     if (!category) return [];
     const sizes = addOns
@@ -246,7 +248,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       .map((a) => cleanSize(a.size))
       .filter((s) => s.length > 0);
 
-    // unique + sort (XS,S,M,L,XL,2XL...) then alpha fallback
     const uniq = Array.from(new Set(sizes));
     const order = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
     uniq.sort((a, b) => {
@@ -257,12 +258,65 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       if (ib !== -1) return 1;
       return a.localeCompare(b);
     });
-
     return uniq;
   };
 
-  // ✅ helper: does this category have sizes at all?
   const categoryHasSizes = (category: string): boolean => getSizesForCategory(category).length > 0;
+
+  // ✅ Items for picker modal (filtered)
+  const pickerItems = useMemo(() => {
+    const cat = pickerCategory;
+    const hasSizes = categoryHasSizes(cat);
+    const size = pickerSize.trim();
+    const q = pickerSearch.trim().toLowerCase();
+
+    return addOns
+      .filter((a) => (cat ? a.category === cat : false))
+      .filter((a) => {
+        if (!hasSizes) return true;
+        return norm(cleanSize(a.size)) === norm(size);
+      })
+      .map((a) => ({ ...a, remaining: getRemainingForId(a.id) }))
+      .filter((a) => a.remaining > 0)
+      .filter((a) => {
+        if (!q) return true;
+        return a.name.toLowerCase().includes(q);
+      });
+  }, [addOns, pickerCategory, pickerSize, pickerSearch, selectedAddOns]);
+
+  const openPicker = (category: string, size: string): void => {
+    setPickerCategory(category);
+    setPickerSize(size);
+    setPickerSearch("");
+    setIsPickerOpen(true);
+  };
+
+  const addFromPicker = (addOn: AddOn): void => {
+    const remaining = getRemainingForId(addOn.id);
+    if (remaining <= 0) {
+      alert("No remaining stock for this item.");
+      return;
+    }
+
+    setSelectedAddOns((prev) => {
+      const existing = prev.find((s) => s.id === addOn.id);
+      if (existing) return prev; // already added, change qty in list
+      return [
+        ...prev,
+        {
+          id: addOn.id,
+          name: addOn.name,
+          category: addOn.category,
+          size: addOn.size,
+          price: addOn.price,
+          quantity: 1,
+          image_url: addOn.image_url ?? null,
+        },
+      ];
+    });
+
+    setIsPickerOpen(false);
+  };
 
   const handleSubmitAddOns = async (): Promise<void> => {
     const name = addOnsFullName.trim();
@@ -270,7 +324,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     if (!addOnsSeat) return alert("Seat Number is required.");
     if (selectedAddOns.length === 0) return alert("Please select at least one add-on.");
 
-    // ✅ Re-check stock before insert (DB truth)
     for (const selected of selectedAddOns) {
       const { data, error } = await supabase.from("add_ons").select("stocks,name").eq("id", selected.id).single();
 
@@ -289,7 +342,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       }
     }
 
-    // insert each selected item row
     for (const selected of selectedAddOns) {
       const { error } = await supabase.from("customer_session_add_ons").insert({
         add_on_id: selected.id,
@@ -297,9 +349,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         price: selected.price,
         full_name: name,
         seat_number: addOnsSeat,
-        // optional: if your table has these columns, you can store them too
-        // category: selected.category,
-        // size: selected.size,
       });
 
       if (error) {
@@ -309,247 +358,242 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     }
 
     void fetchAddOns();
-
-    // parent will show alert then close
     onSaved();
-
     resetAddOnsForm();
   };
 
   return (
-    <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
-      <IonHeader>
-        <IonToolbar>
-          <IonTitle>Add-Ons</IonTitle>
-          <IonButtons slot="end">
-            <IonButton onClick={onClose}>
-              <IonIcon icon={closeOutline} />
-            </IonButton>
-          </IonButtons>
-        </IonToolbar>
-      </IonHeader>
+    <>
+      <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>Add-Ons</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={onClose}>
+                <IonIcon icon={closeOutline} />
+              </IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
 
-      <IonContent className="ion-padding">
-        <div className="bookadd-card">
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Full Name *</IonLabel>
-            <IonInput value={addOnsFullName} placeholder="Enter full name" onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")} />
-          </IonItem>
+        <IonContent className="ion-padding">
+          <div className="bookadd-card">
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Full Name *</IonLabel>
+              <IonInput value={addOnsFullName} placeholder="Enter full name" onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")} />
+            </IonItem>
 
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Seat Number *</IonLabel>
-            <IonSelect value={addOnsSeat} placeholder="Choose seat" onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}>
-              {seatGroups.map((g) => (
-                <React.Fragment key={g.title}>
-                  <IonSelectOption disabled value={`__${g.title}__`}>
-                    {g.title}
-                  </IonSelectOption>
-                  {g.seats.map((s) => (
-                    <IonSelectOption key={`${g.title}-${s}`} value={s}>
-                      {s}
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Seat Number *</IonLabel>
+              <IonSelect value={addOnsSeat} placeholder="Choose seat" onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}>
+                {seatGroups.map((g) => (
+                  <React.Fragment key={g.title}>
+                    <IonSelectOption disabled value={`__${g.title}__`}>
+                      {g.title}
                     </IonSelectOption>
-                  ))}
-                </React.Fragment>
-              ))}
-            </IonSelect>
-          </IonItem>
+                    {g.seats.map((s) => (
+                      <IonSelectOption key={`${g.title}-${s}`} value={s}>
+                        {s}
+                      </IonSelectOption>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </IonSelect>
+            </IonItem>
 
-          <IonButton expand="block" onClick={addAnotherCategory}>
-            Add More Add-Ons
-          </IonButton>
+            <IonButton expand="block" onClick={addAnotherCategory}>
+              Add More Add-Ons
+            </IonButton>
 
-          {/* CATEGORY BLOCKS */}
-          {selectedCategories.map((category, index) => {
-            const hasSizes = categoryHasSizes(category);
-            const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
-            const pickedSize = (selectedSizes[index] ?? "").trim();
+            {selectedCategories.map((category, index) => {
+              const hasSizes = categoryHasSizes(category);
+              const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
+              const pickedSize = (selectedSizes[index] ?? "").trim();
 
-            // ✅ rule:
-            // - if category has sizes -> show SIZE select
-            // - items dropdown only appears after size is selected
-            const allowItems = category
-              ? hasSizes
-                ? pickedSize.length > 0
-                : true
-              : false;
+              const allowPick = category ? (hasSizes ? pickedSize.length > 0 : true) : false;
 
-            // show only items:
-            // - in same category
-            // - if hasSizes => match picked size
-            // - remaining > 0 (stocks - chosen)
-            const categoryItems = addOns
-              .filter((a) => (category ? a.category === category : false))
-              .filter((a) => {
-                if (!hasSizes) return true;
-                return norm(cleanSize(a.size)) === norm(pickedSize);
-              })
-              .map((a) => ({ ...a, remaining: getRemainingForId(a.id) }))
-              .filter((a) => a.remaining > 0);
+              return (
+                <div key={`cat-${index}`} className="addon-block">
+                  <div className="addon-row">
+                    <IonItem className="form-item addon-flex">
+                      <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                      <IonSelect value={category} placeholder="Choose a category" onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}>
+                        {categories.map((cat) => (
+                          <IonSelectOption key={`${cat}-${index}`} value={cat}>
+                            {cat}
+                          </IonSelectOption>
+                        ))}
+                      </IonSelect>
+                    </IonItem>
 
-            return (
-              <div key={`cat-${index}`} className="addon-block">
-                <div className="addon-row">
-                  <IonItem className="form-item addon-flex">
-                    <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
-                    <IonSelect value={category} placeholder="Choose a category" onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}>
-                      {categories.map((cat) => (
-                        <IonSelectOption key={`${cat}-${index}`} value={cat}>
-                          {cat}
-                        </IonSelectOption>
-                      ))}
-                    </IonSelect>
-                  </IonItem>
+                    <IonButton color="danger" onClick={() => removeCategoryBlock(index)}>
+                      x
+                    </IonButton>
+                  </div>
 
-                  <IonButton color="danger" onClick={() => removeCategoryBlock(index)}>
-                    x
-                  </IonButton>
+                  {category && hasSizes ? (
+                    <IonItem className="form-item">
+                      <IonLabel position="stacked">Select Size</IonLabel>
+                      <IonSelect value={pickedSize} placeholder="Choose size" onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}>
+                        {sizeOptions.map((sz) => (
+                          <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
+                            {sz}
+                          </IonSelectOption>
+                        ))}
+                      </IonSelect>
+                    </IonItem>
+                  ) : null}
+
+                  {allowPick ? (
+                    <IonButton
+                      expand="block"
+                      onClick={() => openPicker(category, hasSizes ? pickedSize : "")}
+                      style={{ marginTop: 8 }}
+                    >
+                      Choose {category} Item{hasSizes ? ` (${pickedSize})` : ""}
+                    </IonButton>
+                  ) : category && hasSizes ? (
+                    <IonItem className="form-item" lines="none">
+                      <IonLabel style={{ opacity: 0.85 }}>Select a size first to show items.</IonLabel>
+                    </IonItem>
+                  ) : null}
                 </div>
+              );
+            })}
 
-                {/* ✅ SIZE appears under category if category has sizes */}
-                {category && hasSizes ? (
-                  <IonItem className="form-item">
-                    <IonLabel position="stacked">Select Size</IonLabel>
-                    <IonSelect
-                      value={pickedSize}
-                      placeholder="Choose size"
-                      onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}
-                    >
-                      {sizeOptions.map((sz) => (
-                        <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
-                          {sz}
-                        </IonSelectOption>
-                      ))}
-                    </IonSelect>
-                  </IonItem>
-                ) : null}
+            {/* SELECTED ITEMS LIST */}
+            {selectedAddOns.length > 0 ? (
+              <IonList style={{ marginTop: 12 }}>
+                <IonListHeader>
+                  <IonLabel>Selected Items</IonLabel>
+                </IonListHeader>
 
-                {/* ✅ ITEM only shows after category AND (if needed) size is selected */}
-                {allowItems ? (
-                  <IonItem className="form-item">
-                    <IonLabel position="stacked">
-                      Select {category} Item{hasSizes ? ` (${pickedSize})` : ""}
-                    </IonLabel>
-                    <IonSelect
-                      placeholder={categoryItems.length > 0 ? "Choose an item" : "No available items"}
-                      disabled={categoryItems.length === 0}
-                      onIonChange={(e) => {
-                        const selectedId = asString(e.detail.value);
-                        if (!selectedId) return;
+                {selectedSummaryByCategory.map(({ category: catTitle, items }) => (
+                  <React.Fragment key={catTitle}>
+                    <IonListHeader>
+                      <IonLabel>
+                        <strong>{catTitle}</strong>
+                      </IonLabel>
+                    </IonListHeader>
 
-                        const addOn = addOns.find((a) => a.id === selectedId);
-                        if (!addOn) return;
+                    {items.map((selected) => {
+                      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(selected.id) ?? 0)));
+                      const remainingIfKeepQty = Math.max(0, stocks - selected.quantity);
 
-                        const remaining = getRemainingForId(selectedId);
-                        if (remaining <= 0) {
-                          alert("No remaining stock for this item.");
-                          return;
-                        }
+                      return (
+                        <IonItem key={selected.id} className="addon-item">
+                          <IonThumbnail slot="start" style={{ width: 46, height: 46 }}>
+                            {selected.image_url ? (
+                              <IonImg src={selected.image_url} alt={selected.name} />
+                            ) : (
+                              <div style={{ width: 46, height: 46, borderRadius: 10, background: "#eee" }} />
+                            )}
+                          </IonThumbnail>
 
-                        setSelectedAddOns((prev) => {
-                          const existing = prev.find((s) => s.id === selectedId);
-                          if (existing) return prev; // already added (qty editable below)
-                          return [
-                            ...prev,
-                            {
-                              id: selectedId,
-                              name: addOn.name,
-                              category: addOn.category,
-                              size: addOn.size,
-                              price: addOn.price,
-                              quantity: 1,
-                            },
-                          ];
-                        });
-                      }}
-                    >
-                      {categoryItems.map((a) => (
-                        <IonSelectOption key={a.id} value={a.id}>
-                          {a.name} - ₱{a.price} (Remaining: {a.remaining})
-                        </IonSelectOption>
-                      ))}
-                    </IonSelect>
-                  </IonItem>
-                ) : category && hasSizes ? (
-                  <IonItem className="form-item" lines="none">
-                    <IonLabel style={{ opacity: 0.85 }}>Select a size first to show items.</IonLabel>
-                  </IonItem>
-                ) : null}
-              </div>
-            );
-          })}
+                          <IonLabel>
+                            <div style={{ fontWeight: 700 }}>
+                              {selected.name}{" "}
+                              {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
+                            </div>
+                            <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
+                            <div style={{ marginTop: 4, fontWeight: 700 }}>
+                              Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
+                            </div>
+                            <div style={{ marginTop: 6, opacity: 0.9 }}>
+                              Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
+                            </div>
+                          </IonLabel>
 
-          {/* SELECTED ITEMS LIST */}
-          {selectedAddOns.length > 0 ? (
-            <IonList style={{ marginTop: 12 }}>
-              <IonListHeader>
-                <IonLabel>Selected Items</IonLabel>
-              </IonListHeader>
+                          <div className="addon-actions">
+                            <IonLabel className="qty-label">Qty:</IonLabel>
+                            <IonInput
+                              type="number"
+                              min={1}
+                              value={selected.quantity}
+                              className="qty-input"
+                              onIonChange={(e) => {
+                                const raw = (e.detail.value ?? "").toString();
+                                const v = parseInt(raw, 10);
+                                handleAddOnQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
+                              }}
+                            />
 
-              {selectedSummaryByCategory.map(({ category: catTitle, items }) => (
-                <React.Fragment key={catTitle}>
-                  <IonListHeader>
-                    <IonLabel>
-                      <strong>{catTitle}</strong>
-                    </IonLabel>
-                  </IonListHeader>
-
-                  {items.map((selected) => {
-                    const stocks = Math.max(0, Math.floor(toNum(stocksById.get(selected.id) ?? 0)));
-                    const remainingIfKeepQty = Math.max(0, stocks - selected.quantity);
-
-                    return (
-                      <IonItem key={selected.id} className="addon-item">
-                        <IonLabel>
-                          <div style={{ fontWeight: 700 }}>
-                            {selected.name}{" "}
-                            {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
+                            <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
+                              Remove
+                            </IonButton>
                           </div>
-                          <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
-                          <div style={{ marginTop: 4, fontWeight: 700 }}>
-                            Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
-                          </div>
-                          <div style={{ marginTop: 6, opacity: 0.9 }}>
-                            Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
-                          </div>
-                        </IonLabel>
+                        </IonItem>
+                      );
+                    })}
+                  </React.Fragment>
+                ))}
+              </IonList>
+            ) : null}
 
-                        <div className="addon-actions">
-                          <IonLabel className="qty-label">Qty:</IonLabel>
-                          <IonInput
-                            type="number"
-                            min={1}
-                            value={selected.quantity}
-                            className="qty-input"
-                            onIonChange={(e) => {
-                              const raw = (e.detail.value ?? "").toString();
-                              const v = parseInt(raw, 10);
-                              handleAddOnQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
-                            }}
-                          />
+            <div className="summary-section" style={{ marginTop: 12 }}>
+              <p className="summary-text">
+                <strong>Add-Ons Total: ₱{addOnsTotal.toFixed(2)}</strong>
+              </p>
+            </div>
 
-                          <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
-                            Remove
-                          </IonButton>
-                        </div>
-                      </IonItem>
-                    );
-                  })}
-                </React.Fragment>
-              ))}
-            </IonList>
-          ) : null}
-
-          <div className="summary-section" style={{ marginTop: 12 }}>
-            <p className="summary-text">
-              <strong>Add-Ons Total: ₱{addOnsTotal.toFixed(2)}</strong>
-            </p>
+            <IonButton expand="block" onClick={() => void handleSubmitAddOns()}>
+              Submit Order
+            </IonButton>
           </div>
+        </IonContent>
+      </IonModal>
 
-          <IonButton expand="block" onClick={() => void handleSubmitAddOns()}>
-            Submit Order
-          </IonButton>
-        </div>
-      </IonContent>
-    </IonModal>
+      {/* ✅ ITEM PICKER MODAL (with images) */}
+      <IonModal isOpen={isPickerOpen} onDidDismiss={() => setIsPickerOpen(false)} className="booking-modal">
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>
+              Choose Item {pickerCategory ? `- ${pickerCategory}` : ""} {pickerSize ? `(${pickerSize})` : ""}
+            </IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={() => setIsPickerOpen(false)}>
+                <IonIcon icon={closeOutline} />
+              </IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
+
+        <IonContent className="ion-padding">
+          <IonSearchbar value={pickerSearch} onIonInput={(e) => setPickerSearch(asString(e.detail.value))} placeholder="Search item name..." />
+
+          {pickerItems.length === 0 ? (
+            <IonText style={{ opacity: 0.85 }}>
+              <p>No available items.</p>
+            </IonText>
+          ) : (
+            <IonList>
+              {pickerItems.map((a) => {
+                const remaining = getRemainingForId(a.id);
+
+                return (
+                  <IonItem key={a.id} button onClick={() => addFromPicker(a)}>
+                    <IonThumbnail slot="start" style={{ width: 56, height: 56 }}>
+                      {a.image_url ? (
+                        <IonImg src={a.image_url} alt={a.name} />
+                      ) : (
+                        <div style={{ width: 56, height: 56, borderRadius: 10, background: "#eee" }} />
+                      )}
+                    </IonThumbnail>
+
+                    <IonLabel>
+                      <div style={{ fontWeight: 800 }}>{a.name}</div>
+                      {cleanSize(a.size) ? <div style={{ opacity: 0.85 }}>Size: {cleanSize(a.size)}</div> : null}
+                      <div style={{ marginTop: 4 }}>
+                        ₱{toNum(a.price)} • Remaining: <strong>{remaining}</strong>
+                      </div>
+                    </IonLabel>
+                  </IonItem>
+                );
+              })}
+            </IonList>
+          )}
+        </IonContent>
+      </IonModal>
+    </>
   );
 }

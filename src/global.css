@@ -3936,6 +3936,59 @@ ion-modal.booking-modal {
     padding: 6px;
   }
 }
+/* =========================
+   ADD-ONS SELECTED LIST SCROLL (MAX ~5 ITEMS)
+========================= */
+
+.selected-scroll {
+  margin-top: 12px;
+
+  /* ✅ approx height for 5 items (adjust if needed) */
+  max-height: 360px;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  background: #fff;
+}
+
+/* optional: sticky header inside scroll */
+.selected-scroll .ion-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #fff;
+}
+
+/* optional: make selected items a bit tighter */
+.selected-scroll ion-item.addon-item {
+  --min-height: 54px;
+}
+
+/* ✅ Limit IonSelect ALERT options to ~5 items then scroll */
+.addon-items-alert .alert-radio-group {
+  max-height: 240px;           /* ~5 items (adjust 220-260 if needed) */
+  overflow-y: auto;
+}
+
+/* Optional: same for category + size if you want */
+.addon-category-alert .alert-radio-group,
+.addon-size-alert .alert-radio-group {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* Optional: make item images look clean */
+ion-thumbnail ion-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
 
 /* src/theme/admin_packages.css */
 
