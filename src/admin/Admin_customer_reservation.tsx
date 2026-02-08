@@ -6,8 +6,8 @@
 // ✅ Discount + Discount Reason (saved, NOT shown on receipt)
 // ✅ Payment (GCash/Cash) + Auto PAID/UNPAID on SAVE PAYMENT
 // ✅ Manual PAID/UNPAID toggle still works
-// ✅ Delete single row
-// ✅ Delete by DATE (deletes ALL records with reservation_date = selectedDate from DB)
+// ✅ Delete single row  ✅ ALSO deletes related seat_blocked_times
+// ✅ Delete by DATE (deletes ALL records with reservation_date = selectedDate) ✅ ALSO deletes related seat_blocked_times
 // ✅ Promo filtered out (DB + frontend)
 // ✅ OPEN sessions auto-update display
 // ✅ Stop Time (OPEN) releases seat_blocked_times (end_at = now)
@@ -33,22 +33,22 @@ interface CustomerSession {
   date: string;
   full_name: string;
 
-  phone_number?: string | null; // ✅ NEW
+  phone_number?: string | null;
 
   customer_type: string;
   customer_field: string | null;
   has_id: boolean;
   id_number: string | null;
   hour_avail: string;
-  time_started: string;
-  time_ended: string;
+  time_started: string; // timestamptz
+  time_ended: string; // timestamptz
 
   total_time: number | string;
   total_amount: number | string;
 
-  reservation: string;
+  reservation: string; // "yes"
   reservation_date: string | null; // YYYY-MM-DD
-  seat_number: string;
+  seat_number: string; // can be "A1" or "A1, A2"
 
   discount_kind?: DiscountKind;
   discount_value?: number;
@@ -409,6 +409,44 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
+  // ✅ NEW: delete seat blocks for a reservation session (used by delete single + delete by date)
+  // Strategy:
+  // - Remove rows in seat_blocked_times where:
+  //   source='reserved' AND seat_number IN (session seats)
+  //   AND start_at == session.time_started
+  // This matches how you created the blocks when reserving.
+  const deleteSeatBlocksForSession = async (session: CustomerSession): Promise<void> => {
+    const seats = splitSeats(session.seat_number);
+    if (seats.length === 0) return;
+
+    const { error } = await supabase
+      .from("seat_blocked_times")
+      .delete()
+      .in("seat_number", seats)
+      .eq("source", "reserved")
+      .eq("start_at", session.time_started);
+
+    if (error) {
+      // don't hard fail delete session; just warn
+      // eslint-disable-next-line no-console
+      console.warn("deleteSeatBlocksForSession error:", error.message);
+    }
+  };
+
+  // ✅ NEW: delete seat blocks for ALL reservations on selectedDate
+  // We do it in batches by each session, so exact match with seat_number+start_at.
+  const deleteSeatBlocksForDate = async (dateStr: string, list: CustomerSession[]): Promise<void> => {
+    if (!dateStr) return;
+
+    // use the list already filtered by date (fast + exact)
+    const rows = list.filter((s) => (s.reservation_date ?? "") === dateStr);
+
+    for (const s of rows) {
+      // eslint-disable-next-line no-await-in-loop
+      await deleteSeatBlocksForSession(s);
+    }
+  };
+
   const stopReservationTime = async (session: CustomerSession): Promise<void> => {
     if (!canShowStopButton(session)) {
       alert("Stop Time is only allowed when the reservation date/time has started.");
@@ -465,6 +503,9 @@ const Admin_customer_reservation: React.FC = () => {
     try {
       setDeletingId(session.id);
 
+      // ✅ delete seat blocks first (or at least attempt)
+      await deleteSeatBlocksForSession(session);
+
       const { error } = await supabase.from("customer_sessions").delete().eq("id", session.id);
 
       if (error) {
@@ -498,6 +539,9 @@ const Admin_customer_reservation: React.FC = () => {
 
     try {
       setDeletingDate(selectedDate);
+
+      // ✅ delete related seat blocks for this date first
+      await deleteSeatBlocksForDate(selectedDate, filteredSessions);
 
       const { error } = await supabase
         .from("customer_sessions")
@@ -726,7 +770,7 @@ const Admin_customer_reservation: React.FC = () => {
     ws.columns = [
       { header: "Reservation Date", key: "reservation_date", width: 16 },
       { header: "Full Name", key: "full_name", width: 26 },
-      { header: "Phone Number", key: "phone_number", width: 16 }, // ✅ NEW
+      { header: "Phone Number", key: "phone_number", width: 16 },
       { header: "Field", key: "field", width: 18 },
       { header: "Has ID", key: "has_id", width: 10 },
       { header: "Specific ID", key: "id_number", width: 16 },
@@ -749,7 +793,7 @@ const Admin_customer_reservation: React.FC = () => {
     ];
 
     // Title rows
-    ws.mergeCells("A1", "V1"); // ✅ updated end col (V)
+    ws.mergeCells("A1", "V1");
     ws.getCell("A1").value = "ME TYME LOUNGE — RESERVATIONS REPORT";
     ws.getCell("A1").font = { bold: true, size: 16 };
     ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
@@ -808,7 +852,7 @@ const Admin_customer_reservation: React.FC = () => {
         const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
         const imgId = wb.addImage({ buffer: ab, extension: ext });
         ws.addImage(imgId, {
-          tl: { col: 18.2, row: 0.2 }, // ✅ adjust for more columns
+          tl: { col: 18.2, row: 0.2 },
           ext: { width: 160, height: 60 },
         });
       }
@@ -832,15 +876,7 @@ const Admin_customer_reservation: React.FC = () => {
       };
     });
 
-    const moneyCols = new Set([
-      "amount",
-      "discount_amount",
-      "system_cost",
-      "gcash",
-      "cash",
-      "total_paid",
-      "remaining",
-    ]);
+    const moneyCols = new Set(["amount", "discount_amount", "system_cost", "gcash", "cash", "total_paid", "remaining"]);
 
     // Add rows
     filteredSessions.forEach((s, idx) => {
@@ -860,7 +896,7 @@ const Admin_customer_reservation: React.FC = () => {
       const row = ws.addRow({
         reservation_date: String(s.reservation_date ?? ""),
         full_name: s.full_name,
-        phone_number: safePhone(s.phone_number), // ✅ NEW
+        phone_number: safePhone(s.phone_number),
         field: s.customer_field ?? "",
         has_id: s.has_id ? "Yes" : "No",
         id_number: s.id_number ?? "N/A",
@@ -898,8 +934,7 @@ const Admin_customer_reservation: React.FC = () => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
       });
 
-      // Force Date/Time as TEXT (avoid Excel auto-change)
-      // Reservation Date (col 1), Phone (col 3), Time In (col 8), Time Out (col 9)
+      // Force Date/Time as TEXT
       const textCols = [1, 3, 8, 9];
       textCols.forEach((c) => {
         const cell = ws.getCell(rowIndex, c);
@@ -929,17 +964,13 @@ const Admin_customer_reservation: React.FC = () => {
       }
     });
 
-    // Filter
     ws.autoFilter = {
       from: { row: headerRowIndex, column: 1 },
       to: { row: headerRowIndex, column: ws.columns.length },
     };
 
     const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buf], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     saveAs(blob, `admin-reservations-${selectedDate}.xlsx`);
   };
 
@@ -947,7 +978,7 @@ const Admin_customer_reservation: React.FC = () => {
     <IonPage>
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR (same layout/classes as Admin_customer_list) */}
+          {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Customer Reservations</h2>
@@ -998,7 +1029,7 @@ const Admin_customer_reservation: React.FC = () => {
                   <tr>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
-                    <th>Phone #</th> {/* ✅ NEW */}
+                    <th>Phone #</th>
                     <th>Field</th>
                     <th>Has ID</th>
                     <th>Specific ID</th>
@@ -1029,7 +1060,7 @@ const Admin_customer_reservation: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.reservation_date ?? "N/A"}</td>
                         <td>{session.full_name}</td>
-                        <td>{safePhone(session.phone_number)}</td> {/* ✅ NEW */}
+                        <td>{safePhone(session.phone_number)}</td>
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
                         <td>{session.id_number ?? "N/A"}</td>
@@ -1091,11 +1122,7 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>
                           <div className="action-stack">
                             {showStop && (
-                              <button
-                                className="receipt-btn"
-                                disabled={stoppingId === session.id}
-                                onClick={() => void stopReservationTime(session)}
-                              >
+                              <button className="receipt-btn" disabled={stoppingId === session.id} onClick={() => void stopReservationTime(session)}>
                                 {stoppingId === session.id ? "Stopping..." : "Stop Time"}
                               </button>
                             )}
@@ -1121,7 +1148,7 @@ const Admin_customer_reservation: React.FC = () => {
             </div>
           )}
 
-          {/* DISCOUNT MODAL (same classes as Admin_customer_list) */}
+          {/* DISCOUNT MODAL */}
           {discountTarget && (
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1230,7 +1257,7 @@ const Admin_customer_reservation: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL (same classes as Admin_customer_list) */}
+          {/* PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1307,7 +1334,7 @@ const Admin_customer_reservation: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL (same classes as Admin_customer_list) */}
+          {/* RECEIPT MODAL */}
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1401,8 +1428,6 @@ const Admin_customer_reservation: React.FC = () => {
                         <span>Discount Amount</span>
                         <span>₱{calc.discountAmount.toFixed(2)}</span>
                       </div>
-
-                      {/* ❌ NO DISCOUNT REASON ON RECEIPT */}
 
                       <div className="receipt-row">
                         <span>System Cost</span>
