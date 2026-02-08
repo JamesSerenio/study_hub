@@ -5,6 +5,7 @@
 // ✅ Save Payment auto sets PAID/UNPAID (paid >= due) + paid_at
 // ✅ Manual PAID/UNPAID toggle works (can return to UNPAID even if fully paid)
 // ✅ Receipt status follows manual is_paid (like Customer_Lists)
+// ✅ NEW: show SIZE (if exists) in items list + receipt
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -18,6 +19,7 @@ interface AddOnInfo {
   id: string;
   name: string;
   category: string;
+  size: string | null; // ✅ NEW
 }
 
 interface CustomerSessionAddOnRow {
@@ -45,8 +47,10 @@ interface CustomerAddOnMerged {
   total: number;
   full_name: string;
   seat_number: string;
+
   item_name: string;
   category: string;
+  size: string | null; // ✅ NEW
 
   gcash_amount: number;
   cash_amount: number;
@@ -57,6 +61,7 @@ interface CustomerAddOnMerged {
 type OrderItem = {
   id: string;
   category: string;
+  size: string | null; // ✅ NEW
   item_name: string;
   quantity: number;
   price: number;
@@ -124,6 +129,11 @@ const ms = (iso: string): number => {
 };
 
 const moneyText = (n: number): string => `₱${round2(n).toFixed(2)}`;
+
+const sizeText = (s: string | null | undefined): string => {
+  const v = String(s ?? "").trim();
+  return v.length > 0 ? v : "—";
+};
 
 // keep gcash (clamp to due), cash = remaining
 const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
@@ -210,7 +220,7 @@ const Customer_Add_ons: React.FC = () => {
 
     const { data: addOnRows, error: addOnErr } = await supabase
       .from("add_ons")
-      .select("id, name, category")
+      .select("id, name, category, size")
       .in("id", addOnIds)
       .returns<AddOnInfo[]>();
 
@@ -234,8 +244,10 @@ const Customer_Add_ons: React.FC = () => {
         total: toNumber(r.total),
         full_name: r.full_name,
         seat_number: r.seat_number,
+
         item_name: addOn?.name ?? "-",
         category: addOn?.category ?? "-",
+        size: addOn?.size ?? null, // ✅ NEW
 
         gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
         cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
@@ -295,6 +307,7 @@ const Customer_Add_ons: React.FC = () => {
       current.items.push({
         id: row.id,
         category: row.category,
+        size: row.size, // ✅ NEW
         item_name: row.item_name,
         quantity: Number(row.quantity) || 0,
         price: row.price,
@@ -517,7 +530,10 @@ const Customer_Add_ons: React.FC = () => {
                                 <div style={{ minWidth: 0 }}>
                                   <div style={{ fontWeight: 900 }}>
                                     {it.item_name}{" "}
-                                    <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                                    <span style={{ fontWeight: 700, opacity: 0.7 }}>
+                                      ({it.category}
+                                      {String(it.size ?? "").trim() ? ` • ${sizeText(it.size)}` : ""})
+                                    </span>
                                   </div>
                                   <div style={{ opacity: 0.85, fontSize: 13 }}>
                                     Qty: {it.quantity} • {moneyText(it.price)}
@@ -688,7 +704,11 @@ const Customer_Add_ons: React.FC = () => {
                   <div key={it.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 900 }}>
-                        {it.item_name} <span style={{ fontWeight: 700, opacity: 0.7 }}>({it.category})</span>
+                        {it.item_name}{" "}
+                        <span style={{ fontWeight: 700, opacity: 0.7 }}>
+                          ({it.category}
+                          {String(it.size ?? "").trim() ? ` • ${sizeText(it.size)}` : ""})
+                        </span>
                       </div>
                       <div style={{ opacity: 0.8, fontSize: 13 }}>
                         {it.quantity} × {moneyText(it.price)}
