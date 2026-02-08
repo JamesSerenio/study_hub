@@ -1,7 +1,8 @@
 // src/pages/Seat_Map.tsx
 // ✅ FULL CODE
-// ✅ SAME SEAT LOGIC/UI as your src/components/Seat.tsx (copied here)
-// ✅ PLUS same background + leaves + g.png design from Login (same classnames)
+// ✅ SAME SEAT LOGIC/UI (copied from Seat.tsx)
+// ✅ Leaves same as Login
+// ✅ HARD REMOVE the "dirty brown" overlay by disabling login-content::before/::after ONLY on this page
 // ✅ STRICT TS, NO any
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -9,8 +10,6 @@ import { IonPage, IonContent, IonSpinner } from "@ionic/react";
 
 import seatsImage from "../assets/seats.png";
 import leaves from "../assets/leave.png";
-import gImg from "../assets/g.png";
-
 import { supabase } from "../utils/supabaseClient";
 
 type SeatStatus = "temp_available" | "occupied_temp" | "occupied" | "reserved";
@@ -22,7 +21,6 @@ type SeatPin = {
   x: number; // percent
   y: number; // percent
   kind: PinKind;
-
   readonly?: boolean;
   fixedStatus?: SeatStatus;
 };
@@ -51,7 +49,6 @@ type Props = {
 
 const CONFERENCE_ID = "CONFERENCE_ROOM";
 
-// (Optional) swatches - you can keep or remove; read-only anyway
 const SWATCH_GREEN_ID = "__SWATCH_GREEN__";
 const SWATCH_YELLOW_ID = "__SWATCH_YELLOW__";
 const SWATCH_RED_ID = "__SWATCH_RED__";
@@ -60,29 +57,16 @@ const SWATCH_PURPLE_ID = "__SWATCH_PURPLE__";
 const STATUS_COLOR: Record<SeatStatus, string> = {
   temp_available: "seat-green",
   occupied_temp: "seat-yellow",
-  occupied: "seat-orange", // occupied color in your CSS
+  occupied: "seat-orange",
   reserved: "seat-purple",
 };
 
 const farFutureIso = (): string => new Date("2999-12-31T23:59:59.000Z").toISOString();
-
 const normalizeSeatId = (v: string): string => String(v).trim();
 
-const isTempName = (name: string): boolean => {
-  const n = name.trim().toLowerCase();
-  return n.startsWith("temp");
-};
-
-const isTempMirrorRow = (note: string | null): boolean => {
-  const n = (note ?? "").trim().toLowerCase();
-  return n === "temp";
-};
-
-// If you also want customer view to ignore auto reservation blocks (recommended, same as staff)
-const isAutoReservationRow = (note: string | null): boolean => {
-  const n = (note ?? "").trim().toLowerCase();
-  return n === "reservation";
-};
+const isTempName = (name: string): boolean => name.trim().toLowerCase().startsWith("temp");
+const isTempMirrorRow = (note: string | null): boolean => (note ?? "").trim().toLowerCase() === "temp";
+const isAutoReservationRow = (note: string | null): boolean => (note ?? "").trim().toLowerCase() === "reservation";
 
 const formatPHDate = (d: Date): string =>
   d.toLocaleDateString("en-PH", {
@@ -93,7 +77,6 @@ const formatPHDate = (d: Date): string =>
   });
 
 const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
-  // ✅ SAME PINS AS STAFF (READ-ONLY)
   const pins: SeatPin[] = useMemo(
     () => [
       { id: CONFERENCE_ID, label: "CONFERENCE ROOM", x: 13, y: 21.6, kind: "room" },
@@ -137,7 +120,6 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
       { id: "12B", label: "12B", x: 16.5, y: 68.3, kind: "seat" },
       { id: "12C", label: "12C", x: 24, y: 68.2, kind: "seat" },
 
-      // (Optional) right-side swatches (legend)
       { id: SWATCH_GREEN_ID, label: "", x: 90, y: 83.5, kind: "seat", readonly: true, fixedStatus: "temp_available" },
       { id: SWATCH_YELLOW_ID, label: "", x: 90, y: 88, kind: "seat", readonly: true, fixedStatus: "occupied_temp" },
       { id: SWATCH_RED_ID, label: "", x: 90, y: 92.5, kind: "seat", readonly: true, fixedStatus: "occupied" },
@@ -146,12 +128,8 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
     []
   );
 
-  const seatIdsOnly = useMemo<string[]>(
-    () => pins.filter((p) => p.kind === "seat" && !p.readonly).map((p) => p.id),
-    [pins]
-  );
-
-  const blockedIds = useMemo<string[]>(() => [...seatIdsOnly, CONFERENCE_ID], [seatIdsOnly]);
+  const seatIdsOnly = useMemo(() => pins.filter((p) => p.kind === "seat" && !p.readonly).map((p) => p.id), [pins]);
+  const blockedIds = useMemo(() => [...seatIdsOnly, CONFERENCE_ID], [seatIdsOnly]);
 
   const [statusBySeat, setStatusBySeat] = useState<Record<string, SeatStatus>>({});
   const [now, setNow] = useState<Date>(new Date());
@@ -179,7 +157,6 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
       .lt("start_at", endIso)
       .gt("end_at", nowIso);
 
-    // include promos CURRENT + FUTURE (end_at > now)
     const promoSeatsReq = supabase
       .from("promo_bookings")
       .select("id, seat_number, start_at, end_at, status, area, full_name")
@@ -209,12 +186,11 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
 
     const nowMs = new Date(nowIso).getTime();
 
-    // promo rules
     const applyPromoRow = (seatId: string, r: PromoBookingRow): void => {
       if (!seatId) return;
 
       if (isTempName(r.full_name)) {
-        next[seatId] = "occupied_temp"; // YELLOW
+        next[seatId] = "occupied_temp";
         return;
       }
 
@@ -222,11 +198,8 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
       const e = new Date(r.end_at).getTime();
       if (!Number.isFinite(s) || !Number.isFinite(e)) return;
 
-      if (nowMs >= s && nowMs < e) {
-        next[seatId] = "occupied"; // RED
-      } else if (nowMs < s) {
-        next[seatId] = "reserved"; // PURPLE
-      }
+      if (nowMs >= s && nowMs < e) next[seatId] = "occupied";
+      else if (nowMs < s) next[seatId] = "reserved";
     };
 
     if (!promoSeatsErr) {
@@ -242,16 +215,12 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
       if (rows.length > 0) applyPromoRow(CONFERENCE_ID, rows[0]);
     }
 
-    // seat_blocked_times (highest priority)
     if (!blockedErr) {
       const rows = (blockedData ?? []) as SeatBlockedRow[];
       const bySeat: Record<string, SeatStatus> = {};
 
       for (const r of rows) {
-        // ignore TEMP mirrors
         if (isTempMirrorRow(r.note)) continue;
-
-        // ignore auto reservation blocks (same logic as staff)
         if (isAutoReservationRow(r.note)) continue;
 
         const id = normalizeSeatId(r.seat_number);
@@ -292,8 +261,30 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
 
   return (
     <IonPage>
-      {/* ✅ SAME background design as Login (same classnames) */}
-      <IonContent fullscreen className="login-content" scrollY={true}>
+      {/* ✅ STYLE OVERRIDE INSIDE PAGE (kills ::before/::after overlay) */}
+      <style>
+        {`
+          .login-content.seatmap-clean::before,
+          .login-content.seatmap-clean::after{
+            content: none !important;
+            display: none !important;
+            background: transparent !important;
+            opacity: 0 !important;
+          }
+        `}
+      </style>
+
+      <IonContent
+        fullscreen
+        className="login-content seatmap-clean"
+        scrollY={true}
+        style={
+          {
+            "--background": "#ffffff",
+            background: "#ffffff",
+          } as React.CSSProperties
+        }
+      >
         {/* Leaves */}
         <div className="leaf leaf-top-left">
           <img src={leaves} className="leaf-img" alt="" />
@@ -308,16 +299,21 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
           <img src={leaves} className="leaf-img" alt="" />
         </div>
 
-        {/* ✅ SINGLE g.png (outside card) */}
-        <img src={gImg} className="login-g" alt="" />
 
-        {/* ✅ SAME wrapper/card style as Login */}
         <div className="login-wrapper">
-          <div className="login-box" style={{ width: "100%", maxWidth: 1100 }}>
-            {/* ==== SAME SEAT UI CODE ==== */}
+          {/* remove beige card look here too */}
+          <div
+            className="login-box"
+            style={{
+              width: "60%",
+              maxWidth: 1100,
+              background: "transparent",
+              boxShadow: "none",
+            }}
+          >
             <div className="seatmap-wrap seatmap-wrap--customer">
               <div className="seatmap-container">
-                <div className="seatmap-card">
+                <div className="seatmap-card" style={{ background: "#ffffff" }}>
                   <div className="seatmap-topbar">
                     <p className="seatmap-title">Seat Map</p>
                     <span className="seatmap-date">{formatPHDate(now)}</span>
@@ -382,7 +378,7 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
                 </div>
               </div>
             </div>
-            {/* ==== END SAME SEAT UI CODE ==== */}
+            {/* end seat UI */}
           </div>
         </div>
       </IonContent>
