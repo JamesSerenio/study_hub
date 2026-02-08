@@ -14,7 +14,7 @@
 // ✅ View to Customer toggle via localStorage
 // ✅ Search bar (Full Name only)
 // ✅ Date filter uses reservation_date
-// ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now) (same behavior style)
+// ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -33,9 +33,12 @@ type DiscountKind = "none" | "percent" | "amount";
 
 interface CustomerSession {
   id: string;
-  date: string; // fallback
-  full_name: string;
 
+  // Reservation uses reservation_date, but keep date as fallback
+  date: string; // fallback
+  reservation_date: string | null; // filter basis
+
+  full_name: string;
   phone_number?: string | null;
 
   customer_type: string;
@@ -47,11 +50,10 @@ interface CustomerSession {
   time_started: string;
   time_ended: string;
 
-  total_time: number; // keep from DB (hours or number) but we display as is
+  total_time: number;
   total_amount: number;
 
   reservation: string; // "yes"
-  reservation_date: string | null; // filter basis
   seat_number: string;
 
   // ✅ DOWN PAYMENT (DB)
@@ -309,7 +311,7 @@ const Customer_Reservations: React.FC = () => {
     return getDiscountTextFrom(di.kind, di.value);
   };
 
-  // ✅ System cost AFTER discount (Payment basis)
+  // ✅ System cost AFTER discount (Payment basis)  ❌ NO DP deduction (same as Customer_Lists)
   const getSessionSystemCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
@@ -342,7 +344,7 @@ const Customer_Reservations: React.FC = () => {
     return { gcash, cash, totalPaid };
   };
 
-  // ✅ Release reserved seat blocks when stop time is pressed
+  // ✅ Release reserved seat blocks when stop time is pressed (same behavior)
   const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
@@ -363,6 +365,7 @@ const Customer_Reservations: React.FC = () => {
 
     const rows = (data ?? []) as SeatBlockedRow[];
     if (rows.length === 0) {
+      // fallback: try update by seat list
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
         .update({ end_at: nowIso, note: "stopped (fallback)" })
@@ -378,10 +381,10 @@ const Customer_Reservations: React.FC = () => {
     }
 
     const ids = rows.map((r) => r.id);
-    const { error: upErr } = await supabase
-      .from("seat_blocked_times")
-      .update({ end_at: nowIso, note: "stopped" })
-      .in("id", ids);
+    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in(
+      "id",
+      ids
+    );
 
     if (upErr) {
       // eslint-disable-next-line no-console
@@ -516,7 +519,7 @@ const Customer_Reservations: React.FC = () => {
   };
 
   // -----------------------
-  // ✅ DOWN PAYMENT MODAL (EDITABLE)
+  // ✅ DOWN PAYMENT MODAL (EDITABLE) (same as Customer_Lists)
   // -----------------------
   const openDpModal = (s: CustomerSession): void => {
     setDpTarget(s);
@@ -557,7 +560,7 @@ const Customer_Reservations: React.FC = () => {
   };
 
   // -----------------------
-  // PAYMENT MODAL (same as Customer_Lists)
+  // PAYMENT MODAL (same behavior as Customer_Lists)  ✅ DO NOT DEDUCT DP
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
     const due = getSessionSystemCost(s); // ✅ payment basis = system cost after discount (NO DP)
@@ -754,7 +757,7 @@ const Customer_Reservations: React.FC = () => {
 
                     const disp = getDisplayAmount(session);
 
-                    const systemCost = getSessionSystemCost(session); // payment basis
+                    const systemCost = getSessionSystemCost(session); // payment basis (NO DP)
                     const pi = getPaidInfo(session);
                     const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid));
 
@@ -1077,7 +1080,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL (same as Customer_Lists breakdown + DP effect) */}
+          {/* RECEIPT MODAL (same breakdown + DP effect) */}
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>

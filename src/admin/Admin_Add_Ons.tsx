@@ -13,6 +13,8 @@ import {
   IonList,
   IonText,
   IonIcon,
+  IonSelect,
+  IonSelectOption,
 } from "@ionic/react";
 import type { IonInputCustomEvent, InputChangeEventDetail } from "@ionic/core";
 import { chevronDownOutline, imageOutline, addCircleOutline } from "ionicons/icons";
@@ -23,9 +25,17 @@ type Profile = { role: string };
 const normalizeCategory = (v: string): string =>
   v.trim().replace(/\s+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+const normalizeSize = (v: string): string => v.trim();
+
+type AddOnSize = "None" | "XS" | "S" | "M" | "L" | "XL" | "2XL" | "3XL" | "4XL" | "5XL";
+
+const SIZE_OPTIONS: AddOnSize[] = ["None", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+
 const Admin_Add_Ons: React.FC = () => {
   const [category, setCategory] = useState<string>("");
+  const [size, setSize] = useState<AddOnSize>("None"); // ✅ optional
   const [name, setName] = useState<string>("");
+
   const [restocked, setRestocked] = useState<number | undefined>(undefined);
   const [price, setPrice] = useState<number | undefined>(undefined);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -42,10 +52,7 @@ const Admin_Add_Ons: React.FC = () => {
 
   useEffect(() => {
     const loadCategories = async (): Promise<void> => {
-      const { data, error } = await supabase
-        .from("add_ons")
-        .select("category")
-        .not("category", "is", null);
+      const { data, error } = await supabase.from("add_ons").select("category").not("category", "is", null);
 
       if (error) {
         console.error("Load categories error:", error);
@@ -117,12 +124,10 @@ const Admin_Add_Ons: React.FC = () => {
         const fileName: string = `${Date.now()}.${fileExt}`;
         const filePath: string = `${userId}/${fileName}`;
 
-        const { error: uploadError } = await supabase.storage
-          .from("add-ons")
-          .upload(filePath, imageFile, {
-            contentType: imageFile.type,
-            upsert: false,
-          });
+        const { error: uploadError } = await supabase.storage.from("add-ons").upload(filePath, imageFile, {
+          contentType: imageFile.type,
+          upsert: false,
+        });
 
         if (uploadError) throw uploadError;
 
@@ -131,11 +136,17 @@ const Admin_Add_Ons: React.FC = () => {
       }
 
       const categoryFinal = normalizeCategory(category);
+      const sizeFinal = normalizeSize(size);
+
+      // ✅ optional size: store null or "None" based on your preference
+      // Here: if "None", store null (cleaner). If you prefer text "None", change to "None".
+      const sizeDb: string | null = sizeFinal === "None" ? null : sizeFinal;
 
       const { error: insertErr } = await supabase.from("add_ons").insert([
         {
           admin_id: userId,
           category: categoryFinal,
+          size: sizeDb, // ✅ NEW FIELD (optional)
           name: name.trim(),
           restocked,
           price,
@@ -151,6 +162,7 @@ const Admin_Add_Ons: React.FC = () => {
       });
 
       setCategory("");
+      setSize("None");
       setName("");
       setRestocked(undefined);
       setPrice(undefined);
@@ -235,12 +247,7 @@ const Admin_Add_Ons: React.FC = () => {
                     <div className="aao-popover-scroll">
                       <IonList className="aao-popover-list">
                         {shownCats.map((c) => (
-                          <IonItem
-                            key={c}
-                            button
-                            className="aao-popover-item"
-                            onClick={() => handlePickCategory(c)}
-                          >
+                          <IonItem key={c} button className="aao-popover-item" onClick={() => handlePickCategory(c)}>
                             <IonLabel className="aao-popover-label">{c}</IonLabel>
                           </IonItem>
                         ))}
@@ -248,6 +255,31 @@ const Admin_Add_Ons: React.FC = () => {
                     </div>
                   </IonContent>
                 </IonPopover>
+
+                {/* ✅ SIZE (OPTIONAL) - inserted between Category and Item Name */}
+                <IonItem className="aao-item" lines="none">
+                  <IonLabel position="stacked" className="aao-label">
+                    Size <span className="aao-opt">(optional)</span>
+                  </IonLabel>
+
+                  <div className="aao-field">
+                    <IonSelect
+                      className="aao-input"
+                      value={size}
+                      interface="popover"
+                      placeholder="None"
+                      onIonChange={(e) => setSize((e.detail.value ?? "None") as AddOnSize)}
+                    >
+                      {SIZE_OPTIONS.map((opt) => (
+                        <IonSelectOption key={opt} value={opt}>
+                          {opt}
+                        </IonSelectOption>
+                      ))}
+                    </IonSelect>
+                  </div>
+
+                  <div className="aao-help">Choose size if applicable (ex: Small/Medium/Large/XL). If not, keep None.</div>
+                </IonItem>
 
                 {/* NAME */}
                 <IonItem className="aao-item" lines="none">
@@ -346,12 +378,7 @@ const Admin_Add_Ons: React.FC = () => {
           </div>
         </div>
 
-        <IonToast
-          isOpen={showToast}
-          message={toastMessage}
-          duration={2000}
-          onDidDismiss={() => setShowToast(false)}
-        />
+        <IonToast isOpen={showToast} message={toastMessage} duration={2000} onDidDismiss={() => setShowToast(false)} />
       </IonContent>
     </IonPage>
   );

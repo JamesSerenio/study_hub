@@ -787,7 +787,7 @@ const Product_Item_Lists: React.FC = () => {
                   <IonInput
                     className="pil-input"
                     value={cashOutType}
-                    placeholder="Example: Water / Food / Transportation / Personal"
+                    placeholder="Example: money"
                     onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) =>
                       setCashOutType(String(e.detail.value ?? ""))
                     }
@@ -801,7 +801,7 @@ const Product_Item_Lists: React.FC = () => {
                   <IonTextarea
                     className="pil-textarea"
                     value={cashOutDesc}
-                    placeholder="Example: refill 2 gal / allowance"
+                    placeholder="Example: allowance"
                     autoGrow
                     onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) =>
                       setCashOutDesc(String(e.detail.value ?? ""))
