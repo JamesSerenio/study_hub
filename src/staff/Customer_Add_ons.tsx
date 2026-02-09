@@ -1,11 +1,12 @@
 // src/pages/Customer_Add_ons.tsx
 // ✅ FIX: uses Asia/Manila day range (+08:00) for created_at filtering
 // ✅ FIX: joins add_ons (name/category/size)
-// ✅ NEW: VOID (reverses SOLD then deletes rows in DB) — same behavior as Admin
+// ✅ NEW: CANCEL (requires description, moves rows to cancel table, reverses SOLD, deletes originals) via RPC
 // ✅ Payment modal + manual PAID toggle (updates all rows in grouped order)
 // ✅ IMPORTANT: Requires RLS policies:
 //    - SELECT/UPDATE/DELETE on customer_session_add_ons
 //    - SELECT on add_ons
+//    - EXECUTE on function cancel_add_on_order
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -86,11 +87,6 @@ type OrderGroup = {
   is_paid: boolean;
   paid_at: string | null;
 };
-
-interface AddOnSoldRow {
-  id: string;
-  sold: NumericLike;
-}
 
 /* ---------------- helpers ---------------- */
 
@@ -180,8 +176,10 @@ const Customer_Add_ons: React.FC = () => {
 
   const [togglingPaidKey, setTogglingPaidKey] = useState<string | null>(null);
 
-  // ✅ VOID states
-  const [voidingKey, setVoidingKey] = useState<string | null>(null);
+  // ✅ CANCEL states
+  const [cancelTarget, setCancelTarget] = useState<OrderGroup | null>(null);
+  const [cancelDesc, setCancelDesc] = useState<string>("");
+  const [cancellingKey, setCancellingKey] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchAddOns(selectedDate);
@@ -427,79 +425,56 @@ const Customer_Add_ons: React.FC = () => {
   };
 
   /* =========================================================
-     ✅ VOID (same behavior as Admin)
-     - Reverse SOLD only, then delete rows in DB
-     NOTE: requires DELETE policy on customer_session_add_ons.
+     ✅ CANCEL (requires description)
+     - uses RPC cancel_add_on_order(item_ids[], description)
+     - DB will:
+       (1) insert rows into customer_session_add_ons_cancelled
+       (2) reverse SOLD
+       (3) delete original rows
   ========================================================= */
 
-  const voidOrder = async (o: OrderGroup): Promise<void> => {
-    const ok = window.confirm(
-      `VOID this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
-        o.grand_total
-      )}\nDate: ${formatDateTime(o.created_at)}\n\n✅ VOID will reverse SOLD then delete rows in DB.`
-    );
-    if (!ok) return;
+  const openCancelModal = (o: OrderGroup): void => {
+    setCancelTarget(o);
+    setCancelDesc("");
+  };
+
+  const submitCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
+
+    const desc = cancelDesc.trim();
+    if (!desc) {
+      alert("Description is required before you can cancel.");
+      return;
+    }
+
+    const itemIds = cancelTarget.items.map((x) => x.id);
+    if (itemIds.length === 0) {
+      alert("Nothing to cancel.");
+      return;
+    }
 
     try {
-      setVoidingKey(o.key);
+      setCancellingKey(cancelTarget.key);
 
-      // sum qty per add_on_id
-      const qtyByAddOnId = new Map<string, number>();
-      for (const it of o.items) {
-        const q = Math.max(0, Math.floor(Number(it.quantity) || 0));
-        if (q <= 0) continue;
-        qtyByAddOnId.set(it.add_on_id, (qtyByAddOnId.get(it.add_on_id) ?? 0) + q);
-      }
+      const { error } = await supabase.rpc("cancel_add_on_order", {
+        p_item_ids: itemIds,
+        p_description: desc,
+      });
 
-      const addOnIds = Array.from(qtyByAddOnId.keys());
-      if (addOnIds.length === 0) {
-        alert("Nothing to void (no quantities).");
+      if (error) {
+        alert(`Cancel error: ${error.message}`);
         return;
       }
 
-      // read current sold
-      const { data: addRows, error: addErr } = await supabase
-        .from("add_ons")
-        .select("id, sold")
-        .in("id", addOnIds)
-        .returns<AddOnSoldRow[]>();
-
-      if (addErr) {
-        alert(`VOID error (read add_ons): ${addErr.message}`);
-        return;
-      }
-
-      // update sold safely (subtract qty)
-      for (const a of addRows ?? []) {
-        const qty = qtyByAddOnId.get(a.id) ?? 0;
-        const curSold = Math.max(0, Math.floor(toNumber(a.sold)));
-        const nextSold = Math.max(0, curSold - qty);
-
-        const { error: updErr } = await supabase.from("add_ons").update({ sold: nextSold }).eq("id", a.id);
-
-        if (updErr) {
-          alert(`VOID error (update add_ons sold): ${updErr.message}`);
-          return;
-        }
-      }
-
-      // delete the customer_session_add_ons rows
-      const ids = o.items.map((x) => x.id);
-      const { error: delErr } = await supabase.from("customer_session_add_ons").delete().in("id", ids);
-
-      if (delErr) {
-        alert(`VOID error (delete rows): ${delErr.message}`);
-        return;
-      }
-
+      setCancelTarget(null);
       setSelectedOrder(null);
       await fetchAddOns(selectedDate);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
-      alert("VOID order failed.");
+      alert("Cancel failed.");
     } finally {
-      setVoidingKey(null);
+      setCancellingKey(null);
     }
   };
 
@@ -562,7 +537,7 @@ const Customer_Add_ons: React.FC = () => {
                     const remaining = round2(Math.max(0, due - totalPaid));
                     const paid = toBool(o.is_paid);
 
-                    const busyVoid = voidingKey === o.key;
+                    const busyCancel = cancellingKey === o.key;
 
                     return (
                       <tr key={o.key}>
@@ -642,9 +617,9 @@ const Customer_Add_ons: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ✅ VOID */}
-                            <button className="receipt-btn" disabled={busyVoid} onClick={() => void voidOrder(o)}>
-                              {busyVoid ? "Voiding..." : "Void"}
+                            {/* ✅ CANCEL (with required description) */}
+                            <button className="receipt-btn" disabled={busyCancel} onClick={() => openCancelModal(o)}>
+                              {busyCancel ? "Cancelling..." : "Cancel"}
                             </button>
                           </div>
                         </td>
@@ -727,6 +702,61 @@ const Customer_Add_ons: React.FC = () => {
                     </>
                   );
                 })()}
+              </div>
+            </div>
+          )}
+
+          {/* ✅ CANCEL DESCRIPTION MODAL */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancellingKey ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL ORDER</h3>
+                <p className="receipt-subtitle">
+                  {cancelTarget.full_name} • Seat {cancelTarget.seat_number}
+                </p>
+
+                <hr />
+
+                <div style={{ fontWeight: 800, marginBottom: 8 }}>Required: Description / Reason</div>
+
+                <textarea
+                  value={cancelDesc}
+                  onChange={(e) => setCancelDesc(e.currentTarget.value)}
+                  placeholder="Example: Customer changed mind / wrong item / duplicate order..."
+                  style={{
+                    width: "100%",
+                    minHeight: 110,
+                    resize: "vertical",
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid rgba(0,0,0,0.15)",
+                    outline: "none",
+                    fontSize: 14,
+                  }}
+                  disabled={cancellingKey === cancelTarget.key}
+                />
+
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
+                  ⚠️ Cancel will archive this order to the cancel table and reverse SOLD.
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 14 }}>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setCancelTarget(null)}
+                    disabled={cancellingKey === cancelTarget.key}
+                  >
+                    Close
+                  </button>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void submitCancel()}
+                    disabled={cancellingKey === cancelTarget.key || cancelDesc.trim().length === 0}
+                    title={cancelDesc.trim().length === 0 ? "Description required" : "Submit cancel"}
+                  >
+                    {cancellingKey === cancelTarget.key ? "Cancelling..." : "Submit Cancel"}
+                  </button>
+                </div>
               </div>
             </div>
           )}

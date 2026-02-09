@@ -35,6 +35,9 @@ import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
 
+/* ✅ cancelled page (for now add-ons cancelled records) */
+import Customer_Cancelled from "./Customer_Cancelled";
+
 /* assets */
 import dashboardIcon from "../assets/add_user.png";
 import studyHubLogo from "../assets/study_hub.png";
@@ -46,6 +49,9 @@ import onsIcon from "../assets/hamburger.png";
 import discountIcon from "../assets/discount.png";
 import salesIcon from "../assets/sales.png";
 import flowerImg from "../assets/flower.png";
+
+/* ✅ cancelled icon */
+import cancelledIcon from "../assets/cancelled.png";
 
 /* ✅ bell */
 import bellIcon from "../assets/bell.png";
@@ -263,11 +269,9 @@ const Staff_menu: React.FC = () => {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: NOTIF_TABLE },
         (payload: RealtimePostgresUpdatePayload<AddOnNotifRow>) => {
-          // ✅ when rows become read/unread, sync count
           const oldRow = payload.old;
           const newRow = payload.new;
 
-          // keep list synced (update row in place)
           setNotifItems((prev) => {
             const idx = prev.findIndex((x) => x.id === newRow.id);
             if (idx === -1) return prev;
@@ -276,7 +280,6 @@ const Staff_menu: React.FC = () => {
             return copy;
           });
 
-          // unreadCount delta
           const wasUnread = oldRow && (oldRow as AddOnNotifRow).is_read === false;
           const isUnread = newRow.is_read === false;
 
@@ -286,7 +289,6 @@ const Staff_menu: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ resync when user returns to tab (important in mobile)
     const onFocus = (): void => {
       void fetchUnreadCount();
       void fetchNotifications();
@@ -319,6 +321,10 @@ const Staff_menu: React.FC = () => {
       { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
       { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
       { name: "Customer Add-Ons", key: "customer_add_ons", icon: onsIcon },
+
+      /* ✅ RENAMED */
+      { name: "Customer Cancelled", key: "customer_cancelled", icon: cancelledIcon },
+
       { name: "Customer Promo List", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
@@ -351,6 +357,10 @@ const Staff_menu: React.FC = () => {
         return <Customer_Calendar />;
       case "customer_add_ons":
         return <Customer_Add_ons />;
+
+      case "customer_cancelled":
+        return <Customer_Cancelled />;
+
       case "customer_promo_list":
         return <Customer_Discount_List />;
       case "staff_sales_report":
@@ -452,7 +462,6 @@ const Staff_menu: React.FC = () => {
 
               <span className="topbar-title">Staff Dashboard</span>
 
-              {/* ✅ RIGHT SIDE: bell */}
               <IonButtons slot="end">
                 <div className="topbar-tools" ref={bellWrapRef}>
                   <button

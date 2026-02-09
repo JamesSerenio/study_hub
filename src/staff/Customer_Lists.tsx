@@ -12,7 +12,7 @@
 // ✅ Phone # column beside Full Name
 // ✅ View to Customer toggle now supports CROSS-DEVICE via Supabase table: customer_view_state (SINGLE ROW id=1)
 // ✅ Search bar (Full Name only)
-// ✅ NEW: Cancel button (DELETE record) in table + receipt
+// ✅ NEW: Cancel now requires DESCRIPTION and moves record to customer_sessions_cancelled (RPC)
 // ✅ strict TS (NO "any")
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -188,8 +188,10 @@ const Customer_Lists: React.FC = () => {
   const [activeView, setActiveView] = useState<CustomerViewRow | null>(null);
   const [viewBusy, setViewBusy] = useState<boolean>(false);
 
-  // ✅ Cancel busy id
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  // ✅ Cancel modal (requires description)
+  const [cancelTarget, setCancelTarget] = useState<CustomerSession | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>("");
+  const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
 
   // Date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
@@ -665,50 +667,55 @@ const Customer_Lists: React.FC = () => {
   };
 
   /* =========================
-     STAFF BUTTON ACTIONS
+     ✅ CANCEL FLOW (REQUIRES DESCRIPTION)
+     - opens modal
+     - submit -> RPC cancel_customer_session()
+     - moves row to customer_sessions_cancelled then deletes original
   ========================= */
 
-  // ❌ CANCEL (DELETE) — used in table + receipt
-  const cancelSession = async (s: CustomerSession): Promise<void> => {
-    const ok = window.confirm(
-      `Cancel this session?\n\nCustomer: ${s.full_name}\nDate: ${s.date}\n\nThis will PERMANENTLY delete this record.`
-    );
-    if (!ok) return;
+  const openCancelModal = (s: CustomerSession): void => {
+    setCancelTarget(s);
+    setCancelReason("");
+  };
+
+  const submitCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
+
+    const reason = cancelReason.trim();
+    if (!reason) return;
 
     try {
-      setCancellingId(s.id);
+      setCancellingBusy(true);
 
-      // If this session is currently being viewed to customer, turn it OFF first
-      if (isCustomerViewOnForSession(activeView, s.id)) {
-        try {
-          setViewBusy(true);
-          await setCustomerViewState(false, null);
-          await readActiveCustomerView();
-        } catch {
-          // ignore
-        } finally {
-          setViewBusy(false);
-        }
-      }
-
-      const { error } = await supabase.from("customer_sessions").delete().eq("id", s.id);
+      const { error } = await supabase.rpc("cancel_customer_session", {
+        p_session_id: cancelTarget.id,
+        p_reason: reason,
+      });
 
       if (error) {
         alert(`Cancel failed: ${error.message}`);
         return;
       }
 
-      setSessions((prev) => prev.filter((x) => x.id !== s.id));
+      // remove from UI list immediately
+      setSessions((prev) => prev.filter((x) => x.id !== cancelTarget.id));
 
-      if (selectedSession?.id === s.id) {
+      // close receipt if same
+      if (selectedSession?.id === cancelTarget.id) {
         setSelectedSession(null);
       }
+
+      // refresh view state display
+      await readActiveCustomerView();
+
+      setCancelTarget(null);
+      setCancelReason("");
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
       alert("Cancel failed.");
     } finally {
-      setCancellingId(null);
+      setCancellingBusy(false);
     }
   };
 
@@ -737,7 +744,6 @@ const Customer_Lists: React.FC = () => {
   };
 
   const closeReceipt = async (): Promise<void> => {
-    // ✅ If this selected session is the active one, turning off view should happen here
     if (selectedSession && isCustomerViewOnForSession(activeView, selectedSession.id)) {
       try {
         setViewBusy(true);
@@ -765,7 +771,6 @@ const Customer_Lists: React.FC = () => {
                 Showing records for: <strong>{selectedDate}</strong>
               </div>
 
-              {/* ✅ Show current active view info */}
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
                 Customer View:{" "}
                 <strong>
@@ -775,7 +780,7 @@ const Customer_Lists: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
-              {/* ✅ SEARCH BAR */}
+              {/* SEARCH */}
               <div className="customer-searchbar-inline">
                 <div className="customer-searchbar-inner">
                   <span className="customer-search-icon" aria-hidden="true">
@@ -845,11 +850,7 @@ const Customer_Lists: React.FC = () => {
 
                 <tbody>
                   {filteredSessions.map((session) => {
-                    const open = ((): boolean => {
-                      if ((session.hour_avail || "").toUpperCase() === "OPEN") return true;
-                      const end = new Date(session.time_ended);
-                      return end.getFullYear() >= 2999;
-                    })();
+                    const open = isOpenTimeSession(session);
 
                     const disp = getDisplayAmount(session);
 
@@ -899,7 +900,7 @@ const Customer_Lists: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* ✅ PAYMENT (DO NOT TOUCH) */}
+                        {/* PAYMENT */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">
@@ -927,11 +928,7 @@ const Customer_Lists: React.FC = () => {
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                           >
-                            {togglingPaidId === session.id
-                              ? "Updating..."
-                              : toBool(session.is_paid)
-                              ? "PAID"
-                              : "UNPAID"}
+                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
                           </button>
                         </td>
 
@@ -953,17 +950,15 @@ const Customer_Lists: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ❌ CANCEL */}
+                            {/* ✅ CANCEL -> opens reason modal */}
                             <button
                               className="receipt-btn admin-danger"
-                              onClick={() => void cancelSession(session)}
-                              disabled={cancellingId === session.id}
-                              title="Cancel = delete this record"
+                              onClick={() => openCancelModal(session)}
+                              title="Cancel requires description"
                             >
-                              {cancellingId === session.id ? "Cancelling..." : "Cancel"}
+                              Cancel
                             </button>
 
-                            {/* ✅ quick indicator */}
                             {viewOn ? (
                               <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span>
                             ) : (
@@ -976,6 +971,64 @@ const Customer_Lists: React.FC = () => {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* ✅ CANCEL MODAL (REQUIRES DESCRIPTION) */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL SESSION</h3>
+                <p className="receipt-subtitle">{cancelTarget.full_name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Date</span>
+                  <span>{cancelTarget.date}</span>
+                </div>
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{cancelTarget.seat_number}</span>
+                </div>
+
+                <hr />
+
+                <div className="receipt-row" style={{ display: "grid", gap: 8 }}>
+                  <span style={{ fontWeight: 800 }}>Description / Reason (required)</span>
+                  <textarea
+                    className="reason-input"
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.currentTarget.value)}
+                    placeholder="e.g. Customer changed mind, wrong input, staff mistake..."
+                    rows={4}
+                    style={{ width: "100%", resize: "vertical" }}
+                    disabled={cancellingBusy}
+                  />
+                  <div style={{ fontSize: 12, opacity: 0.85 }}>
+                    ⚠️ Cannot cancel if empty. This record will be moved to <strong>customer_sessions_cancelled</strong>.
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setCancelTarget(null)}
+                    disabled={cancellingBusy}
+                  >
+                    Back
+                  </button>
+
+                  <button
+                    className="receipt-btn admin-danger"
+                    onClick={() => void submitCancel()}
+                    disabled={cancellingBusy || cancelReason.trim().length === 0}
+                    title={cancelReason.trim().length === 0 ? "Reason required" : "Submit cancel"}
+                  >
+                    {cancellingBusy ? "Cancelling..." : "Submit Cancel"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1126,7 +1179,7 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL (DO NOT TOUCH) */}
+          {/* PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1290,7 +1343,6 @@ const Customer_Lists: React.FC = () => {
 
                   const pi = getPaidInfo(selectedSession);
 
-                  // ✅ AFTER DP
                   const dpBalance = round2(Math.max(0, dueForPayment - dp));
                   const dpChange = round2(Math.max(0, dp - dueForPayment));
 
@@ -1374,14 +1426,14 @@ const Customer_Lists: React.FC = () => {
                     {isCustomerViewOnForSession(activeView, selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
                   </button>
 
-                  {/* ❌ CANCEL IN RECEIPT */}
+                  {/* ✅ CANCEL IN RECEIPT -> opens reason modal */}
                   <button
                     className="receipt-btn admin-danger"
-                    onClick={() => void cancelSession(selectedSession)}
-                    disabled={cancellingId === selectedSession.id || viewBusy}
-                    title="Cancel = delete this record"
+                    onClick={() => openCancelModal(selectedSession)}
+                    disabled={viewBusy}
+                    title="Cancel requires description"
                   >
-                    {cancellingId === selectedSession.id ? "Cancelling..." : "Cancel"}
+                    Cancel
                   </button>
 
                   <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy}>

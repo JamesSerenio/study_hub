@@ -7168,3 +7168,8 @@ ion-toolbar {
   margin-top: 12px;
   font-weight: 900;
 }
+
+.cancelled-content {
+  --background: #b9c9a3 !important;
+  background: #b9c9a3 !important;
+}
