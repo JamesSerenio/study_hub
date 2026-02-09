@@ -2,6 +2,7 @@
 // ✅ FIX: uses RPC (place_addon_order) so SOLD/STOCKS update works on Vercel too
 // ✅ Scroll FIX: page can scroll + card has max-height + internal scroll
 // ✅ Leaves background (Login style)
+// ✅ NEW: Success modal centered (small) after submit
 // ✅ STRICT TS, NO any
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -23,8 +24,9 @@ import {
   IonText,
   IonToast,
   IonSpinner,
+  IonModal,
 } from "@ionic/react";
-import { closeOutline } from "ionicons/icons";
+import { closeOutline, checkmarkCircleOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 import leaves from "../assets/leave.png";
 
@@ -73,6 +75,8 @@ const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 
 type RpcItem = { add_on_id: string; quantity: number };
 
+const SUCCESS_MESSAGE = "Thank you! Kindly proceed to the counter for pickup and payment.";
+
 const Add_Ons: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -82,6 +86,9 @@ const Add_Ons: React.FC = () => {
     () => (toastMsg.toLowerCase().includes("success") ? "success" : "danger"),
     [toastMsg]
   );
+
+  // ✅ Success modal
+  const [successOpen, setSuccessOpen] = useState<boolean>(false);
 
   const [addOns, setAddOns] = useState<AddOn[]>([]);
   const [addOnsFullName, setAddOnsFullName] = useState<string>("");
@@ -110,7 +117,7 @@ const Add_Ons: React.FC = () => {
     setShowToast(true);
   };
 
-  const showSuccess = (msg: string): void => {
+  const showSuccessToast = (msg: string): void => {
     setToastMsg(msg);
     setShowToast(true);
   };
@@ -367,13 +374,16 @@ const Add_Ons: React.FC = () => {
     setIsPickerOpen(false);
   };
 
+  const closeSuccess = (): void => {
+    setSuccessOpen(false);
+  };
+
   const handleSubmitAddOns = async (): Promise<void> => {
     const name = addOnsFullName.trim();
     if (!name) return showError("Full Name is required.");
     if (!addOnsSeat) return showError("Seat Number is required.");
     if (selectedAddOns.length === 0) return showError("Please select at least one add-on.");
 
-    // Build RPC payload
     const items: RpcItem[] = selectedAddOns.map((s) => ({
       add_on_id: s.id,
       quantity: Math.max(1, Math.floor(toNum(s.quantity))),
@@ -394,7 +404,14 @@ const Add_Ons: React.FC = () => {
       }
 
       await fetchAddOns();
-      showSuccess("Add-ons saved successfully!");
+
+      // ✅ show success modal (small + centered)
+      setSuccessOpen(true);
+
+      // optional toast (you can remove if you want)
+      showSuccessToast("Add-ons saved successfully!");
+
+      // reset form after success
       resetAddOnsForm();
     } finally {
       setIsLoading(false);
@@ -444,11 +461,7 @@ const Add_Ons: React.FC = () => {
 
             <IonItem className="ao-form-item">
               <IonLabel position="stacked">Seat Number *</IonLabel>
-              <IonSelect
-                value={addOnsSeat}
-                placeholder="Choose seat"
-                onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}
-              >
+              <IonSelect value={addOnsSeat} placeholder="Choose seat" onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}>
                 {seatGroups.map((g) => (
                   <React.Fragment key={g.title}>
                     <IonSelectOption disabled value={`__${g.title}__`}>
@@ -500,11 +513,7 @@ const Add_Ons: React.FC = () => {
                   {category && hasSizes ? (
                     <IonItem className="ao-form-item ao-form-item-compact" style={{ marginTop: 10 }}>
                       <IonLabel position="stacked">Select Size</IonLabel>
-                      <IonSelect
-                        value={pickedSize}
-                        placeholder="Choose size"
-                        onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}
-                      >
+                      <IonSelect value={pickedSize} placeholder="Choose size" onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}>
                         {sizeOptions.map((sz) => (
                           <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
                             {sz}
@@ -546,11 +555,7 @@ const Add_Ons: React.FC = () => {
                   </IonButton>
                 </div>
 
-                <IonSearchbar
-                  value={pickerSearch}
-                  onIonInput={(e) => setPickerSearch(asString(e.detail.value))}
-                  placeholder="Search item name..."
-                />
+                <IonSearchbar value={pickerSearch} onIonInput={(e) => setPickerSearch(asString(e.detail.value))} placeholder="Search item name..." />
 
                 {pickerItems.length === 0 ? (
                   <IonText style={{ opacity: 0.85 }}>
@@ -617,14 +622,10 @@ const Add_Ons: React.FC = () => {
                           <IonLabel>
                             <div style={{ fontWeight: 700 }}>
                               {selected.name}{" "}
-                              {cleanSize(selected.size) ? (
-                                <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span>
-                              ) : null}
+                              {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
                             </div>
                             <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
-                            <div style={{ marginTop: 4, fontWeight: 700 }}>
-                              Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
-                            </div>
+                            <div style={{ marginTop: 4, fontWeight: 700 }}>Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}</div>
                             <div style={{ marginTop: 6, opacity: 0.9 }}>
                               Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
                             </div>
@@ -644,10 +645,7 @@ const Add_Ons: React.FC = () => {
                               }}
                             />
 
-                            <IonButton
-                              color="danger"
-                              onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}
-                            >
+                            <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
                               Remove
                             </IonButton>
                           </div>
@@ -675,11 +673,35 @@ const Add_Ons: React.FC = () => {
           </div>
         </div>
 
+        {/* ✅ SMALL CENTER SUCCESS MODAL */}
+        <IonModal
+          isOpen={successOpen}
+          onDidDismiss={closeSuccess}
+          backdropDismiss={true}
+          className="ao-success-modal"
+        >
+          <div className="ao-success-box">
+            <div className="ao-success-top">
+              <IonIcon icon={checkmarkCircleOutline} className="ao-success-icon" />
+              <button type="button" className="ao-success-x" onClick={closeSuccess} aria-label="Close">
+                ✕
+              </button>
+            </div>
+
+            <div className="ao-success-title">Order Received</div>
+            <div className="ao-success-msg">{SUCCESS_MESSAGE}</div>
+
+            <IonButton expand="block" className="ao-success-btn" onClick={closeSuccess}>
+              OK
+            </IonButton>
+          </div>
+        </IonModal>
+
         <IonToast
           isOpen={showToast}
           onDidDismiss={() => setShowToast(false)}
           message={toastMsg}
-          duration={2200}
+          duration={1600}
           color={toastColor}
         />
       </IonContent>

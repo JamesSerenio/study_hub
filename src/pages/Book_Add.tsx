@@ -806,7 +806,7 @@ const Book_Add: React.FC = () => {
         <IonAlert
           isOpen={addOnsSentOpen}
           header="Sent"
-          message={"Order sent to staff. Please wait a few minutes."}
+          message={"Thank you! kindly proceed to the counter for pickup and payment."}
           buttons={[
             {
               text: "OK",
