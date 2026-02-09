@@ -15,6 +15,7 @@
 // ✅ Search bar (Full Name only)
 // ✅ Date filter uses reservation_date
 // ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now)
+// ✅ NEW: CANCEL button (table + receipt) deletes customer_sessions row and releases reserved seats
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -174,6 +175,9 @@ const Customer_Reservations: React.FC = () => {
 
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+
+  // ✅ CANCEL state
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   const [, setViewTick] = useState<number>(0);
 
@@ -481,7 +485,7 @@ const Customer_Reservations: React.FC = () => {
     if (rows.length === 0) {
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
-        .update({ end_at: nowIso, note: "stopped (fallback)" })
+        .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
         .in("seat_number", seats)
         .eq("source", "reserved")
         .gt("end_at", nowIso);
@@ -496,7 +500,7 @@ const Customer_Reservations: React.FC = () => {
     const ids = rows.map((r) => r.id);
     const { error: upErr } = await supabase
       .from("seat_blocked_times")
-      .update({ end_at: nowIso, note: "stopped" })
+      .update({ end_at: nowIso, note: "stopped/cancelled" })
       .in("id", ids);
 
     if (upErr) {
@@ -564,6 +568,54 @@ const Customer_Reservations: React.FC = () => {
   const getChargeMinutesForReceipt = (s: CustomerSession): number => {
     const used = getUsedMinutesForReceipt(s);
     return Math.max(0, used - FREE_MINUTES);
+  };
+
+  /* =========================
+     ✅ CANCEL (same behavior as customer list)
+     - stop View to Customer if active
+     - release reserved seat blocks
+     - delete customer_sessions row
+  ========================= */
+  const cancelReservation = async (session: CustomerSession): Promise<void> => {
+    const ok = window.confirm(
+      `Cancel this reservation?\n\nName: ${session.full_name}\nDate: ${session.reservation_date ?? "N/A"}\nSeat: ${
+        session.seat_number
+      }\n\nThis will DELETE the record.`
+    );
+    if (!ok) return;
+
+    try {
+      setCancellingId(session.id);
+
+      // if this session is currently being viewed by customer, stop it first
+      if (isCustomerViewOnFor(session.id)) {
+        try {
+          await stopCustomerViewRealtime();
+        } catch {
+          // ignore
+        }
+      }
+
+      // release reserved seats (important for reservations)
+      const nowIso = new Date().toISOString();
+      await releaseSeatBlocksNow(session, nowIso);
+
+      // delete session
+      const { error } = await supabase.from("customer_sessions").delete().eq("id", session.id);
+      if (error) {
+        alert(`Cancel error: ${error.message}`);
+        return;
+      }
+
+      setSessions((prev) => prev.filter((x) => x.id !== session.id));
+      setSelectedSession((prev) => (prev?.id === session.id ? null : prev));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Cancel failed.");
+    } finally {
+      setCancellingId(null);
+    }
   };
 
   // -----------------------
@@ -807,9 +859,7 @@ const Customer_Reservations: React.FC = () => {
 
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
                 Customer View:{" "}
-                <strong>
-                  {viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}
-                </strong>
+                <strong>{viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}</strong>
               </div>
             </div>
 
@@ -940,7 +990,9 @@ const Customer_Reservations: React.FC = () => {
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remainingPay.toFixed(2)}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              Remaining ₱{remainingPay.toFixed(2)}
+                            </span>
 
                             <button
                               className="receipt-btn"
@@ -987,6 +1039,16 @@ const Customer_Reservations: React.FC = () => {
 
                             <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
                               View Receipt
+                            </button>
+
+                            {/* ✅ CANCEL button */}
+                            <button
+                              className="receipt-btn"
+                              onClick={() => void cancelReservation(session)}
+                              disabled={cancellingId === session.id}
+                              title="Cancel reservation (delete)"
+                            >
+                              {cancellingId === session.id ? "Cancelling..." : "Cancel"}
                             </button>
 
                             {isCustomerViewOnFor(session.id) ? (
@@ -1406,6 +1468,16 @@ const Customer_Reservations: React.FC = () => {
                     {selectedSession && isCustomerViewOnFor(selectedSession.id)
                       ? "Stop View to Customer"
                       : "View to Customer"}
+                  </button>
+
+                  {/* ✅ CANCEL in receipt */}
+                  <button
+                    className="receipt-btn"
+                    onClick={() => selectedSession && void cancelReservation(selectedSession)}
+                    disabled={cancellingId === selectedSession.id}
+                    title="Cancel reservation (delete)"
+                  >
+                    {cancellingId === selectedSession.id ? "Cancelling..." : "Cancel"}
                   </button>
 
                   <button className="close-btn" onClick={() => void closeReceipt()}>
