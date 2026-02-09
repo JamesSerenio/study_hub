@@ -7214,3 +7214,52 @@ ion-toolbar {
   --background: #b9c9a3 !important;
   background: #b9c9a3 !important;
 }
+
+
+/* =========================================
+   ✅ GREEN BUTTON THEME (#45a049)
+   Applies to: Add_Ons page + success modal
+========================================= */
+
+/* Primary buttons (Add More Add-Ons / Submit Order / OK) */
+ion-button.ao-primary,
+ion-button.ao-secondary,
+ion-button.ao-success-btn {
+  --background: #45a049 !important;
+  --background-hover: #3e8e41 !important;
+  --background-activated: #367a3a !important;
+  --background-focused: #3e8e41 !important;
+
+  --color: #ffffff !important;
+
+  --border-color: #45a049 !important;
+  --ripple-color: rgba(255, 255, 255, 0.25) !important;
+
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  border-radius: 14px;
+}
+
+/* Make sure the native button also looks green */
+ion-button.ao-primary::part(native),
+ion-button.ao-secondary::part(native),
+ion-button.ao-success-btn::part(native) {
+  background: #45a049 !important;
+  color: #ffffff !important;
+  border-radius: 14px;
+}
+
+/* Optional: keep "Reset" (clear) readable */
+ion-button[fill="clear"] {
+  --color: #45a049 !important;
+  font-weight: 800;
+}
+
+/* Keep danger buttons red (Remove / x) */
+ion-button[color="danger"] {
+  --background: #d32f2f !important;
+  --background-hover: #c62828 !important;
+  --background-activated: #b71c1c !important;
+  --color: #ffffff !important;
+}
