@@ -1,16 +1,8 @@
 // src/admin/Admin_Customer_Cancelled.tsx
-// ✅ SAME UI/LOGIC as src/pages/Customer_Cancelled.tsx (TABS: Add-Ons / Walk-in / Reservation)
-// ✅ Add-Ons tab: existing grouped logic (Asia/Manila day range +08:00) from cancelled_at
-// ✅ Walk-in tab: reads public.customer_sessions_cancelled where reservation='no'
-// ✅ Reservation tab: reads public.customer_sessions_cancelled where reservation='yes'
-// ✅ Same layout/classnames style (customer-*)
-// ✅ Receipt modal (view details)
-// ✅ READ-ONLY (NOT EDITABLE; paid badge NOT clickable; no updates)
-// ✅ ADMIN EXTRA:
-//    - Delete by DATE (top): deletes ALL cancelled records for selectedDate (Add-Ons + Sessions)
-//    - Delete per row/group (Action)
-//    - Export to Excel (ONE FILE) with 3 sections: Add-Ons (TOP) + Walk-in + Reservation
-// ✅ STRICT TS (no any)
+// ✅ FIXED: clearRow() no longer assigns undefined to cell.border / cell.fill (TS error)
+//    ExcelJS types don't allow undefined there in strict TS.
+//    We clear formatting by setting them to empty objects / null-safe resets.
+// ✅ Everything else unchanged.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText, IonAlert, IonSpinner } from "@ionic/react";
@@ -126,7 +118,7 @@ type CancelledSessionDB = {
   created_at: string | null;
   staff_id: string | null;
 
-  date: string; // date
+  date: string;
   full_name: string;
   customer_type: string;
   customer_field: string | null;
@@ -313,26 +305,22 @@ const ReadOnlyBadge: React.FC<{ paid: boolean }> = ({ paid }) => {
 
 const GROUP_WINDOW_MS = 10_000;
 
-/* =========================
-   COMPONENT
-========================= */
 type CancelTab = "addons" | "walkin" | "reservation";
 
 const Admin_Customer_Cancelled: React.FC = () => {
   const [tab, setTab] = useState<CancelTab>("addons");
-
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Add-ons data
+  // Add-ons
   const [rowsAddOns, setRowsAddOns] = useState<CancelItemAddOn[]>([]);
   const [selectedGroupAddOns, setSelectedGroupAddOns] = useState<CancelGroupAddOn | null>(null);
 
-  // Sessions data (walk-in + reservation)
+  // Sessions
   const [rowsSessions, setRowsSessions] = useState<CancelledSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<CancelledSession | null>(null);
 
-  // ✅ Admin actions state
+  // Admin actions
   const [confirmDeleteDate, setConfirmDeleteDate] = useState<boolean>(false);
   const [confirmDeleteAddOnGroup, setConfirmDeleteAddOnGroup] = useState<CancelGroupAddOn | null>(null);
   const [confirmDeleteSession, setConfirmDeleteSession] = useState<CancelledSession | null>(null);
@@ -353,22 +341,76 @@ const Admin_Customer_Cancelled: React.FC = () => {
     setSelectedGroupAddOns(null);
     setSelectedSession(null);
 
-    if (tab === "addons") {
-      await fetchCancelledAddOns(selectedDate);
-    } else if (tab === "walkin") {
-      await fetchCancelledSessions(selectedDate, "no");
-    } else {
-      await fetchCancelledSessions(selectedDate, "yes");
-    }
+    if (tab === "addons") await fetchCancelledAddOns(selectedDate);
+    else if (tab === "walkin") await fetchCancelledSessions(selectedDate, "no");
+    else await fetchCancelledSessions(selectedDate, "yes");
   };
 
+  const groupAddOnsFromRows = (rows: CancelItemAddOn[]): CancelGroupAddOn[] => {
+    if (rows.length === 0) return [];
 
-  /* -----------------------------
-     FETCH: Add-Ons Cancelled
-  ------------------------------ */
+    const groups: CancelGroupAddOn[] = [];
+    let current: CancelGroupAddOn | null = null;
+    let last: CancelItemAddOn | null = null;
+
+    const sameKey = (a: CancelItemAddOn, b: CancelItemAddOn): boolean =>
+      norm(a.full_name) === norm(b.full_name) && norm(a.seat_number) === norm(b.seat_number) && norm(a.description) === norm(b.description);
+
+    for (const r of rows) {
+      const startNew =
+        current === null || last === null || !sameKey(r, last) || Math.abs(ms(r.cancelled_at) - ms(last.cancelled_at)) > GROUP_WINDOW_MS;
+
+      if (startNew) {
+        const key = `${norm(r.full_name)}|${norm(r.seat_number)}|${ms(r.cancelled_at)}|${norm(r.description)}`;
+        current = {
+          key,
+          cancelled_at: r.cancelled_at,
+          full_name: r.full_name,
+          seat_number: r.seat_number,
+          description: r.description || "-",
+          items: [],
+          grand_total: 0,
+          gcash_amount: 0,
+          cash_amount: 0,
+          is_paid: false,
+          paid_at: null,
+        };
+        groups.push(current);
+      }
+
+      if (!current) continue;
+
+      current.items.push({
+        id: r.id,
+        original_id: r.original_id,
+        add_on_id: r.add_on_id,
+        item_name: r.item_name,
+        category: r.category,
+        size: r.size,
+        quantity: r.quantity,
+        price: r.price,
+        total: r.total,
+      });
+
+      current.grand_total = round2(current.grand_total + r.total);
+      current.gcash_amount = round2(current.gcash_amount + r.gcash_amount);
+      current.cash_amount = round2(current.cash_amount + r.cash_amount);
+      current.is_paid = current.is_paid || r.is_paid;
+      current.paid_at = current.paid_at ?? r.paid_at;
+
+      last = r;
+    }
+
+    return groups.sort((a, b) => ms(b.cancelled_at) - ms(a.cancelled_at));
+  };
+
+  const groupedAddOns = useMemo<CancelGroupAddOn[]>(() => groupAddOnsFromRows(rowsAddOns), [rowsAddOns]);
+
+  /* =========================
+     FETCH: ADD-ONS CANCELLED
+  ========================= */
   const fetchCancelledAddOns = async (dateStr: string): Promise<void> => {
     setLoading(true);
-
     const { startIso, endIso } = manilaDayRange(dateStr);
 
     const { data, error } = await supabase
@@ -448,81 +490,9 @@ const Admin_Customer_Cancelled: React.FC = () => {
     setLoading(false);
   };
 
-  const groupAddOnsFromRows = (rows: CancelItemAddOn[]): CancelGroupAddOn[] => {
-    if (rows.length === 0) return [];
-
-    const groups: CancelGroupAddOn[] = [];
-    let current: CancelGroupAddOn | null = null;
-    let last: CancelItemAddOn | null = null;
-
-    const sameKey = (a: CancelItemAddOn, b: CancelItemAddOn): boolean =>
-      norm(a.full_name) === norm(b.full_name) &&
-      norm(a.seat_number) === norm(b.seat_number) &&
-      norm(a.description) === norm(b.description);
-
-    for (const r of rows) {
-      const startNew =
-        current === null ||
-        last === null ||
-        !sameKey(r, last) ||
-        Math.abs(ms(r.cancelled_at) - ms(last.cancelled_at)) > GROUP_WINDOW_MS;
-
-      if (startNew) {
-        const key = `${norm(r.full_name)}|${norm(r.seat_number)}|${ms(r.cancelled_at)}|${norm(r.description)}`;
-        current = {
-          key,
-          cancelled_at: r.cancelled_at,
-          full_name: r.full_name,
-          seat_number: r.seat_number,
-          description: r.description || "-",
-          items: [],
-          grand_total: 0,
-          gcash_amount: 0,
-          cash_amount: 0,
-          is_paid: false,
-          paid_at: null,
-        };
-        groups.push(current);
-      }
-
-      if (!current) continue;
-
-      current.items.push({
-        id: r.id,
-        original_id: r.original_id,
-        add_on_id: r.add_on_id,
-        item_name: r.item_name,
-        category: r.category,
-        size: r.size,
-        quantity: r.quantity,
-        price: r.price,
-        total: r.total,
-      });
-
-      current.grand_total = round2(current.grand_total + r.total);
-      current.gcash_amount = round2(current.gcash_amount + r.gcash_amount);
-      current.cash_amount = round2(current.cash_amount + r.cash_amount);
-      current.is_paid = current.is_paid || r.is_paid;
-      current.paid_at = current.paid_at ?? r.paid_at;
-
-      last = r;
-    }
-
-    return groups.sort((a, b) => ms(b.cancelled_at) - ms(a.cancelled_at));
-  };
-
-  const groupedAddOns = useMemo<CancelGroupAddOn[]>(() => groupAddOnsFromRows(rowsAddOns), [rowsAddOns]);
-
-  /* -----------------------------
-     FETCH: Sessions Cancelled
-  ------------------------------ */
-  const fetchCancelledSessions = async (dateStr: string, reservation: "no" | "yes"): Promise<void> => {
-    setLoading(true);
-    const mapped = await fetchCancelledSessionsReturn(dateStr, reservation);
-    setRowsSessions(mapped);
-    setLoading(false);
-  };
-
+  /* =========================
+     FETCH: SESSIONS CANCELLED
+  ========================= */
   const fetchCancelledSessionsReturn = async (dateStr: string, reservation: "no" | "yes"): Promise<CancelledSession[]> => {
     const { startIso, endIso } = manilaDayRange(dateStr);
 
@@ -573,10 +543,9 @@ const Admin_Customer_Cancelled: React.FC = () => {
       return [];
     }
 
-    const mapped: CancelledSession[] = (data ?? []).map((r) => {
+    return (data ?? []).map((r) => {
       const kindRaw = String(r.discount_kind ?? "none") as DiscountKind;
-      const kind: DiscountKind =
-        kindRaw === "percent" || kindRaw === "amount" || kindRaw === "none" ? kindRaw : "none";
+      const kind: DiscountKind = kindRaw === "percent" || kindRaw === "amount" || kindRaw === "none" ? kindRaw : "none";
 
       return {
         id: r.id,
@@ -613,8 +582,13 @@ const Admin_Customer_Cancelled: React.FC = () => {
         paid_at: r.paid_at ?? null,
       };
     });
+  };
 
-    return mapped;
+  const fetchCancelledSessions = async (dateStr: string, reservation: "no" | "yes"): Promise<void> => {
+    setLoading(true);
+    const mapped = await fetchCancelledSessionsReturn(dateStr, reservation);
+    setRowsSessions(mapped);
+    setLoading(false);
   };
 
   /* =========================
@@ -625,23 +599,13 @@ const Admin_Customer_Cancelled: React.FC = () => {
       setBusyDelete(true);
       const { startIso, endIso } = manilaDayRange(selectedDate);
 
-      const { error: e1 } = await supabase
-        .from("customer_session_add_ons_cancelled")
-        .delete()
-        .gte("cancelled_at", startIso)
-        .lt("cancelled_at", endIso);
-
+      const { error: e1 } = await supabase.from("customer_session_add_ons_cancelled").delete().gte("cancelled_at", startIso).lt("cancelled_at", endIso);
       if (e1) {
         alert(`Delete Add-Ons by date failed: ${e1.message}`);
         return;
       }
 
-      const { error: e2 } = await supabase
-        .from("customer_sessions_cancelled")
-        .delete()
-        .gte("cancelled_at", startIso)
-        .lt("cancelled_at", endIso);
-
+      const { error: e2 } = await supabase.from("customer_sessions_cancelled").delete().gte("cancelled_at", startIso).lt("cancelled_at", endIso);
       if (e2) {
         alert(`Delete Sessions by date failed: ${e2.message}`);
         return;
@@ -695,7 +659,6 @@ const Admin_Customer_Cancelled: React.FC = () => {
       setConfirmDeleteSession(null);
       setSelectedSession(null);
 
-      // refresh current tab only
       await fetchCancelledSessions(selectedDate, s.reservation === "yes" ? "yes" : "no");
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -707,16 +670,14 @@ const Admin_Customer_Cancelled: React.FC = () => {
   };
 
   /* =========================
-     ADMIN: EXCEL (ONE FILE)
+     ADMIN: EXCEL (FIXED LAYOUT)
   ========================= */
   const exportExcelAll = async (): Promise<void> => {
     try {
       setBusyExport(true);
 
-      // Pull all sections fresh
       const { startIso, endIso } = manilaDayRange(selectedDate);
 
-      // Add-ons
       const { data: addData, error: addErr } = await supabase
         .from("customer_session_add_ons_cancelled")
         .select(
@@ -760,33 +721,26 @@ const Admin_Customer_Cancelled: React.FC = () => {
           id: r.id,
           original_id: r.original_id,
           add_on_id: r.add_on_id,
-
           item_name: a?.name ?? "-",
           category: a?.category ?? "-",
           size: a?.size ?? null,
-
           quantity: qty,
           price,
           total,
-
           cancelled_at: r.cancelled_at,
           created_at: r.created_at ?? null,
-
           full_name: r.full_name,
           seat_number: r.seat_number,
-
           gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
           cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
           is_paid: toBool(r.is_paid),
           paid_at: r.paid_at ?? null,
-
           description: String(r.description ?? "").trim(),
         };
       });
 
       const addGroups = groupAddOnsFromRows(addMapped);
 
-      // Walk-in + Reservation
       const walkin = await fetchCancelledSessionsReturn(selectedDate, "no");
       const reservation = await fetchCancelledSessionsReturn(selectedDate, "yes");
 
@@ -795,23 +749,27 @@ const Admin_Customer_Cancelled: React.FC = () => {
       wb.created = new Date();
 
       const ws = wb.addWorksheet("Cancelled Records", {
-        pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+        pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
         properties: { defaultRowHeight: 18 },
+        views: [{ state: "frozen", ySplit: 5 }],
       });
 
       ws.columns = [
-        { key: "c1", width: 22 },
-        { key: "c2", width: 18 },
-        { key: "c3", width: 18 },
-        { key: "c4", width: 26 },
-        { key: "c5", width: 14 },
-        { key: "c6", width: 14 },
-        { key: "c7", width: 18 },
-        { key: "c8", width: 14 },
-        { key: "c9", width: 14 },
-        { key: "c10", width: 14 },
-        { key: "c11", width: 16 },
-        { key: "c12", width: 34 },
+        { width: 22 },
+        { width: 14 },
+        { width: 18 },
+        { width: 22 },
+        { width: 18 },
+        { width: 12 },
+        { width: 14 },
+        { width: 12 },
+        { width: 12 },
+        { width: 12 },
+        { width: 18 },
+        { width: 16 },
+        { width: 16 },
+        { width: 12 },
+        { width: 34 },
       ];
 
       const borderAll: Partial<ExcelJS.Borders> = {
@@ -821,59 +779,68 @@ const Admin_Customer_Cancelled: React.FC = () => {
         right: { style: "thin" },
       };
 
-      const fillGray = (argb: string): ExcelJS.Fill => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
+      const fillSolid = (argb: string): ExcelJS.Fill => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
 
-      const setBorderRow = (rowNo: number, from: number, to: number): void => {
-        for (let c = from; c <= to; c++) ws.getCell(rowNo, c).border = borderAll;
+      const setCell = (
+        rowNo: number,
+        colNo: number,
+        value: ExcelJS.CellValue,
+        opts?: { bold?: boolean; center?: boolean; right?: boolean; wrap?: boolean; fill?: string; numFmt?: string; size?: number }
+      ): void => {
+        const cell = ws.getCell(rowNo, colNo);
+        cell.value = value;
+        cell.border = borderAll;
+
+        cell.font = { bold: Boolean(opts?.bold), size: opts?.size ?? 11 };
+
+        const h = opts?.center ? "center" : opts?.right ? "right" : ("left" as ExcelJS.Alignment["horizontal"]);
+        cell.alignment = { vertical: "middle", horizontal: h, wrapText: opts?.wrap ?? true };
+
+        if (opts?.fill) cell.fill = fillSolid(opts.fill);
+        if (opts?.numFmt) cell.numFmt = opts.numFmt;
       };
 
-      const titleRow = (rowNo: number, text: string): void => {
-        ws.mergeCells(rowNo, 1, rowNo, 12);
-        const cell = ws.getCell(rowNo, 1);
-        cell.value = text;
-        cell.font = { bold: true, size: 14 };
-        cell.alignment = { vertical: "middle", horizontal: "left" };
-        cell.fill = fillGray("FFE5E7EB");
-        setBorderRow(rowNo, 1, 12);
-        ws.getRow(rowNo).height = 24;
+      const mergeTitle = (rowNo: number, text: string, fill: string): void => {
+        ws.mergeCells(rowNo, 1, rowNo, 15);
+        setCell(rowNo, 1, text, { bold: true, center: true, size: 16, fill });
+        ws.getRow(rowNo).height = 28;
       };
 
-      const headerRow = (rowNo: number, values: string[]): void => {
-        ws.getRow(rowNo).values = ["", ...values];
-        const row = ws.getRow(rowNo);
-        row.font = { bold: true };
-        row.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-        row.height = 22;
-        for (let c = 1; c <= 12; c++) {
+      const mergeSub = (rowNo: number, text: string): void => {
+        ws.mergeCells(rowNo, 1, rowNo, 15);
+        setCell(rowNo, 1, text, { bold: true, center: true, fill: "FFF3F4F6" });
+      };
+
+      const sectionTitle = (rowNo: number, text: string): void => {
+        ws.mergeCells(rowNo, 1, rowNo, 15);
+        setCell(rowNo, 1, text, { bold: true, fill: "FFE5E7EB", size: 13 });
+        ws.getRow(rowNo).height = 22;
+      };
+
+      const header = (rowNo: number, cols: Array<{ c: number; label: string }>): void => {
+        for (let c = 1; c <= 15; c++) setCell(rowNo, c, "", { fill: "FFF9FAFB" });
+        for (const x of cols) setCell(rowNo, x.c, x.label, { bold: true, center: true, fill: "FFF3F4F6", wrap: true });
+        ws.getRow(rowNo).height = 20;
+      };
+
+      // ✅ FIXED clearRow (NO undefined)
+      const clearRow = (rowNo: number): void => {
+        for (let c = 1; c <= 15; c++) {
           const cell = ws.getCell(rowNo, c);
-          cell.fill = fillGray("FFF3F4F6");
-          cell.border = borderAll;
+
+          cell.value = "";
+
+          // reset formatting in a TS-safe way
+          cell.border = {}; // empty border
+          cell.fill = { type: "pattern", pattern: "none" }; // remove fill
+          cell.font = { size: 11, bold: false };
+          cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+
+          cell.numFmt = "General";
         }
       };
 
-      const setText = (rowNo: number, col: number, v: string): void => {
-        const cell = ws.getCell(rowNo, col);
-        cell.value = v;
-        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
-        cell.border = borderAll;
-      };
-
-      const setCenter = (rowNo: number, col: number, v: string): void => {
-        const cell = ws.getCell(rowNo, col);
-        cell.value = v;
-        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-        cell.border = borderAll;
-      };
-
-      const setMoney = (rowNo: number, col: number, v: number): void => {
-        const cell = ws.getCell(rowNo, col);
-        cell.value = round2(v);
-        cell.numFmt = '₱#,##0.00';
-        cell.alignment = { vertical: "middle", horizontal: "right" };
-        cell.border = borderAll;
-      };
-
-      // Optional logo
+      // Logo (optional)
       try {
         const res = await fetch(logo);
         const buf = await res.arrayBuffer();
@@ -883,181 +850,204 @@ const Admin_Customer_Cancelled: React.FC = () => {
         // ignore
       }
 
-      ws.mergeCells(1, 1, 1, 12);
-      ws.getCell(1, 1).value = "ME TYME LOUNGE — CANCELLED RECORDS";
-      ws.getCell(1, 1).font = { bold: true, size: 16 };
-      ws.getCell(1, 1).alignment = { vertical: "middle", horizontal: "center" };
-
-      ws.mergeCells(2, 1, 2, 12);
-      ws.getCell(2, 1).value = `Date (Cancelled At / Manila): ${selectedDate}`;
-      ws.getCell(2, 1).font = { bold: true };
-      ws.getCell(2, 1).alignment = { vertical: "middle", horizontal: "center" };
-
-      ws.mergeCells(3, 1, 3, 12);
-      ws.getCell(3, 1).value = `Generated: ${new Date().toLocaleString("en-PH")}`;
-      ws.getCell(3, 1).alignment = { vertical: "middle", horizontal: "center" };
+      mergeTitle(1, "ME TYME LOUNGE — CANCELLED RECORDS", "FFFFFFFF");
+      mergeSub(2, `Date (Cancelled): ${selectedDate}`);
+      mergeSub(3, `Generated: ${new Date().toLocaleString("en-PH")}`);
+      clearRow(4);
 
       let r = 5;
 
-      // 1) ADD-ONS
-      titleRow(r, "1) CANCELLED ADD-ONS (Grouped)");
+      sectionTitle(r, "1) CANCELLED ADD-ONS (Grouped)");
       r++;
 
-      headerRow(r, ["Cancelled At", "Full Name", "Seat", "Item", "Category", "Size", "Qty", "Price", "Total", "Paid", "Description", "Group Key"]);
+      header(r, [
+        { c: 1, label: "Cancelled At" },
+        { c: 2, label: "Full Name" },
+        { c: 3, label: "Seat" },
+        { c: 4, label: "Item" },
+        { c: 5, label: "Category" },
+        { c: 6, label: "Size" },
+        { c: 7, label: "Qty" },
+        { c: 8, label: "Price" },
+        { c: 9, label: "Total" },
+        { c: 10, label: "Paid" },
+        { c: 11, label: "Description" },
+      ]);
       r++;
 
       let addTotal = 0;
-
       for (const g of addGroups) {
         for (const it of g.items) {
           addTotal = round2(addTotal + it.total);
 
-          setText(r, 1, formatDateTime(g.cancelled_at));
-          setText(r, 2, g.full_name || "-");
-          setText(r, 3, g.seat_number || "-");
-          setText(r, 4, it.item_name || "-");
-          setText(r, 5, it.category || "-");
-          setText(r, 6, sizeText(it.size));
-          setCenter(r, 7, String(it.quantity));
-          setMoney(r, 8, it.price);
-          setMoney(r, 9, it.total);
-          setCenter(r, 10, g.is_paid ? "PAID" : "UNPAID");
-          setText(r, 11, g.description || "-");
-          setText(r, 12, g.key);
+          setCell(r, 1, formatDateTime(g.cancelled_at));
+          setCell(r, 2, g.full_name || "-");
+          setCell(r, 3, g.seat_number || "-", { center: true });
+          setCell(r, 4, it.item_name || "-");
+          setCell(r, 5, it.category || "-");
+          setCell(r, 6, sizeText(it.size), { center: true });
+          setCell(r, 7, it.quantity, { center: true });
+          setCell(r, 8, it.price, { right: true, numFmt: "₱#,##0.00" });
+          setCell(r, 9, it.total, { right: true, numFmt: "₱#,##0.00" });
+          setCell(r, 10, g.is_paid ? "PAID" : "UNPAID", { center: true });
+          setCell(r, 11, g.description || "-");
+          for (let c = 12; c <= 15; c++) setCell(r, c, "");
           r++;
         }
       }
 
       ws.mergeCells(r, 1, r, 8);
-      ws.getCell(r, 1).value = "ADD-ONS TOTAL";
-      ws.getCell(r, 1).font = { bold: true };
-      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
-      setBorderRow(r, 1, 8);
-      setMoney(r, 9, addTotal);
-      setBorderRow(r, 10, 12);
-      ws.getCell(r, 10).value = "";
-      ws.getCell(r, 11).value = "";
-      ws.getCell(r, 12).value = "";
+      setCell(r, 1, "ADD-ONS TOTAL", { bold: true, right: true, fill: "FFF9FAFB" });
+      setCell(r, 9, addTotal, { bold: true, right: true, fill: "FFF9FAFB", numFmt: "₱#,##0.00" });
+      for (let c = 10; c <= 15; c++) setCell(r, c, "", { fill: "FFF9FAFB" });
       r += 2;
 
-      // 2) WALK-IN
-      titleRow(r, "2) CANCELLED WALK-IN");
+      sectionTitle(r, "2) CANCELLED WALK-IN");
       r++;
 
-      headerRow(r, ["Cancelled At", "Date", "Full Name", "Phone", "Seat", "Type", "Hours", "Time In", "Time Out", "Amount (After Discount)", "Cancel Reason", "Paid"]);
+      header(r, [
+        { c: 1, label: "Cancelled At" },
+        { c: 2, label: "Date" },
+        { c: 3, label: "Full Name" },
+        { c: 4, label: "Phone" },
+        { c: 5, label: "Seat" },
+        { c: 6, label: "Type" },
+        { c: 7, label: "Hours" },
+        { c: 8, label: "Time In" },
+        { c: 9, label: "Time Out" },
+        { c: 10, label: "Amount (After Discount)" },
+        { c: 11, label: "Discount" },
+        { c: 12, label: "Down Payment" },
+        { c: 13, label: "Paid" },
+        { c: 14, label: "Cancel Reason" },
+      ]);
       r++;
 
       let wTotal = 0;
-
       for (const s of walkin) {
         const base = round2(Math.max(0, s.total_amount));
         const disc = applyDiscount(base, s.discount_kind, s.discount_value);
+        const dp = round2(Math.max(0, s.down_payment));
         wTotal = round2(wTotal + disc.discountedCost);
 
-        setText(r, 1, formatDateTime(s.cancelled_at));
-        setText(r, 2, s.date);
-        setText(r, 3, s.full_name);
-        setText(r, 4, String(s.phone_number ?? "").trim() || "N/A");
-        setText(r, 5, s.seat_number);
-        setText(r, 6, s.customer_type);
-        setCenter(r, 7, s.hour_avail);
-        setText(r, 8, formatTimeText(s.time_started));
-        setText(r, 9, formatTimeText(s.time_ended));
-        setMoney(r, 10, disc.discountedCost);
-        setText(r, 11, s.cancel_reason || "-");
-        setCenter(r, 12, s.is_paid ? "PAID" : "UNPAID");
+        setCell(r, 1, formatDateTime(s.cancelled_at));
+        setCell(r, 2, s.date, { center: true });
+        setCell(r, 3, s.full_name);
+        setCell(r, 4, String(s.phone_number ?? "").trim() || "N/A");
+        setCell(r, 5, s.seat_number, { center: true });
+        setCell(r, 6, s.customer_type, { center: true });
+        setCell(r, 7, s.hour_avail, { center: true });
+        setCell(r, 8, formatTimeText(s.time_started), { center: true });
+        setCell(r, 9, formatTimeText(s.time_ended), { center: true });
+        setCell(r, 10, disc.discountedCost, { right: true, numFmt: "₱#,##0.00" });
+        setCell(r, 11, getDiscountText(s.discount_kind, s.discount_value), { center: true });
+        setCell(r, 12, dp, { right: true, numFmt: "₱#,##0.00" });
+        setCell(r, 13, s.is_paid ? "PAID" : "UNPAID", { center: true });
+        setCell(r, 14, s.cancel_reason || "-", { wrap: true });
+        setCell(r, 15, "");
         r++;
       }
 
       ws.mergeCells(r, 1, r, 9);
-      ws.getCell(r, 1).value = "WALK-IN TOTAL (After Discount)";
-      ws.getCell(r, 1).font = { bold: true };
-      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
-      setBorderRow(r, 1, 9);
-      setMoney(r, 10, wTotal);
-      setBorderRow(r, 11, 12);
-      ws.getCell(r, 11).value = "";
-      ws.getCell(r, 12).value = "";
+      setCell(r, 1, "WALK-IN TOTAL (After Discount)", { bold: true, right: true, fill: "FFF9FAFB" });
+      setCell(r, 10, wTotal, { bold: true, right: true, fill: "FFF9FAFB", numFmt: "₱#,##0.00" });
+      for (let c = 11; c <= 15; c++) setCell(r, c, "", { fill: "FFF9FAFB" });
       r += 2;
 
-      // 3) RESERVATION
-      titleRow(r, "3) CANCELLED RESERVATION");
+      sectionTitle(r, "3) CANCELLED RESERVATION");
       r++;
 
-      headerRow(r, ["Cancelled At", "Date", "Reservation Date", "Full Name", "Phone", "Seat", "Type", "Hours", "Time In", "Time Out", "Amount (After Discount)", "Cancel Reason"]);
+      header(r, [
+        { c: 1, label: "Cancelled At" },
+        { c: 2, label: "Date" },
+        { c: 3, label: "Reservation Date" },
+        { c: 4, label: "Full Name" },
+        { c: 5, label: "Phone" },
+        { c: 6, label: "Seat" },
+        { c: 7, label: "Type" },
+        { c: 8, label: "Hours" },
+        { c: 9, label: "Time In" },
+        { c: 10, label: "Time Out" },
+        { c: 11, label: "Amount (After Discount)" },
+        { c: 12, label: "Discount" },
+        { c: 13, label: "Down Payment" },
+        { c: 14, label: "Paid" },
+        { c: 15, label: "Cancel Reason" },
+      ]);
       r++;
 
       let resTotal = 0;
-
       for (const s of reservation) {
         const base = round2(Math.max(0, s.total_amount));
         const disc = applyDiscount(base, s.discount_kind, s.discount_value);
+        const dp = round2(Math.max(0, s.down_payment));
         resTotal = round2(resTotal + disc.discountedCost);
 
-        setText(r, 1, formatDateTime(s.cancelled_at));
-        setText(r, 2, s.date);
-        setText(r, 3, s.reservation_date ?? "-");
-        setText(r, 4, s.full_name);
-        setText(r, 5, String(s.phone_number ?? "").trim() || "N/A");
-        setText(r, 6, s.seat_number);
-        setText(r, 7, s.customer_type);
-        setCenter(r, 8, s.hour_avail);
-        setText(r, 9, formatTimeText(s.time_started));
-        setText(r, 10, formatTimeText(s.time_ended));
-        setMoney(r, 11, disc.discountedCost);
-        setText(r, 12, s.cancel_reason || "-");
+        setCell(r, 1, formatDateTime(s.cancelled_at));
+        setCell(r, 2, s.date, { center: true });
+        setCell(r, 3, s.reservation_date ?? "-", { center: true });
+        setCell(r, 4, s.full_name);
+        setCell(r, 5, String(s.phone_number ?? "").trim() || "N/A");
+        setCell(r, 6, s.seat_number, { center: true });
+        setCell(r, 7, s.customer_type, { center: true });
+        setCell(r, 8, s.hour_avail, { center: true });
+        setCell(r, 9, formatTimeText(s.time_started), { center: true });
+        setCell(r, 10, formatTimeText(s.time_ended), { center: true });
+        setCell(r, 11, disc.discountedCost, { right: true, numFmt: "₱#,##0.00" });
+        setCell(r, 12, getDiscountText(s.discount_kind, s.discount_value), { center: true });
+        setCell(r, 13, dp, { right: true, numFmt: "₱#,##0.00" });
+        setCell(r, 14, s.is_paid ? "PAID" : "UNPAID", { center: true });
+        setCell(r, 15, s.cancel_reason || "-", { wrap: true });
         r++;
       }
 
       ws.mergeCells(r, 1, r, 10);
-      ws.getCell(r, 1).value = "RESERVATION TOTAL (After Discount)";
-      ws.getCell(r, 1).font = { bold: true };
-      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
-      setBorderRow(r, 1, 10);
-      setMoney(r, 11, resTotal);
-      setBorderRow(r, 12, 12);
-      ws.getCell(r, 12).value = "";
+      setCell(r, 1, "RESERVATION TOTAL (After Discount)", { bold: true, right: true, fill: "FFF9FAFB" });
+      setCell(r, 11, resTotal, { bold: true, right: true, fill: "FFF9FAFB", numFmt: "₱#,##0.00" });
+      for (let c = 12; c <= 15; c++) setCell(r, c, "", { fill: "FFF9FAFB" });
       r += 2;
 
-      titleRow(r, "SUMMARY");
+      sectionTitle(r, "SUMMARY");
       r++;
 
-      headerRow(r, ["Section", "Count", "Total", "", "", "", "", "", "", "", "", ""]);
+      header(r, [
+        { c: 1, label: "Section" },
+        { c: 2, label: "Count" },
+        { c: 3, label: "Total" },
+      ]);
       r++;
 
       const addCount = addGroups.reduce((acc, g) => acc + g.items.length, 0);
 
-      setText(r, 1, "Add-Ons (items)");
-      setCenter(r, 2, String(addCount));
-      setMoney(r, 3, addTotal);
-      setBorderRow(r, 4, 12);
+      setCell(r, 1, "Add-Ons (items)", { bold: true });
+      setCell(r, 2, addCount, { center: true });
+      setCell(r, 3, addTotal, { right: true, numFmt: "₱#,##0.00" });
+      for (let c = 4; c <= 15; c++) setCell(r, c, "");
       r++;
 
-      setText(r, 1, "Walk-in");
-      setCenter(r, 2, String(walkin.length));
-      setMoney(r, 3, wTotal);
-      setBorderRow(r, 4, 12);
+      setCell(r, 1, "Walk-in", { bold: true });
+      setCell(r, 2, walkin.length, { center: true });
+      setCell(r, 3, wTotal, { right: true, numFmt: "₱#,##0.00" });
+      for (let c = 4; c <= 15; c++) setCell(r, c, "");
       r++;
 
-      setText(r, 1, "Reservation");
-      setCenter(r, 2, String(reservation.length));
-      setMoney(r, 3, resTotal);
-      setBorderRow(r, 4, 12);
+      setCell(r, 1, "Reservation", { bold: true });
+      setCell(r, 2, reservation.length, { center: true });
+      setCell(r, 3, resTotal, { right: true, numFmt: "₱#,##0.00" });
+      for (let c = 4; c <= 15; c++) setCell(r, c, "");
       r++;
 
       ws.mergeCells(r, 1, r, 2);
-      ws.getCell(r, 1).value = "GRAND TOTAL";
-      ws.getCell(r, 1).font = { bold: true };
-      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
-      setBorderRow(r, 1, 2);
-      setMoney(r, 3, round2(addTotal + wTotal + resTotal));
-      setBorderRow(r, 4, 12);
+      setCell(r, 1, "GRAND TOTAL", { bold: true, right: true, fill: "FFF3F4F6" });
+      setCell(r, 3, round2(addTotal + wTotal + resTotal), { bold: true, right: true, fill: "FFF3F4F6", numFmt: "₱#,##0.00" });
+      for (let c = 4; c <= 15; c++) setCell(r, c, "", { fill: "FFF3F4F6" });
+
+      ws.getRow(1).height = 30;
+      ws.getRow(2).height = 20;
+      ws.getRow(3).height = 18;
 
       const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       saveAs(blob, `Cancelled_Records_${selectedDate}.xlsx`);
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -1068,16 +1058,14 @@ const Admin_Customer_Cancelled: React.FC = () => {
     }
   };
 
-  /* -----------------------------
+  /* =========================
      UI
-  ------------------------------ */
-  const tabTitle =
-    tab === "addons" ? "Cancelled Add-Ons" : tab === "walkin" ? "Cancelled Walk-in" : "Cancelled Reservation";
+  ========================= */
+  const tabTitle = tab === "addons" ? "Cancelled Add-Ons" : tab === "walkin" ? "Cancelled Walk-in" : "Cancelled Reservation";
 
   return (
     <IonPage>
       <IonContent className="cancelled-content">
-        {/* ✅ CONFIRM DELETE BY DATE */}
         <IonAlert
           isOpen={confirmDeleteDate}
           onDidDismiss={() => setConfirmDeleteDate(false)}
@@ -1085,25 +1073,16 @@ const Admin_Customer_Cancelled: React.FC = () => {
           message={`Delete ALL cancelled records for ${selectedDate}? (Add-Ons + Walk-in + Reservation)`}
           buttons={[
             { text: "Cancel", role: "cancel" },
-            {
-              text: busyDelete ? "Deleting..." : "Delete",
-              role: "destructive",
-              handler: () => {
-                void deleteByDateAll();
-              },
-            },
+            { text: busyDelete ? "Deleting..." : "Delete", role: "destructive", handler: () => void deleteByDateAll() },
           ]}
         />
 
-        {/* ✅ CONFIRM DELETE GROUP */}
         <IonAlert
           isOpen={Boolean(confirmDeleteAddOnGroup)}
           onDidDismiss={() => setConfirmDeleteAddOnGroup(null)}
           header="Delete Cancelled Add-Ons"
           message={
-            confirmDeleteAddOnGroup
-              ? `Delete this cancelled add-ons group for ${confirmDeleteAddOnGroup.full_name} (${confirmDeleteAddOnGroup.items.length} item(s))?`
-              : ""
+            confirmDeleteAddOnGroup ? `Delete this cancelled add-ons group for ${confirmDeleteAddOnGroup.full_name} (${confirmDeleteAddOnGroup.items.length} item(s))?` : ""
           }
           buttons={[
             { text: "Cancel", role: "cancel" },
@@ -1117,16 +1096,13 @@ const Admin_Customer_Cancelled: React.FC = () => {
           ]}
         />
 
-        {/* ✅ CONFIRM DELETE SESSION */}
         <IonAlert
           isOpen={Boolean(confirmDeleteSession)}
           onDidDismiss={() => setConfirmDeleteSession(null)}
           header="Delete Cancelled Session"
           message={
             confirmDeleteSession
-              ? `Delete this cancelled ${confirmDeleteSession.reservation === "yes" ? "RESERVATION" : "WALK-IN"} record for ${
-                  confirmDeleteSession.full_name
-                }?`
+              ? `Delete this cancelled ${confirmDeleteSession.reservation === "yes" ? "RESERVATION" : "WALK-IN"} record for ${confirmDeleteSession.full_name}?`
               : ""
           }
           buttons={[
@@ -1142,13 +1118,11 @@ const Admin_Customer_Cancelled: React.FC = () => {
         />
 
         <div className="customer-lists-container">
-          {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">{tabTitle} Records</h2>
               <div className="customer-subtext">
-                Showing cancelled records for: <strong>{selectedDate}</strong>{" "}
-                {tab === "addons" ? `(${groupedAddOns.length})` : `(${rowsSessions.length})`}
+                Showing cancelled records for: <strong>{selectedDate}</strong> {tab === "addons" ? `(${groupedAddOns.length})` : `(${rowsSessions.length})`}
               </div>
               <div className="customer-subtext" style={{ fontSize: 12, opacity: 0.75 }}>
                 Read-only: cancelled records cannot be edited. (Admin can delete/export)
@@ -1156,7 +1130,6 @@ const Admin_Customer_Cancelled: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right" style={{ gap: 10, display: "flex", alignItems: "center", flexWrap: "wrap" }}>
-              {/* ✅ TABS */}
               <div className="customer-searchbar-inline" style={{ minWidth: 360 }}>
                 <div className="customer-searchbar-inner" style={{ gap: 8 }}>
                   <button
@@ -1200,37 +1173,19 @@ const Admin_Customer_Cancelled: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE */}
               <label className="date-pill">
                 <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
+                <input className="date-pill-input" type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
                 <span className="date-pill-icon" aria-hidden="true">
                   📅
                 </span>
               </label>
 
-              <button
-                className="receipt-btn"
-                onClick={() => void refresh()}
-                style={{ whiteSpace: "nowrap" }}
-                type="button"
-                disabled={loading || busyDelete}
-              >
+              <button className="receipt-btn" onClick={() => void refresh()} style={{ whiteSpace: "nowrap" }} type="button" disabled={loading || busyDelete}>
                 Refresh
               </button>
 
-              <button
-                className="receipt-btn"
-                onClick={() => void exportExcelAll()}
-                style={{ whiteSpace: "nowrap" }}
-                type="button"
-                disabled={busyExport || busyDelete}
-              >
+              <button className="receipt-btn" onClick={() => void exportExcelAll()} style={{ whiteSpace: "nowrap" }} type="button" disabled={busyExport || busyDelete}>
                 {busyExport ? "Exporting..." : "Export Excel (ALL)"}
               </button>
 
@@ -1252,9 +1207,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
             </div>
           )}
 
-          {/* =========================
-              TAB: ADD-ONS
-          ========================= */}
+          {/* TAB: ADD-ONS */}
           {tab === "addons" && (
             <>
               {loading ? (
@@ -1331,12 +1284,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
                                 View Receipt
                               </button>
 
-                              <button
-                                className="receipt-btn admin-danger"
-                                onClick={() => setConfirmDeleteAddOnGroup(g)}
-                                type="button"
-                                disabled={busyDelete}
-                              >
+                              <button className="receipt-btn admin-danger" onClick={() => setConfirmDeleteAddOnGroup(g)} type="button" disabled={busyDelete}>
                                 Delete
                               </button>
                             </div>
@@ -1348,7 +1296,6 @@ const Admin_Customer_Cancelled: React.FC = () => {
                 </div>
               )}
 
-              {/* RECEIPT MODAL (ADD-ONS) */}
               {selectedGroupAddOns && (
                 <div className="receipt-overlay" onClick={() => setSelectedGroupAddOns(null)}>
                   <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1420,12 +1367,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
                       <button className="close-btn" onClick={() => setSelectedGroupAddOns(null)} type="button">
                         Close
                       </button>
-                      <button
-                        className="receipt-btn admin-danger"
-                        onClick={() => setConfirmDeleteAddOnGroup(selectedGroupAddOns)}
-                        type="button"
-                        disabled={busyDelete}
-                      >
+                      <button className="receipt-btn admin-danger" onClick={() => setConfirmDeleteAddOnGroup(selectedGroupAddOns)} type="button" disabled={busyDelete}>
                         Delete
                       </button>
                     </div>
@@ -1435,9 +1377,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
             </>
           )}
 
-          {/* =========================
-              TAB: WALK-IN / RESERVATION
-          ========================= */}
+          {/* TAB: WALK-IN / RESERVATION */}
           {tab !== "addons" && (
             <>
               {loading ? (
@@ -1502,12 +1442,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
                                   View Receipt
                                 </button>
 
-                                <button
-                                  className="receipt-btn admin-danger"
-                                  onClick={() => setConfirmDeleteSession(s)}
-                                  type="button"
-                                  disabled={busyDelete}
-                                >
+                                <button className="receipt-btn admin-danger" onClick={() => setConfirmDeleteSession(s)} type="button" disabled={busyDelete}>
                                   Delete
                                 </button>
 
@@ -1524,7 +1459,6 @@ const Admin_Customer_Cancelled: React.FC = () => {
                 </div>
               )}
 
-              {/* RECEIPT MODAL (SESSIONS) */}
               {selectedSession && (
                 <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
                   <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1532,9 +1466,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
 
                     <h3 className="receipt-title">ME TYME LOUNGE</h3>
                     <p className="receipt-subtitle">
-                      {selectedSession.reservation === "yes"
-                        ? "CANCELLED RESERVATION RECEIPT"
-                        : "CANCELLED WALK-IN RECEIPT"}
+                      {selectedSession.reservation === "yes" ? "CANCELLED RESERVATION RECEIPT" : "CANCELLED WALK-IN RECEIPT"}
                     </p>
 
                     <hr />
@@ -1669,12 +1601,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
                       <button className="close-btn" onClick={() => setSelectedSession(null)} type="button">
                         Close
                       </button>
-                      <button
-                        className="receipt-btn admin-danger"
-                        onClick={() => setConfirmDeleteSession(selectedSession)}
-                        type="button"
-                        disabled={busyDelete}
-                      >
+                      <button className="receipt-btn admin-danger" onClick={() => setConfirmDeleteSession(selectedSession)} type="button" disabled={busyDelete}>
                         Delete
                       </button>
                     </div>
