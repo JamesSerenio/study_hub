@@ -4713,6 +4713,47 @@ ion-content.ssr-page {
   }
 }
 
+/* =========================================================
+   SYSTEM BOXES (Actual + Computed) SIDE-BY-SIDE
+========================================================= */
+
+.ssr-system-grid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ssr-system-box{
+  padding: 12px 10px;
+  background: rgba(0,0,0,.06);
+  border-radius: 14px;
+  border: 1px solid rgba(0,0,0,.08);
+}
+
+.ssr-system-label{
+  font-size: 13px;
+  font-weight: 900;
+  opacity: .92;
+  margin-bottom: 8px;
+}
+
+.ssr-system-value{
+  text-align:center;
+  font-size: 16px;
+  font-weight: 1100;
+  padding: 12px 10px;
+  border-radius: 12px;
+  background: rgba(0,0,0,.08);
+  border: 1px solid rgba(0,0,0,.12);
+}
+
+/* responsive: stack on small screens */
+@media (max-width: 600px){
+  .ssr-system-grid{
+    grid-template-columns: 1fr;
+  }
+}
 
 
 

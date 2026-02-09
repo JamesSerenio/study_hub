@@ -231,6 +231,7 @@ const StaffSalesReport: React.FC = () => {
       );
 
     if (upsertRes.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_sales_reports ensure(upsert) error:", upsertRes.error.message);
     }
   };
@@ -258,6 +259,7 @@ const StaffSalesReport: React.FC = () => {
       .single<DailyReportRow>();
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_sales_reports select error:", res.error.message);
       setReport(null);
       setLines([]);
@@ -293,6 +295,7 @@ const StaffSalesReport: React.FC = () => {
       .eq("report_id", reportId);
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_cash_count_lines select error:", res.error.message);
       return;
     }
@@ -319,9 +322,14 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("v_daily_sales_report_totals").select("*").eq("report_date", dateYMD).single<SalesTotalsRow>();
+    const res = await supabase
+      .from("v_daily_sales_report_totals")
+      .select("*")
+      .eq("report_date", dateYMD)
+      .single<SalesTotalsRow>();
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("v_daily_sales_report_totals error:", res.error.message);
       setTotals(null);
       return;
@@ -349,6 +357,7 @@ const StaffSalesReport: React.FC = () => {
       .lte("paid_at", endISO);
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("consignment query error:", res.error.message);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
@@ -380,6 +389,7 @@ const StaffSalesReport: React.FC = () => {
       .lte("paid_at", endISO);
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("addonsPaid query error:", res.error.message);
       setAddonsPaid(0);
       return;
@@ -399,6 +409,7 @@ const StaffSalesReport: React.FC = () => {
     const res = await supabase.from("cash_outs").select("amount, cashout_date").eq("cashout_date", dateYMD);
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("cash_outs query error:", res.error.message);
       setCashOutsTotal(0);
       return;
@@ -428,6 +439,7 @@ const StaffSalesReport: React.FC = () => {
       );
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_cash_count_lines upsert error:", res.error.message);
       return;
     }
@@ -439,7 +451,10 @@ const StaffSalesReport: React.FC = () => {
     await loadTotals(selectedDate);
   };
 
-  const updateReportField = async (field: "starting_cash" | "starting_gcash" | "bilin_amount", valueNum: number): Promise<void> => {
+  const updateReportField = async (
+    field: "starting_cash" | "starting_gcash" | "bilin_amount",
+    valueNum: number
+  ): Promise<void> => {
     if (!report || submitting) return;
 
     const safe = Math.max(0, valueNum);
@@ -453,6 +468,7 @@ const StaffSalesReport: React.FC = () => {
     const res = await supabase.from("daily_sales_reports").update({ [field]: safe }).eq("id", report.id);
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_sales_reports update error:", res.error.message);
       return;
     }
@@ -503,7 +519,9 @@ const StaffSalesReport: React.FC = () => {
     }));
 
     if (payload.length > 0) {
-      const r2 = await supabase.from("daily_cash_count_lines").upsert(payload, { onConflict: "report_id,money_kind,denomination" });
+      const r2 = await supabase
+        .from("daily_cash_count_lines")
+        .upsert(payload, { onConflict: "report_id,money_kind,denomination" });
       if (r2.error) return r2.error.message;
     }
 
@@ -538,7 +556,7 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    // ✅ make UI behave like others: after submit, totals hidden/zero
+    // ✅ after submit hide/zero
     setConsignment({ gross: 0, fee15: 0, net: 0 });
     setAddonsPaid(0);
     setCashOutsTotal(0);
@@ -564,7 +582,12 @@ const StaffSalesReport: React.FC = () => {
         return;
       }
 
-      const check = await supabase.from("daily_sales_reports").select("is_submitted").eq("report_date", selectedDate).single<{ is_submitted: boolean }>();
+      const check = await supabase
+        .from("daily_sales_reports")
+        .select("is_submitted")
+        .eq("report_date", selectedDate)
+        .single<{ is_submitted: boolean }>();
+
       const isSubmitted = Boolean(check.data?.is_submitted);
 
       if (isSubmitted) {
@@ -633,33 +656,22 @@ const StaffSalesReport: React.FC = () => {
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 
   /**
-   * ✅ FIXED PER YOUR REQUEST:
-   * - DO NOT include gcash from:
-   *   Paid reservations / New Advance / Down payments
-   *
-   * Sales System =
-   *   (COH cash + COH gcash)
-   * + Paid reservations CASH
-   * + New advance CASH
-   * + Down payments CASH
-   * - Starting Balance (cash + gcash)
+   * ✅ Actual System (your existing)
    */
   const salesSystem =
-    cohCash +
-    cohGcash +
-    paidResCash +
-    advCash +
-    dpCash -
-    (startingCash + startingGcash);
+    cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
+
+  /**
+   * ✅ NEW: Sales System (computed)
+   * add-ons + total time + consignment sales - discount
+   */
+  const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
+  const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
 
   /**
    * ✅ Sales Collected:
-   * - same base as Sales System
-   * - auto minus Bilin
    */
   const salesCollectedDisplay = salesSystem - bilin;
-
-  const totalTimeAmount = (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
 
   if (loading) {
     return (
@@ -678,8 +690,7 @@ const StaffSalesReport: React.FC = () => {
 
   return (
     <IonPage>
-      <IonHeader></IonHeader>
-
+      <IonHeader />
       <IonContent className="ion-padding ssr-page">
         <IonToast
           isOpen={toast.open}
@@ -815,9 +826,12 @@ const StaffSalesReport: React.FC = () => {
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(cohGcash)}</div>
                   </div>
 
+                  {/* ✅ SWITCH FIX:
+                      BEFORE: Inventory Loss here
+                      NOW: Cash Outs here */}
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">Expenses</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(expenses)}</div>
+                    <div className="ssr-left-label">Cash Outs</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(cashOutsTotal)}</div>
                     <div className="ssr-left-value ssr-left-value--gcash">—</div>
                   </div>
 
@@ -840,10 +854,17 @@ const StaffSalesReport: React.FC = () => {
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(dpGcash)}</div>
                   </div>
 
-                  {/* ✅ Sales System (uses ONLY CASH for the 3 rows above) */}
-                  <div className="ssr-left-row ssr-left-row--system">
-                    <div className="ssr-left-label">Sales System</div>
-                    <div className="ssr-left-value ssr-left-value--system ssr-span-2">{peso(salesSystem)}</div>
+                  {/* ✅ Actual + Computed side-by-side */}
+                  <div className="ssr-system-grid">
+                    <div className="ssr-system-box">
+                      <div className="ssr-system-label">Actual System</div>
+                      <div className="ssr-system-value">{peso(salesSystem)}</div>
+                    </div>
+
+                    <div className="ssr-system-box">
+                      <div className="ssr-system-label">Sales System</div>
+                      <div className="ssr-system-value">{peso(salesSystemComputed)}</div>
+                    </div>
                   </div>
 
                   <div className="ssr-sales-boxes">
@@ -857,23 +878,17 @@ const StaffSalesReport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* CONSIGNMENT + CASH OUTS */}
+                  {/* ✅ SWITCH FIX:
+                      BEFORE: Consignment + Cash Outs
+                      NOW: Consignment + Inventory Loss */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
                       <span className="ssr-sales-box-value">{peso(consignment.gross)}</span>
                     </div>
                     <div className="ssr-sales-box">
-                      <span className="ssr-sales-box-label">Consignment 15%</span>
-                      <span className="ssr-sales-box-value">{peso(consignment.fee15)}</span>
-                    </div>
-                    <div className="ssr-sales-box">
-                      <span className="ssr-sales-box-label">Consignment Net</span>
-                      <span className="ssr-sales-box-value">{peso(consignment.net)}</span>
-                    </div>
-                    <div className="ssr-sales-box">
-                      <span className="ssr-sales-box-label">Cash Outs</span>
-                      <span className="ssr-sales-box-value">{peso(cashOutsTotal)}</span>
+                      <span className="ssr-sales-box-label">Inventory Loss</span>
+                      <span className="ssr-sales-box-value">{peso(expenses)}</span>
                     </div>
                   </div>
                 </IonCardContent>
@@ -979,7 +994,6 @@ const StaffSalesReport: React.FC = () => {
                       />
                     </div>
 
-                    {/* ✅ Sales Collected = Sales System - Bilin */}
                     <div className="ssr-collected-box ssr-collected-box--net">
                       <div className="ssr-collected-label">Sales Collected</div>
                       <div className="ssr-collected-value">{peso(salesCollectedDisplay)}</div>
