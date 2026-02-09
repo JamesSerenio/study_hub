@@ -212,13 +212,11 @@ const StaffSalesReport: React.FC = () => {
   const [cashOutsTotal, setCashOutsTotal] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
-  const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(
-    {
-      open: false,
-      msg: "",
-      color: "success",
-    }
-  );
+  const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(() => ({
+    open: false,
+    msg: "",
+    color: "success",
+  }));
 
   /* =========================
      LOAD / ENSURE REPORT
@@ -279,7 +277,7 @@ const StaffSalesReport: React.FC = () => {
       setTotals(null);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       setAddonsPaid(0);
-      setCashOutsTotal(0); // ✅ IMPORTANT: hide cash outs when submitted (same behavior)
+      setCashOutsTotal(0);
       setLoading(false);
       return;
     }
@@ -321,11 +319,7 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase
-      .from("v_daily_sales_report_totals")
-      .select("*")
-      .eq("report_date", dateYMD)
-      .single<SalesTotalsRow>();
+    const res = await supabase.from("v_daily_sales_report_totals").select("*").eq("report_date", dateYMD).single<SalesTotalsRow>();
 
     if (res.error) {
       console.error("v_daily_sales_report_totals error:", res.error.message);
@@ -336,10 +330,6 @@ const StaffSalesReport: React.FC = () => {
     setTotals(res.data);
   };
 
-  /**
-   * ✅ CONSIGNMENT: PAID ONLY (paid_at date)
-   * ✅ BUT if submitted => show zero (handled by caller)
-   */
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setConsignment({ gross: 0, fee15: 0, net: 0 });
@@ -372,10 +362,6 @@ const StaffSalesReport: React.FC = () => {
     setConsignment({ gross, fee15, net });
   };
 
-  /**
-   * ✅ ADD-ONS: PAID ONLY (paid_at date)
-   * ✅ BUT if submitted => show zero (handled by caller)
-   */
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setAddonsPaid(0);
@@ -404,10 +390,6 @@ const StaffSalesReport: React.FC = () => {
     setAddonsPaid(gross);
   };
 
-  /**
-   * ✅ CASH OUTS: TOTAL (cashout_date = selected date)
-   * ✅ BUT if submitted => show zero (handled by caller)
-   */
   const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setCashOutsTotal(0);
@@ -457,10 +439,7 @@ const StaffSalesReport: React.FC = () => {
     await loadTotals(selectedDate);
   };
 
-  const updateReportField = async (
-    field: "starting_cash" | "starting_gcash" | "bilin_amount",
-    valueNum: number
-  ): Promise<void> => {
+  const updateReportField = async (field: "starting_cash" | "starting_gcash" | "bilin_amount", valueNum: number): Promise<void> => {
     if (!report || submitting) return;
 
     const safe = Math.max(0, valueNum);
@@ -524,9 +503,7 @@ const StaffSalesReport: React.FC = () => {
     }));
 
     if (payload.length > 0) {
-      const r2 = await supabase
-        .from("daily_cash_count_lines")
-        .upsert(payload, { onConflict: "report_id,money_kind,denomination" });
+      const r2 = await supabase.from("daily_cash_count_lines").upsert(payload, { onConflict: "report_id,money_kind,denomination" });
       if (r2.error) return r2.error.message;
     }
 
@@ -578,12 +555,8 @@ const StaffSalesReport: React.FC = () => {
 
   useEffect(() => {
     void (async () => {
-      // loadReport will set report/is_submitted state
       await loadReport(selectedDate);
 
-      // IMPORTANT: after loadReport, we need the current report status,
-      // but setState is async, so we re-check directly from DB to decide
-      // whether to show totals or zero.
       if (!isYMD(selectedDate)) {
         setConsignment({ gross: 0, fee15: 0, net: 0 });
         setAddonsPaid(0);
@@ -591,16 +564,10 @@ const StaffSalesReport: React.FC = () => {
         return;
       }
 
-      const check = await supabase
-        .from("daily_sales_reports")
-        .select("is_submitted")
-        .eq("report_date", selectedDate)
-        .single<{ is_submitted: boolean }>();
-
+      const check = await supabase.from("daily_sales_reports").select("is_submitted").eq("report_date", selectedDate).single<{ is_submitted: boolean }>();
       const isSubmitted = Boolean(check.data?.is_submitted);
 
       if (isSubmitted) {
-        // ✅ same behavior as others: once submitted, show 0 even if you go back
         setConsignment({ gross: 0, fee15: 0, net: 0 });
         setAddonsPaid(0);
         setCashOutsTotal(0);
@@ -639,26 +606,60 @@ const StaffSalesReport: React.FC = () => {
     return lines.filter((l) => l.money_kind === "coin").reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
-  const coh = totals ? toNumber(totals.coh_total) : 0;
-  const salesCollected = totals ? toNumber(totals.sales_collected) : coh;
-
-  const bilin = report ? toNumber(report.bilin_amount) : 0;
-  const netCollected = totals ? toNumber(totals.net_collected) : salesCollected - bilin;
-
   const expenses = totals ? toNumber(totals.expenses_amount) : 0;
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
-  // ✅ FIX: COH GCASH should mirror "GCash Sales"
+  // ✅ COH: cash from cash count, gcash from gcashSales
+  const cohCash = cashTotal + coinTotal;
   const cohGcash = gcashSales;
 
+  // ✅ SHOW VALUES (UI)
+  const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
+  const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
+
+  const advCash = totals ? toNumber(totals.advance_cash) : 0;
+  const advGcash = totals ? toNumber(totals.advance_gcash) : 0;
+
+  const dpCash = totals ? toNumber(totals.walkin_cash) : 0;
+  const dpGcash = totals ? toNumber(totals.walkin_gcash) : 0;
+
+  const startingCash = report ? toNumber(report.starting_cash) : 0;
+  const startingGcash = report ? toNumber(report.starting_gcash) : 0;
+
   const addons = addonsPaid;
-
   const discount = totals ? toNumber(totals.discount_total) : 0;
-  const systemSale = totals ? toNumber(totals.system_sale) : 0;
 
-  const totalTimeAmount =
-    (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
+  const bilin = report ? toNumber(report.bilin_amount) : 0;
+
+  /**
+   * ✅ FIXED PER YOUR REQUEST:
+   * - DO NOT include gcash from:
+   *   Paid reservations / New Advance / Down payments
+   *
+   * Sales System =
+   *   (COH cash + COH gcash)
+   * + Paid reservations CASH
+   * + New advance CASH
+   * + Down payments CASH
+   * - Starting Balance (cash + gcash)
+   */
+  const salesSystem =
+    cohCash +
+    cohGcash +
+    paidResCash +
+    advCash +
+    dpCash -
+    (startingCash + startingGcash);
+
+  /**
+   * ✅ Sales Collected:
+   * - same base as Sales System
+   * - auto minus Bilin
+   */
+  const salesCollectedDisplay = salesSystem - bilin;
+
+  const totalTimeAmount = (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
 
   if (loading) {
     return (
@@ -713,12 +714,7 @@ const StaffSalesReport: React.FC = () => {
                       }}
                     />
 
-                    <IonButton
-                      className="ssr-cal-btn"
-                      fill="clear"
-                      disabled={submitting}
-                      onClick={() => setDatePickerOpen(true)}
-                    >
+                    <IonButton className="ssr-cal-btn" fill="clear" disabled={submitting} onClick={() => setDatePickerOpen(true)}>
                       <IonIcon icon={calendarOutline} />
                     </IonButton>
                   </div>
@@ -812,10 +808,10 @@ const StaffSalesReport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* ✅ FIXED: COH / Total of the Day GCASH now mirrors gcashSales */}
+                  {/* COH */}
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">COH / Total of the Day</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(cashTotal + coinTotal)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(cohCash)}</div>
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(cohGcash)}</div>
                   </div>
 
@@ -825,31 +821,29 @@ const StaffSalesReport: React.FC = () => {
                     <div className="ssr-left-value ssr-left-value--gcash">—</div>
                   </div>
 
+                  {/* ✅ DISPLAY GCASH AGAIN (but NOT used in salesSystem formula) */}
                   <div className="ssr-left-row ssr-left-row--tint">
                     <div className="ssr-left-label">Paid reservations for this date</div>
-                    <div className="ssr-left-value ssr-left-value--cash">
-                      {peso(totals ? toNumber(totals.paid_reservation_cash) : 0)}
-                    </div>
-                    <div className="ssr-left-value ssr-left-value--gcash">
-                      {peso(totals ? toNumber(totals.paid_reservation_gcash) : 0)}
-                    </div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(paidResCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(paidResGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">New Advance Payments</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.advance_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.advance_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(advCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(advGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Down payments within this date only</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.walkin_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.walkin_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(dpCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(dpGcash)}</div>
                   </div>
 
+                  {/* ✅ Sales System (uses ONLY CASH for the 3 rows above) */}
                   <div className="ssr-left-row ssr-left-row--system">
                     <div className="ssr-left-label">Sales System</div>
-                    <div className="ssr-left-value ssr-left-value--system ssr-span-2">{peso(systemSale)}</div>
+                    <div className="ssr-left-value ssr-left-value--system ssr-span-2">{peso(salesSystem)}</div>
                   </div>
 
                   <div className="ssr-sales-boxes">
@@ -863,7 +857,7 @@ const StaffSalesReport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* CONSIGNMENT + CASH OUTS (hidden when submitted by state values) */}
+                  {/* CONSIGNMENT + CASH OUTS */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
@@ -968,7 +962,7 @@ const StaffSalesReport: React.FC = () => {
 
                     <div className="ssr-coh-bar">
                       <span>COH / Total of the Day</span>
-                      <b>{peso(cashTotal + coinTotal)}</b>
+                      <b>{peso(cohCash)}</b>
                     </div>
                   </div>
 
@@ -985,9 +979,10 @@ const StaffSalesReport: React.FC = () => {
                       />
                     </div>
 
+                    {/* ✅ Sales Collected = Sales System - Bilin */}
                     <div className="ssr-collected-box ssr-collected-box--net">
                       <div className="ssr-collected-label">Sales Collected</div>
-                      <div className="ssr-collected-value">{peso(netCollected)}</div>
+                      <div className="ssr-collected-value">{peso(salesCollectedDisplay)}</div>
                     </div>
                   </div>
                 </IonCardContent>
