@@ -479,7 +479,7 @@ const Product_Item_Lists: React.FC = () => {
         <div className="pil-actions">
           <IonButton className="pil-btn pil-btn--primary" onClick={openExpenseModal}>
             <IonIcon slot="start" icon={addCircleOutline} />
-            Add Expenses
+            INVENTORY LOSS
           </IonButton>
 
           <IonButton className="pil-btn pil-btn--primary" onClick={openCashOutModal}>
@@ -557,7 +557,7 @@ const Product_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col">Restocked</IonCol>
                   <IonCol className="pil-col">Sold</IonCol>
                   <IonCol className="pil-col">Expired</IonCol>
-                  <IonCol className="pil-col">Staff Used</IonCol>
+                  <IonCol className="pil-col">Inventory loss</IonCol>
                   <IonCol className="pil-col">Stocks</IonCol>
                   <IonCol className="pil-col">Expenses (qty)</IonCol>
                   <IonCol className="pil-col">Unit Cost</IonCol>
@@ -595,7 +595,7 @@ const Product_Item_Lists: React.FC = () => {
         <IonModal isOpen={isExpenseOpen} onDidDismiss={closeExpenseModal} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
-              <IonTitle className="pil-modal-title">Add Expenses</IonTitle>
+              <IonTitle className="pil-modal-title">INVENTORY LOSS</IonTitle>
               <IonButtons slot="end">
                 <IonButton className="pil-btn" onClick={closeExpenseModal} disabled={savingExpense}>
                   <IonIcon icon={closeOutline} />
