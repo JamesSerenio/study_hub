@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   IonButtons,
   IonButton,
@@ -16,6 +16,9 @@ import {
 import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
+
+/* ✅ supabase */
+import { supabase } from "../utils/supabaseClient";
 
 /* pages */
 import Staff_Dashboard from "./Staff_Dashboard";
@@ -39,6 +42,9 @@ import discountIcon from "../assets/discount.png";
 import salesIcon from "../assets/sales.png";
 import flowerImg from "../assets/flower.png";
 
+/* ✅ bell */
+import bellIcon from "../assets/bell.png";
+
 type FlowerStatic = {
   id: string;
   left: string;
@@ -48,25 +54,206 @@ type FlowerStatic = {
   rotateDeg?: number;
 };
 
+type AddOnNotifRow = {
+  id: string;
+  created_at: string;
+
+  add_on_row_id: string;
+
+  full_name: string;
+  seat_number: string;
+
+  add_on_id: string;
+  add_on_name: string;
+
+  quantity: number;
+  price: number;
+  total: number;
+
+  is_read: boolean;
+  read_at: string | null;
+};
+
+const toMoney = (v: unknown): number => {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
 const Staff_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState("dashboard");
 
-  /**
-   * ✅ VERCEL FIRST-LOAD FIX
-   * Some production builds render SplitPane/IonContent with 0/incorrect height
-   * until an interaction happens. We force a layout recalc once after mount.
-   */
+  /* ✅ first-load layout fix */
   const [boot, setBoot] = useState(false);
 
+  /* =========================
+      🔔 Notifications
+  ========================= */
+  const NOTIF_TABLE = "add_on_notifications";
+  const [notifOpen, setNotifOpen] = useState<boolean>(false);
+  const [notifLoading, setNotifLoading] = useState<boolean>(false);
+  const [notifItems, setNotifItems] = useState<AddOnNotifRow[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+
+  // refs
+  const bellWrapRef = useRef<HTMLDivElement | null>(null);
+  const bellBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // ✅ fixed popover position (computed from bell)
+  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>({ top: 64, right: 12 });
+
+  const formatPHDateTime = (iso: string): string => {
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-PH", {
+      timeZone: "Asia/Manila",
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(d);
+  };
+
+  const fetchUnreadCount = async (): Promise<void> => {
+    const { count, error } = await supabase
+      .from(NOTIF_TABLE)
+      .select("*", { count: "exact", head: true })
+      .eq("is_read", false);
+
+    if (error) return;
+    setUnreadCount(Number(count ?? 0));
+  };
+
+  const fetchNotifications = async (): Promise<void> => {
+    setNotifLoading(true);
+
+    const { data, error } = await supabase
+      .from(NOTIF_TABLE)
+      .select(
+        "id, created_at, add_on_row_id, full_name, seat_number, add_on_id, add_on_name, quantity, price, total, is_read, read_at"
+      )
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    setNotifLoading(false);
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.warn("fetchNotifications:", error.message);
+      setNotifItems([]);
+      return;
+    }
+
+    setNotifItems((data as AddOnNotifRow[]) ?? []);
+  };
+
+  const markAllAsRead = async (): Promise<void> => {
+    const nowIso = new Date().toISOString();
+
+    const { error } = await supabase
+      .from(NOTIF_TABLE)
+      .update({ is_read: true, read_at: nowIso })
+      .eq("is_read", false);
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.warn("markAllAsRead:", error.message);
+      return;
+    }
+
+    setNotifItems((prev) => prev.map((n) => (n.is_read ? n : { ...n, is_read: true, read_at: nowIso })));
+    setUnreadCount(0);
+  };
+
+  // ✅ compute popover position from bell (FIX for "not visible")
+  const computePopoverPosition = (): void => {
+    const btn = bellBtnRef.current;
+    if (!btn) return;
+
+    const r = btn.getBoundingClientRect();
+    const top = Math.round(r.bottom + 10); // under bell
+    const right = Math.max(12, Math.round(window.innerWidth - r.right)); // align right edge to bell
+
+    setPopoverPos({ top, right });
+  };
+
+  const openBell = async (): Promise<void> => {
+    computePopoverPosition(); // ✅ important
+    setNotifOpen(true);
+
+    await fetchNotifications();
+
+    const { count } = await supabase
+      .from(NOTIF_TABLE)
+      .select("*", { count: "exact", head: true })
+      .eq("is_read", false);
+
+    const c = Number(count ?? 0);
+    setUnreadCount(c);
+    if (c > 0) await markAllAsRead();
+  };
+
+  const closeBell = (): void => setNotifOpen(false);
+
+  const toggleBell = async (): Promise<void> => {
+    if (notifOpen) closeBell();
+    else await openBell();
+  };
+
+  /* ✅ close dropdown on outside click */
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent): void => {
+      if (!notifOpen) return;
+
+      const wrap = bellWrapRef.current;
+      if (!wrap) return;
+
+      // if click outside wrapper and outside popover
+      if (!wrap.contains(e.target as Node)) setNotifOpen(false);
+    };
+
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [notifOpen]);
+
+  /* ✅ reposition when window resizes (popover stays aligned) */
+  useEffect(() => {
+    if (!notifOpen) return;
+
+    const onResize = (): void => computePopoverPosition();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [notifOpen]);
+
+  /* ✅ realtime updates */
+  useEffect(() => {
+    void fetchUnreadCount();
+    void fetchNotifications();
+
+    const ch = supabase
+      .channel("realtime_add_on_notifications")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: NOTIF_TABLE }, () => {
+        void fetchUnreadCount();
+        if (notifOpen) void fetchNotifications();
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: NOTIF_TABLE }, () => {
+        void fetchUnreadCount();
+        if (notifOpen) void fetchNotifications();
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(ch);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifOpen]);
+
+  /* ✅ boot tick */
   useEffect(() => {
     const t = window.setTimeout(() => {
       setBoot(true);
-
-      // Force ionic / browser to re-calc layout
       window.dispatchEvent(new Event("resize"));
-
-      // Extra: trigger a reflow
       document.body.getBoundingClientRect();
     }, 0);
 
@@ -206,16 +393,32 @@ const Staff_menu: React.FC = () => {
         {/* MAIN */}
         <div id="main" className="staff-main-shell">
           <IonHeader>
-            <IonToolbar>
+            <IonToolbar className="staff-topbar">
               <IonButtons slot="start">
                 <IonMenuButton />
               </IonButtons>
+
               <span className="topbar-title">Staff Dashboard</span>
+
+              {/* ✅ RIGHT SIDE: bell */}
+              <IonButtons slot="end">
+                <div className="topbar-tools" ref={bellWrapRef}>
+                  <button
+                    ref={bellBtnRef}
+                    className="notif-bell-btn"
+                    onClick={() => void toggleBell()}
+                    aria-label="Notifications"
+                    type="button"
+                  >
+                    <img src={bellIcon} alt="Notifications" className="notif-bell-icon" />
+                    {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
+                  </button>
+                </div>
+              </IonButtons>
             </IonToolbar>
           </IonHeader>
 
           <IonContent className="ion-padding custom-bg">
-            {/* ✅ Render only after boot tick to avoid first-load blank in prod */}
             {boot && (
               <AnimatePresence mode="wait" initial={false}>
                 <motion.div
@@ -230,6 +433,56 @@ const Staff_menu: React.FC = () => {
               </AnimatePresence>
             )}
           </IonContent>
+
+          {/* ✅ FIXED MODAL OUTSIDE HEADER (cannot be clipped!) */}
+          {notifOpen && (
+            <div
+              className="notif-popover notif-popover--fixed"
+              style={{ top: `${popoverPos.top}px`, right: `${popoverPos.right}px` }}
+              role="dialog"
+              aria-label="Add-ons notifications"
+            >
+              <div className="notif-popover-head">
+                <div>
+                  <div className="notif-title">Add-Ons Notifications</div>
+                </div>
+
+                <button className="notif-close-btn" onClick={closeBell} aria-label="Close" type="button">
+                  ✕
+                </button>
+              </div>
+
+              <div className="notif-grid-head">
+                <div>Fullname</div>
+                <div>Seat</div>
+                <div>Date/Time</div>
+                <div>Item</div>
+                <div className="t-right">Qty</div>
+                <div className="t-right">Price</div>
+                <div className="t-right">Total</div>
+              </div>
+
+              <div className="notif-popover-body">
+                {notifLoading ? (
+                  <div className="notif-empty">Loading...</div>
+                ) : notifItems.length === 0 ? (
+                  <div className="notif-empty">No notifications yet.</div>
+                ) : (
+                  notifItems.map((n) => (
+                    <div key={n.id} className={`notif-row ${n.is_read ? "" : "notif-row--unread"}`}>
+                      <div className="ellipsis">{n.full_name}</div>
+                      <div className="seat-pill"> {n.seat_number}</div>
+                      <div className="dt">{formatPHDateTime(n.created_at)}</div>
+                      <div className="ellipsis">{n.add_on_name}</div>
+                      <div className="t-right">{Number(n.quantity)}</div>
+                      <div className="t-right">₱{toMoney(n.price).toFixed(2)}</div>
+                      <div className="t-right total">₱{toMoney(n.total).toFixed(2)}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </IonSplitPane>
     </IonPage>
