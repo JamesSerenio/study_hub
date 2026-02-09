@@ -1,7 +1,11 @@
 // src/pages/Customer_Add_ons.tsx
 // ✅ FIX: uses Asia/Manila day range (+08:00) for created_at filtering
 // ✅ FIX: joins add_ons (name/category/size)
-// ✅ IMPORTANT: Requires RLS SELECT policy on customer_session_add_ons + add_ons
+// ✅ NEW: VOID (reverses SOLD then deletes rows in DB) — same behavior as Admin
+// ✅ Payment modal + manual PAID toggle (updates all rows in grouped order)
+// ✅ IMPORTANT: Requires RLS policies:
+//    - SELECT/UPDATE/DELETE on customer_session_add_ons
+//    - SELECT on add_ons
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -57,7 +61,8 @@ interface CustomerAddOnMerged {
 }
 
 type OrderItem = {
-  id: string;
+  id: string; // customer_session_add_ons.id
+  add_on_id: string;
   category: string;
   size: string | null;
   item_name: string;
@@ -81,6 +86,11 @@ type OrderGroup = {
   is_paid: boolean;
   paid_at: string | null;
 };
+
+interface AddOnSoldRow {
+  id: string;
+  sold: NumericLike;
+}
 
 /* ---------------- helpers ---------------- */
 
@@ -147,6 +157,12 @@ const GROUP_WINDOW_MS = 10_000;
 const samePersonSeat = (a: CustomerAddOnMerged, b: CustomerAddOnMerged): boolean =>
   norm(a.full_name) === norm(b.full_name) && norm(a.seat_number) === norm(b.seat_number);
 
+const formatDateTime = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "-";
+  return d.toLocaleString("en-PH");
+};
+
 /* ---------------- component ---------------- */
 
 const Customer_Add_ons: React.FC = () => {
@@ -163,6 +179,9 @@ const Customer_Add_ons: React.FC = () => {
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
   const [togglingPaidKey, setTogglingPaidKey] = useState<string | null>(null);
+
+  // ✅ VOID states
+  const [voidingKey, setVoidingKey] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchAddOns(selectedDate);
@@ -210,16 +229,12 @@ const Customer_Add_ons: React.FC = () => {
     const { data, error } = await q.returns<CustomerSessionAddOnRow[]>();
 
     if (error) {
-      // ✅ IMPORTANT DEBUG (usually says RLS / permission denied)
       // eslint-disable-next-line no-console
       console.error("FETCH ADD-ONS ERROR:", error);
       setRecords([]);
       setLoading(false);
       return;
     }
-
-    // eslint-disable-next-line no-console
-    console.log("FETCH ADD-ONS OK rows:", (data ?? []).length, "range:", { startIso, endIso });
 
     const merged: CustomerAddOnMerged[] = (data ?? []).map((r) => {
       const a = r.add_ons;
@@ -285,6 +300,7 @@ const Customer_Add_ons: React.FC = () => {
 
       current.items.push({
         id: row.id,
+        add_on_id: row.add_on_id,
         category: row.category,
         size: row.size,
         item_name: row.item_name,
@@ -305,6 +321,8 @@ const Customer_Add_ons: React.FC = () => {
 
     return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
   }, [records]);
+
+  /* ---------------- payment modal ---------------- */
 
   const openPaymentModal = (o: OrderGroup): void => {
     const due = round2(Math.max(0, o.grand_total));
@@ -408,6 +426,83 @@ const Customer_Add_ons: React.FC = () => {
     }
   };
 
+  /* =========================================================
+     ✅ VOID (same behavior as Admin)
+     - Reverse SOLD only, then delete rows in DB
+     NOTE: requires DELETE policy on customer_session_add_ons.
+  ========================================================= */
+
+  const voidOrder = async (o: OrderGroup): Promise<void> => {
+    const ok = window.confirm(
+      `VOID this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
+        o.grand_total
+      )}\nDate: ${formatDateTime(o.created_at)}\n\n✅ VOID will reverse SOLD then delete rows in DB.`
+    );
+    if (!ok) return;
+
+    try {
+      setVoidingKey(o.key);
+
+      // sum qty per add_on_id
+      const qtyByAddOnId = new Map<string, number>();
+      for (const it of o.items) {
+        const q = Math.max(0, Math.floor(Number(it.quantity) || 0));
+        if (q <= 0) continue;
+        qtyByAddOnId.set(it.add_on_id, (qtyByAddOnId.get(it.add_on_id) ?? 0) + q);
+      }
+
+      const addOnIds = Array.from(qtyByAddOnId.keys());
+      if (addOnIds.length === 0) {
+        alert("Nothing to void (no quantities).");
+        return;
+      }
+
+      // read current sold
+      const { data: addRows, error: addErr } = await supabase
+        .from("add_ons")
+        .select("id, sold")
+        .in("id", addOnIds)
+        .returns<AddOnSoldRow[]>();
+
+      if (addErr) {
+        alert(`VOID error (read add_ons): ${addErr.message}`);
+        return;
+      }
+
+      // update sold safely (subtract qty)
+      for (const a of addRows ?? []) {
+        const qty = qtyByAddOnId.get(a.id) ?? 0;
+        const curSold = Math.max(0, Math.floor(toNumber(a.sold)));
+        const nextSold = Math.max(0, curSold - qty);
+
+        const { error: updErr } = await supabase.from("add_ons").update({ sold: nextSold }).eq("id", a.id);
+
+        if (updErr) {
+          alert(`VOID error (update add_ons sold): ${updErr.message}`);
+          return;
+        }
+      }
+
+      // delete the customer_session_add_ons rows
+      const ids = o.items.map((x) => x.id);
+      const { error: delErr } = await supabase.from("customer_session_add_ons").delete().in("id", ids);
+
+      if (delErr) {
+        alert(`VOID error (delete rows): ${delErr.message}`);
+        return;
+      }
+
+      setSelectedOrder(null);
+      await fetchAddOns(selectedDate);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("VOID order failed.");
+    } finally {
+      setVoidingKey(null);
+    }
+  };
+
   return (
     <IonPage>
       <IonContent className="staff-content">
@@ -416,7 +511,7 @@ const Customer_Add_ons: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Add-Ons Records</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong>
+                Showing records for: <strong>{selectedDate}</strong> ({groupedOrders.length})
               </div>
             </div>
 
@@ -467,9 +562,11 @@ const Customer_Add_ons: React.FC = () => {
                     const remaining = round2(Math.max(0, due - totalPaid));
                     const paid = toBool(o.is_paid);
 
+                    const busyVoid = voidingKey === o.key;
+
                     return (
                       <tr key={o.key}>
-                        <td>{new Date(o.created_at).toLocaleString("en-PH")}</td>
+                        <td>{formatDateTime(o.created_at)}</td>
                         <td>{o.full_name || "-"}</td>
                         <td>{o.seat_number || "-"}</td>
 
@@ -543,6 +640,11 @@ const Customer_Add_ons: React.FC = () => {
                           <div className="action-stack">
                             <button className="receipt-btn" onClick={() => setSelectedOrder(o)}>
                               View Receipt
+                            </button>
+
+                            {/* ✅ VOID */}
+                            <button className="receipt-btn" disabled={busyVoid} onClick={() => void voidOrder(o)}>
+                              {busyVoid ? "Voiding..." : "Void"}
                             </button>
                           </div>
                         </td>
@@ -642,7 +744,7 @@ const Customer_Add_ons: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Date</span>
-                  <span>{new Date(selectedOrder.created_at).toLocaleString("en-PH")}</span>
+                  <span>{formatDateTime(selectedOrder.created_at)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -722,7 +824,7 @@ const Customer_Add_ons: React.FC = () => {
                       {paid && (
                         <div className="receipt-row">
                           <span>Paid at</span>
-                          <span>{selectedOrder.paid_at ? new Date(selectedOrder.paid_at).toLocaleString("en-PH") : "-"}</span>
+                          <span>{selectedOrder.paid_at ? formatDateTime(selectedOrder.paid_at) : "-"}</span>
                         </div>
                       )}
 
