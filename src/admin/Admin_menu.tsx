@@ -117,7 +117,7 @@ const Admin_menu: React.FC = () => {
       { name: "Cancelled Records", key: "customer_cancelled", icon: cancelledIcon }, // ✅ NEW
       { name: "Seat Table", key: "seat_table", icon: seatIcon },
       { name: "Promotions", key: "packages", icon: promotionIcon },
-      { name: "Discount Records", key: "discount_records", icon: discountIcon },
+      { name: "Memberships", key: "discount_records", icon: discountIcon },
     ],
     []
   );

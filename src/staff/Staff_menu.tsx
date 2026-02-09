@@ -35,7 +35,7 @@ import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
 
-/* ✅ cancelled page (for now add-ons cancelled records) */
+/* ✅ cancelled page */
 import Customer_Cancelled from "./Customer_Cancelled";
 
 /* assets */
@@ -49,11 +49,7 @@ import onsIcon from "../assets/hamburger.png";
 import discountIcon from "../assets/discount.png";
 import salesIcon from "../assets/sales.png";
 import flowerImg from "../assets/flower.png";
-
-/* ✅ cancelled icon */
 import cancelledIcon from "../assets/cancelled.png";
-
-/* ✅ bell */
 import bellIcon from "../assets/bell.png";
 
 type FlowerStatic = {
@@ -89,6 +85,9 @@ const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
@@ -130,21 +129,24 @@ const Staff_menu: React.FC = () => {
     return new Intl.DateTimeFormat("en-PH", {
       timeZone: "Asia/Manila",
       year: "numeric",
-      month: "short",
+      month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
+      hour12: true,
     }).format(d);
   };
 
-  const fetchUnreadCount = async (): Promise<void> => {
+  const fetchUnreadCount = async (): Promise<number> => {
     const { count, error } = await supabase
       .from(NOTIF_TABLE)
-      .select("*", { count: "exact", head: true })
+      .select("id", { count: "exact", head: true })
       .eq("is_read", false);
 
-    if (error) return;
-    setUnreadCount(Number(count ?? 0));
+    if (error) return unreadCount;
+    const n = Number(count ?? 0);
+    setUnreadCount(n);
+    return n;
   };
 
   const fetchNotifications = async (): Promise<void> => {
@@ -170,24 +172,63 @@ const Staff_menu: React.FC = () => {
     setNotifItems((data as AddOnNotifRow[]) ?? []);
   };
 
-  const markAllAsRead = async (): Promise<void> => {
+  /* =========================
+      ✅ REALTIME refresh (debounced)
+  ========================= */
+  const refreshTimerRef = useRef<number | null>(null);
+  const suspendRefreshRef = useRef<boolean>(false);
+
+  const cancelScheduledRefresh = (): void => {
+    if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = null;
+  };
+
+  const scheduleUnreadRefresh = (): void => {
+    if (suspendRefreshRef.current) return;
+
+    cancelScheduledRefresh();
+    refreshTimerRef.current = window.setTimeout(() => {
+      if (suspendRefreshRef.current) return;
+      void fetchUnreadCount();
+      if (notifOpenRef.current) void fetchNotifications();
+    }, 150);
+  };
+
+  /* =========================
+      ✅ AUTO-READ on open
+  ========================= */
+  const markAllAsReadSilent = async (): Promise<void> => {
+    // prevent realtime recount while we bulk update
+    cancelScheduledRefresh();
+    suspendRefreshRef.current = true;
+
+    // instant hide badge
+    setUnreadCount(0);
+
     const nowIso = new Date().toISOString();
 
+    // update all unread -> read
     const { error } = await supabase
       .from(NOTIF_TABLE)
       .update({ is_read: true, read_at: nowIso })
-      .eq("is_read", false);
+      .neq("is_read", true);
 
     if (error) {
       // eslint-disable-next-line no-console
-      console.warn("markAllAsRead:", error.message);
+      console.warn("markAllAsReadSilent:", error.message);
+      suspendRefreshRef.current = false;
+      await fetchUnreadCount();
       return;
     }
 
-    setNotifItems((prev) =>
-      prev.map((n) => (n.is_read ? n : { ...n, is_read: true, read_at: nowIso }))
-    );
-    setUnreadCount(0);
+    // update UI list too
+    setNotifItems((prev) => prev.map((n) => ({ ...n, is_read: true, read_at: nowIso })));
+
+    // wait to ensure DB committed, then recount (0 unless new inserts happened)
+    await sleep(220);
+    await fetchUnreadCount();
+
+    suspendRefreshRef.current = false;
   };
 
   const computePopoverPosition = (): void => {
@@ -204,9 +245,14 @@ const Staff_menu: React.FC = () => {
     computePopoverPosition();
     setNotifOpen(true);
 
-    // ✅ load latest on open (no refresh)
+    // load list first (so you see items)
     await fetchNotifications();
-    await fetchUnreadCount();
+
+    // ✅ AUTO READ ON OPEN (badge should disappear)
+    await markAllAsReadSilent();
+
+    // optional: keep list fresh after marking read
+    if (notifOpenRef.current) await fetchNotifications();
   };
 
   const closeBell = (): void => setNotifOpen(false);
@@ -241,7 +287,6 @@ const Staff_menu: React.FC = () => {
 
   /* ✅ PRODUCTION REALTIME SUBSCRIBE ONCE (Vercel-safe) */
   useEffect(() => {
-    // initial fetch
     void fetchUnreadCount();
     void fetchNotifications();
 
@@ -253,15 +298,16 @@ const Staff_menu: React.FC = () => {
         (payload: RealtimePostgresInsertPayload<AddOnNotifRow>) => {
           const newRow = payload.new;
 
-          // ✅ update list instantly
           setNotifItems((prev) => {
             if (prev.some((x) => x.id === newRow.id)) return prev;
             return [newRow, ...prev].slice(0, 30);
           });
 
-          // ✅ badge = unread total (instant +1)
-          if (!newRow.is_read) {
-            setUnreadCount((prev) => prev + 1);
+          // if notif panel is OPEN, treat new inserts as "seen" immediately
+          if (notifOpenRef.current) {
+            void markAllAsReadSilent();
+          } else {
+            scheduleUnreadRefresh();
           }
         }
       )
@@ -269,7 +315,6 @@ const Staff_menu: React.FC = () => {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: NOTIF_TABLE },
         (payload: RealtimePostgresUpdatePayload<AddOnNotifRow>) => {
-          const oldRow = payload.old;
           const newRow = payload.new;
 
           setNotifItems((prev) => {
@@ -280,25 +325,35 @@ const Staff_menu: React.FC = () => {
             return copy;
           });
 
-          const wasUnread = oldRow && (oldRow as AddOnNotifRow).is_read === false;
-          const isUnread = newRow.is_read === false;
-
-          if (wasUnread && !isUnread) setUnreadCount((c) => Math.max(0, c - 1));
-          if (!wasUnread && isUnread) setUnreadCount((c) => c + 1);
+          scheduleUnreadRefresh();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: NOTIF_TABLE },
+        () => {
+          scheduleUnreadRefresh();
         }
       )
       .subscribe();
 
-    const onFocus = (): void => {
+    const onFocusOrWake = (): void => {
       void fetchUnreadCount();
-      void fetchNotifications();
+      if (notifOpenRef.current) void fetchNotifications();
     };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
+
+    window.addEventListener("focus", onFocusOrWake);
+    window.addEventListener("online", onFocusOrWake);
+    document.addEventListener("visibilitychange", onFocusOrWake);
 
     return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocusOrWake);
+      window.removeEventListener("online", onFocusOrWake);
+      document.removeEventListener("visibilitychange", onFocusOrWake);
+
+      cancelScheduledRefresh();
+      suspendRefreshRef.current = false;
+
       void supabase.removeChannel(ch);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -321,11 +376,8 @@ const Staff_menu: React.FC = () => {
       { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
       { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
       { name: "Customer Add-Ons", key: "customer_add_ons", icon: onsIcon },
-
-      /* ✅ RENAMED */
       { name: "Customer Cancelled", key: "customer_cancelled", icon: cancelledIcon },
-
-      { name: "Customer Promo List", key: "customer_promo_list", icon: discountIcon },
+      { name: "Memberships", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
     ],
@@ -357,10 +409,8 @@ const Staff_menu: React.FC = () => {
         return <Customer_Calendar />;
       case "customer_add_ons":
         return <Customer_Add_ons />;
-
       case "customer_cancelled":
         return <Customer_Cancelled />;
-
       case "customer_promo_list":
         return <Customer_Discount_List />;
       case "staff_sales_report":
@@ -506,14 +556,10 @@ const Staff_menu: React.FC = () => {
               <div className="notif-popover-head">
                 <div>
                   <div className="notif-title">Add-Ons Notifications</div>
-                  <div className="notif-subtitle">Live updates • no refresh</div>
+                  <div className="notif-subtitle">Live updates • auto-read on open</div>
                 </div>
 
                 <div style={{ display: "flex", gap: 8 }}>
-                  <IonButton size="small" onClick={() => void markAllAsRead()}>
-                    Mark all read
-                  </IonButton>
-
                   <button className="notif-close-btn" onClick={closeBell} aria-label="Close" type="button">
                     ✕
                   </button>

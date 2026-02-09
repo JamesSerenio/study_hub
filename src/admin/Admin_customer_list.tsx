@@ -923,7 +923,7 @@ const Admin_customer_list: React.FC = () => {
                               disabled={deletingId === session.id}
                               onClick={() => void deleteSession(session)}
                             >
-                              {deletingId === session.id ? "Deleting..." : "Delete"}
+                              {deletingId === session.id ? "Canceling..." : "Cancel"}
                             </button>
                           </div>
                         </td>
