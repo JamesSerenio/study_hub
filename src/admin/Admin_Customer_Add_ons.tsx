@@ -1,12 +1,9 @@
 // src/pages/Admin_Customer_Add_ons.tsx
-// ✅ UI MATCHES Customer_Lists (TOPBAR + DATE PILL CALENDAR + TABLE WRAP + NOTES)
-// ✅ Same className + UI style as Customer_Lists
-// ✅ Payment modal: GCash/Cash auto updates to match Due
-// ✅ Save Payment auto sets PAID/UNPAID (paid >= due) + paid_at
-// ✅ Manual PAID/UNPAID toggle works (can return to UNPAID even if fully paid)
-// ✅ Receipt status follows manual is_paid
-// ✅ Excel export (REAL XLSX + images)
-// ✅ NEW: show SIZE in items table + receipt
+// ✅ UI MATCHES Customer_Lists
+// ✅ FIX: PH/Manila date filtering (day range +08:00) so records show correctly
+// ✅ VOID ONLY: reverses SOLD only (stocks & overall_sales auto-recompute because GENERATED) + auto DELETE rows in DB (via RPC)
+// ✅ Payment modal + manual PAID toggle (updates all rows in grouped order)
+// ✅ Excel export (REAL XLSX + images) + shows SIZE
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -14,16 +11,10 @@ import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
-// ✅ Excel export (REAL XLSX + images)
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
 type NumericLike = number | string;
-
-interface AddOnInfo {
-  id: string;
-  sold: NumericLike;
-}
 
 interface CustomerSessionAddOnRow {
   id: string;
@@ -45,8 +36,8 @@ interface AddOnLookup {
   id: string;
   name: string;
   category: string;
-  size: string | null; // ✅ NEW
-  image_url: string | null; // ✅ for excel image
+  size: string | null;
+  image_url: string | null;
 }
 
 interface CustomerAddOnMerged {
@@ -60,7 +51,7 @@ interface CustomerAddOnMerged {
   seat_number: string;
   item_name: string;
   category: string;
-  size: string | null; // ✅ NEW
+  size: string | null;
   image_url: string | null;
 
   gcash_amount: number;
@@ -73,7 +64,7 @@ type OrderItem = {
   id: string; // customer_session_add_ons.id
   add_on_id: string;
   category: string;
-  size: string | null; // ✅ NEW
+  size: string | null;
   item_name: string;
   quantity: number;
   price: number;
@@ -126,12 +117,6 @@ const yyyyMmDdLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-const extractLocalDate = (iso: string): string => {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  return yyyyMmDdLocal(d);
-};
-
 const ms = (iso: string): number => {
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? t : 0;
@@ -158,10 +143,10 @@ const formatTimeText = (iso: string): string => {
   return d.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
 };
 
-const localDayRangeIso = (yyyyMmDd: string): { startIso: string; endIso: string } => {
-  const [y, m, d] = yyyyMmDd.split("-").map((x) => Number(x));
-  const start = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-  const end = new Date(y, (m || 1) - 1, d || 1, 23, 59, 59, 999);
+// ✅ Manila day range from YYYY-MM-DD (correct for Supabase timestamptz)
+const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } => {
+  const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 };
 
@@ -243,7 +228,6 @@ const applyBorders = (row: ExcelJS.Row, startCol: number, endCol: number): void 
   }
 };
 
-// ✅ fetch image -> base64 (ExcelJS addImage)
 const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -285,9 +269,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
-  const [voidingId, setVoidingId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deletingDate, setDeletingDate] = useState<string | null>(null);
+  const [voidingKey, setVoidingKey] = useState<string | null>(null);
 
   const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
 
@@ -299,12 +281,19 @@ const Admin_Customer_Add_ons: React.FC = () => {
   const [togglingPaidKey, setTogglingPaidKey] = useState<string | null>(null);
 
   useEffect(() => {
-    void fetchAddOns();
+    void fetchAddOns(selectedDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchAddOns = async (): Promise<void> => {
+  useEffect(() => {
+    void fetchAddOns(selectedDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
+
+  const fetchAddOns = async (dateStr: string): Promise<void> => {
     setLoading(true);
+
+    const { startIso, endIso } = manilaDayRange(dateStr);
 
     const { data: rows, error } = await supabase
       .from("customer_session_add_ons")
@@ -324,11 +313,12 @@ const Admin_Customer_Add_ons: React.FC = () => {
         paid_at
       `
       )
-      .order("created_at", { ascending: false })
+      .gte("created_at", startIso)
+      .lt("created_at", endIso)
+      .order("created_at", { ascending: true })
       .returns<CustomerSessionAddOnRow[]>();
 
     if (error) {
-      // eslint-disable-next-line no-console
       console.error("Error fetching customer_session_add_ons:", error);
       setRecords([]);
       setLoading(false);
@@ -344,24 +334,19 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
     const addOnIds = Array.from(new Set(sessionRows.map((r) => r.add_on_id)));
 
-    // ✅ include size + image_url
     const { data: addOnRows, error: addOnErr } = await supabase
       .from("add_ons")
       .select("id, name, category, size, image_url")
       .in("id", addOnIds)
       .returns<AddOnLookup[]>();
 
-    if (addOnErr) {
-      // eslint-disable-next-line no-console
-      console.error("Error fetching add_ons:", addOnErr);
-    }
+    if (addOnErr) console.error("Error fetching add_ons:", addOnErr);
 
     const addOnMap = new Map<string, AddOnLookup>();
     (addOnRows ?? []).forEach((a) => addOnMap.set(a.id, a));
 
     const merged: CustomerAddOnMerged[] = sessionRows.map((r) => {
       const addOn = addOnMap.get(r.add_on_id);
-
       return {
         id: r.id,
         created_at: r.created_at,
@@ -373,9 +358,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
         seat_number: r.seat_number,
         item_name: addOn?.name ?? "-",
         category: addOn?.category ?? "-",
-        size: addOn?.size ?? null, // ✅ NEW
+        size: addOn?.size ?? null,
         image_url: addOn?.image_url ?? null,
-
         gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
         cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
         is_paid: toBool(r.is_paid),
@@ -387,20 +371,14 @@ const Admin_Customer_Add_ons: React.FC = () => {
     setLoading(false);
   };
 
-  const filteredRecords = useMemo(() => {
-    return records
-      .filter((r) => extractLocalDate(r.created_at) === selectedDate)
-      .sort((a, b) => ms(a.created_at) - ms(b.created_at));
-  }, [records, selectedDate]);
-
   const groupedOrders = useMemo<OrderGroup[]>(() => {
-    if (filteredRecords.length === 0) return [];
+    if (records.length === 0) return [];
 
     const groups: OrderGroup[] = [];
     let current: OrderGroup | null = null;
     let lastRow: CustomerAddOnMerged | null = null;
 
-    for (const row of filteredRecords) {
+    for (const row of records) {
       const startNew =
         current === null ||
         lastRow === null ||
@@ -430,7 +408,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         id: row.id,
         add_on_id: row.add_on_id,
         category: row.category,
-        size: row.size, // ✅ NEW
+        size: row.size,
         item_name: row.item_name,
         quantity: Number(row.quantity) || 0,
         price: row.price,
@@ -438,7 +416,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
       });
 
       current.grand_total = round2(current.grand_total + row.total);
-
       current.gcash_amount = round2(current.gcash_amount + row.gcash_amount);
       current.cash_amount = round2(current.cash_amount + row.cash_amount);
 
@@ -449,20 +426,14 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
 
     return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
-  }, [filteredRecords]);
+  }, [records]);
 
   /* =========================================================
      ✅ Export to EXCEL (.xlsx) with IMAGES + SIZE
   ========================================================= */
   const exportToExcelByDate = async (): Promise<void> => {
-    if (!selectedDate) {
-      alert("Please select a date.");
-      return;
-    }
-    if (filteredRecords.length === 0) {
-      alert("No records for selected date.");
-      return;
-    }
+    if (!selectedDate) return alert("Please select a date.");
+    if (records.length === 0) return alert("No records for selected date.");
 
     try {
       const now = new Date();
@@ -472,22 +443,20 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       const ws = wb.addWorksheet("AddOns", { views: [{ state: "frozen", ySplit: 7 }] });
 
-      // A Image | B Date | C Time | D Full Name | E Seat | F Category | G Size | H Item | I Qty | J Price | K Total
       ws.columns = [
-        { header: "Image", key: "img", width: 12 }, // A
-        { header: "Date", key: "date", width: 12 }, // B
-        { header: "Time", key: "time", width: 10 }, // C
-        { header: "Full Name", key: "name", width: 22 }, // D
-        { header: "Seat", key: "seat", width: 10 }, // E
-        { header: "Category", key: "cat", width: 14 }, // F
-        { header: "Size", key: "size", width: 10 }, // G ✅
-        { header: "Item", key: "item", width: 22 }, // H
-        { header: "Qty", key: "qty", width: 6 }, // I
-        { header: "Price", key: "price", width: 12 }, // J
-        { header: "Total", key: "total", width: 12 }, // K
+        { header: "Image", key: "img", width: 12 },
+        { header: "Date", key: "date", width: 12 },
+        { header: "Time", key: "time", width: 10 },
+        { header: "Full Name", key: "name", width: 22 },
+        { header: "Seat", key: "seat", width: 10 },
+        { header: "Category", key: "cat", width: 14 },
+        { header: "Size", key: "size", width: 10 },
+        { header: "Item", key: "item", width: 22 },
+        { header: "Qty", key: "qty", width: 6 },
+        { header: "Price", key: "price", width: 12 },
+        { header: "Total", key: "total", width: 12 },
       ];
 
-      // Title block
       ws.mergeCells(1, 1, 1, 11);
       ws.mergeCells(2, 1, 2, 11);
       ws.mergeCells(3, 1, 3, 11);
@@ -496,7 +465,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       ws.getCell("A1").value = "ADMIN ADD-ONS REPORT";
       ws.getCell("A2").value = `Date: ${selectedDate}`;
       ws.getCell("A3").value = `Generated: ${now.toLocaleString()}`;
-      ws.getCell("A4").value = `Rows: ${filteredRecords.length}`;
+      ws.getCell("A4").value = `Rows: ${records.length}`;
 
       ws.getCell("A1").font = { bold: true, size: 16 };
       ws.getCell("A2").font = { size: 11 };
@@ -506,26 +475,21 @@ const Admin_Customer_Add_ons: React.FC = () => {
       ws.getRow(1).height = 22;
       ws.getRow(5).height = 8;
 
-      // blank row 5
       ws.addRow([]);
 
-      // Header row 6
       const headerRowIndex = 6;
       const h = ws.getRow(headerRowIndex);
       h.values = ["Image", "Date", "Time", "Full Name", "Seat", "Category", "Size", "Item", "Qty", "Price", "Total"];
       applyHeaderStyle(h, 1, 11);
       h.commit();
 
-      // Data starts row 7
       let rIdx = 7;
+      const imageCache = new Map<string, { imageId: number }>();
 
-      // cache images (avoid re-fetch for same url)
-      const imageCache = new Map<string, { imageId: number; ext: "png" | "jpeg" }>();
-
-      for (const r of filteredRecords) {
+      for (const r of records) {
         const row = ws.getRow(rIdx);
 
-        const d = extractLocalDate(r.created_at);
+        const d = yyyyMmDdLocal(new Date(r.created_at));
         const t = formatTimeText(r.created_at);
 
         row.getCell(2).value = d || "-";
@@ -533,7 +497,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         row.getCell(4).value = r.full_name || "-";
         row.getCell(5).value = r.seat_number || "-";
         row.getCell(6).value = r.category || "-";
-        row.getCell(7).value = sizeText(r.size); // ✅ SIZE
+        row.getCell(7).value = sizeText(r.size);
         row.getCell(8).value = r.item_name || "-";
         row.getCell(9).value = Number(r.quantity ?? 0);
 
@@ -545,27 +509,20 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
         row.height = 46;
 
-        // alignments
         for (let c = 1; c <= 11; c++) {
-          const cell = row.getCell(c);
-          cell.alignment =
+          row.getCell(c).alignment =
             c === 8 || c === 4
               ? { vertical: "middle", horizontal: "left", wrapText: true }
               : { vertical: "middle", horizontal: c === 9 ? "center" : "left", wrapText: true };
         }
 
-        // borders
         applyBorders(row, 1, 11);
 
-        // ✅ IMAGE in column A
         const url = (r.image_url ?? "").trim();
         if (url) {
           const cached = imageCache.get(url);
           if (cached) {
-            ws.addImage(cached.imageId, {
-              tl: { col: 0.15, row: rIdx - 0.85 },
-              ext: { width: 52, height: 52 },
-            });
+            ws.addImage(cached.imageId, { tl: { col: 0.15, row: rIdx - 0.85 }, ext: { width: 52, height: 52 } });
           } else {
             const img = await fetchImageBase64(url);
             if (img) {
@@ -573,12 +530,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
                 base64: `data:image/${img.extension};base64,${img.base64}`,
                 extension: img.extension,
               });
-              imageCache.set(url, { imageId, ext: img.extension });
-
-              ws.addImage(imageId, {
-                tl: { col: 0.15, row: rIdx - 0.85 },
-                ext: { width: 52, height: 52 },
-              });
+              imageCache.set(url, { imageId });
+              ws.addImage(imageId, { tl: { col: 0.15, row: rIdx - 0.85 }, ext: { width: 52, height: 52 } });
             }
           }
         }
@@ -587,7 +540,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
         rIdx++;
       }
 
-      // TOTAL row
       const totalRowIndex = rIdx + 1;
       const totalRow = ws.getRow(totalRowIndex);
       totalRow.getCell(10).value = "TOTAL:";
@@ -602,7 +554,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
       applyBorders(totalRow, 1, 11);
       totalRow.commit();
 
-      // auto-fit columns (except image col A)
       autoFitColumns(
         ws,
         6,
@@ -615,146 +566,61 @@ const Admin_Customer_Add_ons: React.FC = () => {
       ws.getColumn(1).width = 12;
 
       const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       saveAs(blob, `admin_addons_${selectedDate}.xlsx`);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Export failed. (If images are blocked, check CORS or use public URLs.)");
     }
   };
 
-  /* ===================== existing logic below (unchanged) ===================== */
+  /* =========================================================
+     ✅ VOID ONLY (RPC)
+     - Reverse SOLD only then delete rows in DB (transaction, bypasses RLS if configured)
+     IMPORTANT:
+       Create this function in Supabase SQL Editor:
+       public.void_customer_add_on_rows(p_ids uuid[])
+  ========================================================= */
 
   const voidOrder = async (o: OrderGroup): Promise<void> => {
     const ok = window.confirm(
       `VOID this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
         o.grand_total
-      )}\nDate: ${formatDateTime(o.created_at)}\n\nThis will RETURN stock and REVERSE sales for ALL items, then delete ALL rows.`
+      )}\nDate: ${formatDateTime(o.created_at)}\n\n✅ VOID will reverse SOLD then DELETE rows in DB.`
     );
     if (!ok) return;
 
+    const ids = o.items.map((x) => x.id);
+
     try {
-      setVoidingId(o.key);
+      setVoidingKey(o.key);
 
-      for (const it of o.items) {
-        const mergedRow = records.find((r) => r.id === it.id);
-        if (!mergedRow) continue;
+      // ✅ one DB transaction: reverse sold + delete rows
+      const { error } = await supabase.rpc("void_customer_add_on_rows", { p_ids: ids });
 
-        const qty = Number.isFinite(mergedRow.quantity) ? mergedRow.quantity : 0;
-
-        const { data: addOn, error: addOnErr } = await supabase
-          .from("add_ons")
-          .select("id, sold")
-          .eq("id", mergedRow.add_on_id)
-          .single<AddOnInfo>();
-
-        if (addOnErr || !addOn) {
-          alert(`VOID error: cannot read add_ons. ${addOnErr?.message ?? ""}`.trim());
-          return;
-        }
-
-        const currentSold = toNumber(addOn.sold);
-        const nextSold = Math.max(0, currentSold - qty);
-
-        const { error: updErr } = await supabase.from("add_ons").update({ sold: nextSold }).eq("id", mergedRow.add_on_id);
-        if (updErr) {
-          alert(`VOID error: failed to reverse sold. ${updErr.message}`);
-          return;
-        }
-
-        const { error: delErr } = await supabase.from("customer_session_add_ons").delete().eq("id", mergedRow.id);
-        if (delErr) {
-          alert(`VOID error: reversed sold but failed to delete record. ${delErr.message}`);
-          return;
-        }
+      if (error) {
+        alert(`VOID error: ${error.message}`);
+        return;
       }
 
-      await fetchAddOns();
+      setSelectedOrder(null);
+      await fetchAddOns(selectedDate);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("VOID order failed.");
     } finally {
-      setVoidingId(null);
+      setVoidingKey(null);
     }
   };
 
-  const deleteOrder = async (o: OrderGroup): Promise<void> => {
-    const ok = window.confirm(
-      `DELETE this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
-        o.grand_total
-      )}\nDate: ${formatDateTime(o.created_at)}\n\nThis will NOT return stock and NOT reverse sales.`
-    );
-    if (!ok) return;
-
-    try {
-      setDeletingId(o.key);
-
-      const ids = o.items.map((x) => x.id);
-      const { error } = await supabase.from("customer_session_add_ons").delete().in("id", ids);
-
-      if (error) {
-        alert(`DELETE order error: ${error.message}`);
-        return;
-      }
-
-      await fetchAddOns();
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
-      alert("DELETE order failed.");
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  const deleteByDate = async (): Promise<void> => {
-    if (!selectedDate) {
-      alert("Please select a date first.");
-      return;
-    }
-
-    const ok = window.confirm(`DELETE ALL add-ons on date: ${selectedDate}?\n\nThis will NOT return stock and NOT reverse sales.`);
-    if (!ok) return;
-
-    try {
-      setDeletingDate(selectedDate);
-
-      const { startIso, endIso } = localDayRangeIso(selectedDate);
-
-      const { error: delErr } = await supabase
-        .from("customer_session_add_ons")
-        .delete()
-        .gte("created_at", startIso)
-        .lte("created_at", endIso);
-
-      if (delErr) {
-        alert(`DELETE by date error: ${delErr.message}`);
-        return;
-      }
-
-      await fetchAddOns();
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
-      alert("DELETE by date failed.");
-    } finally {
-      setDeletingDate(null);
-    }
-  };
+  /* ---------------- payment modal ---------------- */
 
   const openPaymentModal = (o: OrderGroup): void => {
     const due = round2(Math.max(0, o.grand_total));
-
     const existingTotalPaid = round2(o.gcash_amount + o.cash_amount);
     const existingGcash = existingTotalPaid > 0 ? o.gcash_amount : 0;
 
     const adj = recalcPaymentsToDue(due, existingGcash);
-
     setPaymentTarget(o);
     setGcashInput(String(adj.gcash));
     setCashInput(String(adj.cash));
@@ -810,15 +676,16 @@ const Admin_Customer_Add_ons: React.FC = () => {
       }
 
       setPaymentTarget(null);
-      await fetchAddOns();
+      await fetchAddOns(selectedDate);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
       setSavingPayment(false);
     }
   };
+
+  /* ---------------- manual paid toggle ---------------- */
 
   const togglePaid = async (o: OrderGroup): Promise<void> => {
     const itemIds = o.items.map((x) => x.id);
@@ -841,9 +708,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
         return;
       }
 
-      await fetchAddOns();
+      await fetchAddOns(selectedDate);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -857,7 +723,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         <div className="customer-lists-container">
           <div className="customer-topbar">
             <div className="customer-topbar-left">
-              <h2 className="customer-lists-title">Admin Add-Ons Records</h2>
+              <h2 className="customer-lists-title">Add-Ons Records</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong> ({groupedOrders.length})
               </div>
@@ -878,20 +744,12 @@ const Admin_Customer_Add_ons: React.FC = () => {
               </label>
 
               <div className="admin-tools-row">
-                <button className="receipt-btn" onClick={() => void fetchAddOns()}>
+                <button className="receipt-btn" onClick={() => void fetchAddOns(selectedDate)}>
                   Refresh
                 </button>
 
-                <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={filteredRecords.length === 0}>
+                <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={records.length === 0}>
                   Export to Excel
-                </button>
-
-                <button
-                  className="receipt-btn admin-danger"
-                  onClick={() => void deleteByDate()}
-                  disabled={filteredRecords.length === 0 || deletingDate === selectedDate}
-                >
-                  {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
                 </button>
               </div>
             </div>
@@ -923,7 +781,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
                     const totalPaid = round2(o.gcash_amount + o.cash_amount);
                     const remaining = round2(Math.max(0, due - totalPaid));
                     const paid = toBool(o.is_paid);
-                    const busyOrder = voidingId === o.key || deletingId === o.key;
+
+                    const busyOrder = voidingKey === o.key;
 
                     return (
                       <tr key={o.key}>
@@ -994,11 +853,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                             </button>
 
                             <button className="receipt-btn" disabled={busyOrder} onClick={() => void voidOrder(o)}>
-                              {voidingId === o.key ? "Voiding..." : "Void"}
-                            </button>
-
-                            <button className="receipt-btn admin-neutral" disabled={busyOrder} onClick={() => void deleteOrder(o)}>
-                              {deletingId === o.key ? "Deleting..." : "Delete"}
+                              {voidingKey === o.key ? "Voiding..." : "Void"}
                             </button>
                           </div>
                         </td>

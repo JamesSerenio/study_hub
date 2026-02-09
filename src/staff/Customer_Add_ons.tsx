@@ -1,11 +1,7 @@
 // src/pages/Customer_Add_ons.tsx
-// ✅ UI MATCHES Customer_Lists (TOPBAR + DATE PILL CALENDAR + TABLE WRAP + NOTES)
-// ✅ Same className + UI style as Customer_Lists (customer-lists-container, customer-topbar, date-pill, customer-table-wrap, customer-table, receipt-overlay, etc.)
-// ✅ Payment modal: GCash/Cash auto updates to match Due
-// ✅ Save Payment auto sets PAID/UNPAID (paid >= due) + paid_at
-// ✅ Manual PAID/UNPAID toggle works (can return to UNPAID even if fully paid)
-// ✅ Receipt status follows manual is_paid (like Customer_Lists)
-// ✅ NEW: show SIZE (if exists) in items list + receipt
+// ✅ FIX: uses Asia/Manila day range (+08:00) for created_at filtering
+// ✅ FIX: joins add_ons (name/category/size)
+// ✅ IMPORTANT: Requires RLS SELECT policy on customer_session_add_ons + add_ons
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -19,7 +15,7 @@ interface AddOnInfo {
   id: string;
   name: string;
   category: string;
-  size: string | null; // ✅ NEW
+  size: string | null;
 }
 
 interface CustomerSessionAddOnRow {
@@ -36,6 +32,8 @@ interface CustomerSessionAddOnRow {
   cash_amount: NumericLike;
   is_paid: boolean | number | string | null;
   paid_at: string | null;
+
+  add_ons: AddOnInfo | null;
 }
 
 interface CustomerAddOnMerged {
@@ -50,7 +48,7 @@ interface CustomerAddOnMerged {
 
   item_name: string;
   category: string;
-  size: string | null; // ✅ NEW
+  size: string | null;
 
   gcash_amount: number;
   cash_amount: number;
@@ -61,7 +59,7 @@ interface CustomerAddOnMerged {
 type OrderItem = {
   id: string;
   category: string;
-  size: string | null; // ✅ NEW
+  size: string | null;
   item_name: string;
   quantity: number;
   price: number;
@@ -80,7 +78,6 @@ type OrderGroup = {
   gcash_amount: number;
   cash_amount: number;
 
-  // ✅ manual paid status (from DB)
   is_paid: boolean;
   paid_at: string | null;
 };
@@ -115,12 +112,6 @@ const yyyyMmDdLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-const extractDate = (iso: string): string => {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  return yyyyMmDdLocal(d);
-};
-
 const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
 
 const ms = (iso: string): number => {
@@ -135,7 +126,6 @@ const sizeText = (s: string | null | undefined): string => {
   return v.length > 0 ? v : "—";
 };
 
-// keep gcash (clamp to due), cash = remaining
 const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
   const d = round2(Math.max(0, due));
   if (d <= 0) return { gcash: 0, cash: 0 };
@@ -145,7 +135,13 @@ const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash:
   return { gcash: g, cash: c };
 };
 
-// group window: rows created within 10s = one order
+// ✅ Manila day range from YYYY-MM-DD
+const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } => {
+  const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+};
+
 const GROUP_WINDOW_MS = 10_000;
 
 const samePersonSeat = (a: CustomerAddOnMerged, b: CustomerAddOnMerged): boolean =>
@@ -157,30 +153,33 @@ const Customer_Add_ons: React.FC = () => {
   const [records, setRecords] = useState<CustomerAddOnMerged[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Date filter (same behavior as Customer_Lists)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
-  // receipt modal
   const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
 
-  // payment modal
   const [paymentTarget, setPaymentTarget] = useState<OrderGroup | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
-  // paid toggle busy
   const [togglingPaidKey, setTogglingPaidKey] = useState<string | null>(null);
 
   useEffect(() => {
-    void fetchAddOns();
+    void fetchAddOns(selectedDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchAddOns = async (): Promise<void> => {
+  useEffect(() => {
+    void fetchAddOns(selectedDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
+
+  const fetchAddOns = async (dateStr: string): Promise<void> => {
     setLoading(true);
 
-    const { data: rows, error } = await supabase
+    const { startIso, endIso } = manilaDayRange(dateStr);
+
+    const q = supabase
       .from("customer_session_add_ons")
       .select(
         `
@@ -195,46 +194,35 @@ const Customer_Add_ons: React.FC = () => {
         gcash_amount,
         cash_amount,
         is_paid,
-        paid_at
+        paid_at,
+        add_ons (
+          id,
+          name,
+          category,
+          size
+        )
       `
       )
-      .order("created_at", { ascending: false })
-      .returns<CustomerSessionAddOnRow[]>();
+      .gte("created_at", startIso)
+      .lt("created_at", endIso)
+      .order("created_at", { ascending: true });
+
+    const { data, error } = await q.returns<CustomerSessionAddOnRow[]>();
 
     if (error) {
+      // ✅ IMPORTANT DEBUG (usually says RLS / permission denied)
       // eslint-disable-next-line no-console
-      console.error("Error fetching add-ons:", error);
+      console.error("FETCH ADD-ONS ERROR:", error);
       setRecords([]);
       setLoading(false);
       return;
     }
 
-    const sessionRows = rows ?? [];
-    if (sessionRows.length === 0) {
-      setRecords([]);
-      setLoading(false);
-      return;
-    }
+    // eslint-disable-next-line no-console
+    console.log("FETCH ADD-ONS OK rows:", (data ?? []).length, "range:", { startIso, endIso });
 
-    const addOnIds = Array.from(new Set(sessionRows.map((r) => r.add_on_id)));
-
-    const { data: addOnRows, error: addOnErr } = await supabase
-      .from("add_ons")
-      .select("id, name, category, size")
-      .in("id", addOnIds)
-      .returns<AddOnInfo[]>();
-
-    if (addOnErr) {
-      // eslint-disable-next-line no-console
-      console.error("Error fetching add_ons:", addOnErr);
-    }
-
-    const addOnMap = new Map<string, AddOnInfo>();
-    (addOnRows ?? []).forEach((a) => addOnMap.set(a.id, a));
-
-    const merged: CustomerAddOnMerged[] = sessionRows.map((r) => {
-      const addOn = addOnMap.get(r.add_on_id);
-
+    const merged: CustomerAddOnMerged[] = (data ?? []).map((r) => {
+      const a = r.add_ons;
       return {
         id: r.id,
         created_at: r.created_at,
@@ -245,9 +233,9 @@ const Customer_Add_ons: React.FC = () => {
         full_name: r.full_name,
         seat_number: r.seat_number,
 
-        item_name: addOn?.name ?? "-",
-        category: addOn?.category ?? "-",
-        size: addOn?.size ?? null, // ✅ NEW
+        item_name: a?.name ?? "-",
+        category: a?.category ?? "-",
+        size: a?.size ?? null,
 
         gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
         cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
@@ -260,20 +248,14 @@ const Customer_Add_ons: React.FC = () => {
     setLoading(false);
   };
 
-  const filteredRecords = useMemo(() => {
-    return records
-      .filter((r) => extractDate(r.created_at) === selectedDate)
-      .sort((a, b) => ms(a.created_at) - ms(b.created_at)); // ascending for grouping window
-  }, [records, selectedDate]);
-
   const groupedOrders = useMemo<OrderGroup[]>(() => {
-    if (filteredRecords.length === 0) return [];
+    if (records.length === 0) return [];
 
     const groups: OrderGroup[] = [];
     let current: OrderGroup | null = null;
     let lastRow: CustomerAddOnMerged | null = null;
 
-    for (const row of filteredRecords) {
+    for (const row of records) {
       const startNew =
         current === null ||
         lastRow === null ||
@@ -290,11 +272,8 @@ const Customer_Add_ons: React.FC = () => {
           seat_number: row.seat_number,
           items: [],
           grand_total: 0,
-
           gcash_amount: 0,
           cash_amount: 0,
-
-          // ✅ manual (do not auto override later)
           is_paid: false,
           paid_at: null,
         };
@@ -307,7 +286,7 @@ const Customer_Add_ons: React.FC = () => {
       current.items.push({
         id: row.id,
         category: row.category,
-        size: row.size, // ✅ NEW
+        size: row.size,
         item_name: row.item_name,
         quantity: Number(row.quantity) || 0,
         price: row.price,
@@ -315,33 +294,24 @@ const Customer_Add_ons: React.FC = () => {
       });
 
       current.grand_total = round2(current.grand_total + row.total);
-
-      // aggregate payment
       current.gcash_amount = round2(current.gcash_amount + row.gcash_amount);
       current.cash_amount = round2(current.cash_amount + row.cash_amount);
 
-      // ✅ manual status from DB (if any row paid => show paid)
       current.is_paid = current.is_paid || row.is_paid;
       current.paid_at = current.paid_at ?? row.paid_at;
 
       lastRow = row;
     }
 
-    // ✅ IMPORTANT: do NOT auto-compute paid here, so toggle can return to UNPAID
     return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
-  }, [filteredRecords]);
+  }, [records]);
 
-  // -----------------------
-  // PAYMENT MODAL
-  // -----------------------
   const openPaymentModal = (o: OrderGroup): void => {
     const due = round2(Math.max(0, o.grand_total));
-
     const existingTotalPaid = round2(o.gcash_amount + o.cash_amount);
     const existingGcash = existingTotalPaid > 0 ? o.gcash_amount : 0;
 
     const adj = recalcPaymentsToDue(due, existingGcash);
-
     setPaymentTarget(o);
     setGcashInput(String(adj.gcash));
     setCashInput(String(adj.cash));
@@ -366,8 +336,6 @@ const Customer_Add_ons: React.FC = () => {
     setGcashInput(String(gcash));
   };
 
-  // ✅ Save payment updates ALL rows in the order
-  // ✅ Auto set is_paid based on payment vs due
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
@@ -388,7 +356,7 @@ const Customer_Add_ons: React.FC = () => {
         .update({
           gcash_amount: adj.gcash,
           cash_amount: adj.cash,
-          is_paid: isPaidAuto, // ✅ auto paid on save
+          is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
         .in("id", itemIds);
@@ -399,7 +367,7 @@ const Customer_Add_ons: React.FC = () => {
       }
 
       setPaymentTarget(null);
-      await fetchAddOns();
+      await fetchAddOns(selectedDate);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -409,9 +377,6 @@ const Customer_Add_ons: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // PAID / UNPAID TOGGLE (manual) — updates ALL rows
-  // -----------------------
   const togglePaid = async (o: OrderGroup): Promise<void> => {
     const itemIds = o.items.map((x) => x.id);
 
@@ -433,7 +398,7 @@ const Customer_Add_ons: React.FC = () => {
         return;
       }
 
-      await fetchAddOns();
+      await fetchAddOns(selectedDate);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -445,10 +410,8 @@ const Customer_Add_ons: React.FC = () => {
 
   return (
     <IonPage>
-      {/* ✅ SAME BACKGROUND as Customer_Lists */}
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* ✅ SAME TOPBAR + SAME DATE PILL CALENDAR as Customer_Lists */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Add-Ons Records</h2>
@@ -471,14 +434,12 @@ const Customer_Add_ons: React.FC = () => {
                 </span>
               </label>
 
-              {/* ✅ refresh button (kept) but uses SAME button class as tables */}
-              <button className="receipt-btn" onClick={() => void fetchAddOns()} style={{ whiteSpace: "nowrap" }}>
+              <button className="receipt-btn" onClick={() => void fetchAddOns(selectedDate)} style={{ whiteSpace: "nowrap" }}>
                 Refresh
               </button>
             </div>
           </div>
 
-          {/* TABLE */}
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : groupedOrders.length === 0 ? (
@@ -504,8 +465,6 @@ const Customer_Add_ons: React.FC = () => {
                     const due = round2(o.grand_total);
                     const totalPaid = round2(o.gcash_amount + o.cash_amount);
                     const remaining = round2(Math.max(0, due - totalPaid));
-
-                    // ✅ IMPORTANT: show PAID based on manual is_paid only
                     const paid = toBool(o.is_paid);
 
                     return (
@@ -564,7 +523,6 @@ const Customer_Add_ons: React.FC = () => {
                         </td>
 
                         <td>
-                          {/* ✅ SAME PAID BADGE STYLE as Customer_Lists */}
                           <button
                             className={`receipt-btn pay-badge ${paid ? "pay-badge--paid" : "pay-badge--unpaid"}`}
                             onClick={() => void togglePaid(o)}
@@ -656,7 +614,6 @@ const Customer_Add_ons: React.FC = () => {
                         <span>{moneyText(remaining)}</span>
                       </div>
 
-                      {/* ✅ SAME modal actions layout as Customer_Lists */}
                       <div className="modal-actions">
                         <button className="receipt-btn" onClick={() => setPaymentTarget(null)}>
                           Cancel
@@ -726,8 +683,6 @@ const Customer_Add_ons: React.FC = () => {
                   const cash = round2(Math.max(0, selectedOrder.cash_amount));
                   const totalPaid = round2(gcash + cash);
                   const remaining = round2(Math.max(0, due - totalPaid));
-
-                  // ✅ IMPORTANT: receipt follows manual is_paid
                   const paid = toBool(selectedOrder.is_paid);
 
                   return (
