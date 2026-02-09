@@ -23,7 +23,6 @@ import Seat from "../components/Seat"; // ✅ view-only seat image component
 
 import leaves from "../assets/leave.png";
 import studyHubLogo from "../assets/study_hub.png";
-import whiteBear from "../assets/white_bear.png";
 
 // ✅ receipt logo + supabase
 import logo from "../assets/study_hub.png";
@@ -656,10 +655,6 @@ const Book_Add: React.FC = () => {
           <img src={leaves} className="leaf-img" alt="leaf" />
         </div>
 
-        {/* ✅ WHITE BEAR */}
-        <div className="bookadd-bear" aria-hidden="true">
-          <img src={whiteBear} className="bookadd-bear-img" alt="" draggable={false} />
-        </div>
 
         <div className="bookadd-wrapper">
           <div className="bookadd-hero-card">

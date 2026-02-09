@@ -97,54 +97,7 @@ ion-content,
    - responsive mobile/tablet/desktop
    - never causes scroll
 ========================= */
-.login-g {
-  position: absolute;
-  pointer-events: none;
-  user-select: none;
-  z-index: 1; /* above leaves, below card */
 
-  width: clamp(140px, 34vw, 460px);
-  height: auto;
-
-  opacity: 0.95;
-  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.12));
-
-  /* ✅ single placement: bottom-right */
-  right: clamp(-34px, -4vw, -12px);
-  bottom: clamp(-28px, -4vw, -10px);
-  transform: none;
-}
-
-/* ✅ Extra small phones */
-@media (max-width: 360px) {
-  .login-g {
-    z-index: 5;
-    width: 250px;
-    right:50px;
-    bottom: 388px;
-    opacity: 0.9;
-  }
-}
-
-/* ✅ Tablet */
-@media (min-width: 600px) {
-  .login-g {
-    z-index: 5;
-    width: clamp(300px, 26vw, 480px);
-    right: 145px;
-    bottom: 415px;
-  }
-}
-
-/* ✅ Desktop */
-@media (min-width: 1200px) {
-  .login-g {
-    z-index: 5;
-    width: 350px;
-    right: 585px;
-    bottom: 375px;
-  }
-}
 
 /* =========================
    LEAVES (correct angle + floating without flipping)
@@ -2198,82 +2151,7 @@ ion-content,
   animation: fadeUpSoft 420ms ease-out both;
 }
 
-/* =========================
-   WHITE BEAR (OUTSIDE CARD)
-   - anchored to viewport/content
-   - responsive sizes
-========================= */
-.bookadd-bear {
-  position: absolute;
-  left: clamp(-18px, -2vw, 12px);
-  bottom: clamp(-6px, -1vw, 10px);
 
-  z-index: 0;            /* same as leaves */
-  pointer-events: none;  /* never blocks clicks */
-  user-select: none;
-}
-
-.bookadd-bear-img {
-  width: clamp(120px, 18vw, 260px);
-  height: auto;
-  opacity: 0.95;
-
-  /* keep inside screen even if large */
-  max-width: 42vw;
-
-  /* optional soft floating (same vibe) */
-  animation: floatSoft 3.6s ease-in-out infinite;
-  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.18));
-}
-
-/* ✅ On very small phones: make it smaller + tuck more */
-@media (max-width: 360px) {
-  .bookadd-bear {
-    left: 100px;
-    bottom: 635px;
-  }
-  .bookadd-bear-img {
-    width: 150px;
-    max-width: 52vw;
-    opacity: 0.92;
-  }
-}
-
-/* ✅ On tablets: slightly bigger */
-@media (min-width: 768px) and (max-width: 1366px) {
-  .bookadd-bear-img {
-    width: clamp(180px, 50vw, 280px);
-    max-width: 32vw;
-  }
-  .bookadd-bear {
-    left: 270px;
-    bottom: 900px;
-  }
-
-}
-
-/* ✅ On large desktop: keep it nice but not too huge */
-@media (min-width: 1200px) {
-  .bookadd-bear {
-    left: 635px;
-    bottom: 550px;
-  }
-  .bookadd-bear-img {
-    width: 260px;
-    max-width: 280px;
-  }
-}
-
-@media (width: 1028px) and (height: 652px) {
-  .bookadd-bear {
-    left: 415px;
-    bottom: 480px;
-  }
-  .bookadd-bear-img {
-    width: 200px;
-    max-width: 280px;
-  }
-}
 /* =========================================================
    BOOKING MODAL - FINAL (NO DUPLICATES)
    Requires: IonModal className="booking-modal"

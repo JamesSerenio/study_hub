@@ -14,7 +14,6 @@ import { supabase } from "../utils/supabaseClient";
 
 import studyHubLogo from "../assets/study_hub.png";
 import leaves from "../assets/leave.png";
-import gImg from "../assets/g.png";
 
 type ProfileRow = {
   role: string;
@@ -117,9 +116,6 @@ const Login: React.FC = () => {
         <div className="leaf leaf-bottom-right">
           <img src={leaves} className="leaf-img" alt="" />
         </div>
-
-        {/* ✅ SINGLE g.png (outside card) */}
-        <img src={gImg} className="login-g" alt="" />
 
         <div className="login-wrapper">
           <div className="login-box">
