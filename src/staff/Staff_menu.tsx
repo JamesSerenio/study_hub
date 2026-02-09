@@ -12,6 +12,7 @@ import {
   IonToolbar,
   IonIcon,
   IonPage,
+  IonSpinner,
 } from "@ionic/react";
 import { logOutOutline } from "ionicons/icons";
 import { useHistory } from "react-router-dom";
@@ -19,6 +20,10 @@ import { motion, AnimatePresence } from "framer-motion";
 
 /* ✅ supabase */
 import { supabase } from "../utils/supabaseClient";
+import type {
+  RealtimePostgresInsertPayload,
+  RealtimePostgresUpdatePayload,
+} from "@supabase/supabase-js";
 
 /* pages */
 import Staff_Dashboard from "./Staff_Dashboard";
@@ -90,7 +95,10 @@ const Staff_menu: React.FC = () => {
       🔔 Notifications
   ========================= */
   const NOTIF_TABLE = "add_on_notifications";
+
   const [notifOpen, setNotifOpen] = useState<boolean>(false);
+  const notifOpenRef = useRef<boolean>(false);
+
   const [notifLoading, setNotifLoading] = useState<boolean>(false);
   const [notifItems, setNotifItems] = useState<AddOnNotifRow[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
@@ -99,8 +107,16 @@ const Staff_menu: React.FC = () => {
   const bellWrapRef = useRef<HTMLDivElement | null>(null);
   const bellBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // ✅ fixed popover position (computed from bell)
-  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>({ top: 64, right: 12 });
+  // popover position
+  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>({
+    top: 64,
+    right: 12,
+  });
+
+  // ✅ keep ref synced for realtime callbacks
+  useEffect(() => {
+    notifOpenRef.current = notifOpen;
+  }, [notifOpen]);
 
   const formatPHDateTime = (iso: string): string => {
     const d = new Date(iso);
@@ -162,36 +178,29 @@ const Staff_menu: React.FC = () => {
       return;
     }
 
-    setNotifItems((prev) => prev.map((n) => (n.is_read ? n : { ...n, is_read: true, read_at: nowIso })));
+    setNotifItems((prev) =>
+      prev.map((n) => (n.is_read ? n : { ...n, is_read: true, read_at: nowIso }))
+    );
     setUnreadCount(0);
   };
 
-  // ✅ compute popover position from bell (FIX for "not visible")
   const computePopoverPosition = (): void => {
     const btn = bellBtnRef.current;
     if (!btn) return;
 
     const r = btn.getBoundingClientRect();
-    const top = Math.round(r.bottom + 10); // under bell
-    const right = Math.max(12, Math.round(window.innerWidth - r.right)); // align right edge to bell
-
+    const top = Math.round(r.bottom + 10);
+    const right = Math.max(12, Math.round(window.innerWidth - r.right));
     setPopoverPos({ top, right });
   };
 
   const openBell = async (): Promise<void> => {
-    computePopoverPosition(); // ✅ important
+    computePopoverPosition();
     setNotifOpen(true);
 
+    // ✅ load latest on open (no refresh)
     await fetchNotifications();
-
-    const { count } = await supabase
-      .from(NOTIF_TABLE)
-      .select("*", { count: "exact", head: true })
-      .eq("is_read", false);
-
-    const c = Number(count ?? 0);
-    setUnreadCount(c);
-    if (c > 0) await markAllAsRead();
+    await fetchUnreadCount();
   };
 
   const closeBell = (): void => setNotifOpen(false);
@@ -204,50 +213,94 @@ const Staff_menu: React.FC = () => {
   /* ✅ close dropdown on outside click */
   useEffect(() => {
     const onDocClick = (e: MouseEvent): void => {
-      if (!notifOpen) return;
-
+      if (!notifOpenRef.current) return;
       const wrap = bellWrapRef.current;
       if (!wrap) return;
-
-      // if click outside wrapper and outside popover
       if (!wrap.contains(e.target as Node)) setNotifOpen(false);
     };
 
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
-  }, [notifOpen]);
+  }, []);
 
-  /* ✅ reposition when window resizes (popover stays aligned) */
+  /* ✅ reposition on resize */
   useEffect(() => {
-    if (!notifOpen) return;
-
-    const onResize = (): void => computePopoverPosition();
+    const onResize = (): void => {
+      if (notifOpenRef.current) computePopoverPosition();
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [notifOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  /* ✅ realtime updates */
+  /* ✅ PRODUCTION REALTIME SUBSCRIBE ONCE (Vercel-safe) */
   useEffect(() => {
+    // initial fetch
     void fetchUnreadCount();
     void fetchNotifications();
 
     const ch = supabase
       .channel("realtime_add_on_notifications")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: NOTIF_TABLE }, () => {
-        void fetchUnreadCount();
-        if (notifOpen) void fetchNotifications();
-      })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: NOTIF_TABLE }, () => {
-        void fetchUnreadCount();
-        if (notifOpen) void fetchNotifications();
-      })
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: NOTIF_TABLE },
+        (payload: RealtimePostgresInsertPayload<AddOnNotifRow>) => {
+          const newRow = payload.new;
+
+          // ✅ update list instantly
+          setNotifItems((prev) => {
+            if (prev.some((x) => x.id === newRow.id)) return prev;
+            return [newRow, ...prev].slice(0, 30);
+          });
+
+          // ✅ badge = unread total (instant +1)
+          if (!newRow.is_read) {
+            setUnreadCount((prev) => prev + 1);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: NOTIF_TABLE },
+        (payload: RealtimePostgresUpdatePayload<AddOnNotifRow>) => {
+          // ✅ when rows become read/unread, sync count
+          const oldRow = payload.old;
+          const newRow = payload.new;
+
+          // keep list synced (update row in place)
+          setNotifItems((prev) => {
+            const idx = prev.findIndex((x) => x.id === newRow.id);
+            if (idx === -1) return prev;
+            const copy = [...prev];
+            copy[idx] = newRow;
+            return copy;
+          });
+
+          // unreadCount delta
+          const wasUnread = oldRow && (oldRow as AddOnNotifRow).is_read === false;
+          const isUnread = newRow.is_read === false;
+
+          if (wasUnread && !isUnread) setUnreadCount((c) => Math.max(0, c - 1));
+          if (!wasUnread && isUnread) setUnreadCount((c) => c + 1);
+        }
+      )
       .subscribe();
 
+    // ✅ resync when user returns to tab (important in mobile)
+    const onFocus = (): void => {
+      void fetchUnreadCount();
+      void fetchNotifications();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+
     return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
       void supabase.removeChannel(ch);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notifOpen]);
+  }, []);
 
   /* ✅ boot tick */
   useEffect(() => {
@@ -256,7 +309,6 @@ const Staff_menu: React.FC = () => {
       window.dispatchEvent(new Event("resize"));
       document.body.getBoundingClientRect();
     }, 0);
-
     return () => window.clearTimeout(t);
   }, []);
 
@@ -434,7 +486,7 @@ const Staff_menu: React.FC = () => {
             )}
           </IonContent>
 
-          {/* ✅ FIXED MODAL OUTSIDE HEADER (cannot be clipped!) */}
+          {/* ✅ POPOVER */}
           {notifOpen && (
             <div
               className="notif-popover notif-popover--fixed"
@@ -445,11 +497,18 @@ const Staff_menu: React.FC = () => {
               <div className="notif-popover-head">
                 <div>
                   <div className="notif-title">Add-Ons Notifications</div>
+                  <div className="notif-subtitle">Live updates • no refresh</div>
                 </div>
 
-                <button className="notif-close-btn" onClick={closeBell} aria-label="Close" type="button">
-                  ✕
-                </button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <IonButton size="small" onClick={() => void markAllAsRead()}>
+                    Mark all read
+                  </IonButton>
+
+                  <button className="notif-close-btn" onClick={closeBell} aria-label="Close" type="button">
+                    ✕
+                  </button>
+                </div>
               </div>
 
               <div className="notif-grid-head">
@@ -464,14 +523,16 @@ const Staff_menu: React.FC = () => {
 
               <div className="notif-popover-body">
                 {notifLoading ? (
-                  <div className="notif-empty">Loading...</div>
+                  <div className="notif-empty">
+                    <IonSpinner name="dots" />
+                  </div>
                 ) : notifItems.length === 0 ? (
                   <div className="notif-empty">No notifications yet.</div>
                 ) : (
                   notifItems.map((n) => (
                     <div key={n.id} className={`notif-row ${n.is_read ? "" : "notif-row--unread"}`}>
                       <div className="ellipsis">{n.full_name}</div>
-                      <div className="seat-pill"> {n.seat_number}</div>
+                      <div className="seat-pill">{n.seat_number}</div>
                       <div className="dt">{formatPHDateTime(n.created_at)}</div>
                       <div className="ellipsis">{n.add_on_name}</div>
                       <div className="t-right">{Number(n.quantity)}</div>
