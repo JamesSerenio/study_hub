@@ -14,6 +14,7 @@
 // ✅ Search bar (Full Name only)
 // ✅ NEW: Cancel now requires DESCRIPTION and moves record to customer_sessions_cancelled (RPC)
 // ✅ strict TS (NO "any")
+// ✅ FIXED: PAYMENT inputs no longer LIMIT/force total = due (Cash & GCash free input)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -143,16 +144,6 @@ const applyDiscount = (
   return { discountedCost: round2(cost), discountAmount: 0 };
 };
 
-// ✅ keep gcash (clamp to due), cash = remaining
-const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
-  const d = round2(Math.max(0, due));
-  if (d <= 0) return { gcash: 0, cash: 0 };
-
-  const g = round2(Math.min(d, Math.max(0, gcash)));
-  const c = round2(Math.max(0, d - g));
-  return { gcash: g, cash: c };
-};
-
 /* =========================
    CROSS-DEVICE VIEW HELPERS (SINGLE ROW id=1)
 ========================= */
@@ -211,7 +202,7 @@ const Customer_Lists: React.FC = () => {
   const [dpInput, setDpInput] = useState<string>("0");
   const [savingDp, setSavingDp] = useState<boolean>(false);
 
-  // Payment modal
+  // ✅ Payment modal (FREE INPUTS, NO LIMIT)
   const [paymentTarget, setPaymentTarget] = useState<CustomerSession | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
@@ -473,10 +464,9 @@ const Customer_Lists: React.FC = () => {
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
     const dueForPayment = round2(Math.max(0, discounted));
 
+    // ✅ KEEP existing cash/gcash as-is (no limiting)
     const prevPay = getPaidInfo(discountTarget);
-    const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
-
-    const totalPaid = round2(adjPay.gcash + adjPay.cash);
+    const totalPaid = round2(prevPay.gcash + prevPay.cash);
     const autoPaid = dueForPayment <= 0 ? true : totalPaid >= dueForPayment;
 
     try {
@@ -489,8 +479,9 @@ const Customer_Lists: React.FC = () => {
           discount_value: finalValue,
           discount_reason: discountReason.trim(),
 
-          gcash_amount: adjPay.gcash,
-          cash_amount: adjPay.cash,
+          // keep existing payments
+          gcash_amount: prevPay.gcash,
+          cash_amount: prevPay.cash,
 
           is_paid: autoPaid,
           paid_at: autoPaid ? new Date().toISOString() : null,
@@ -558,47 +549,26 @@ const Customer_Lists: React.FC = () => {
   };
 
   // -----------------------
-  // PAYMENT MODAL (DO NOT TOUCH)
+  // ✅ PAYMENT MODAL (FREE INPUTS, NO LIMIT)
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
-    const due = getSessionSystemCost(s);
     const pi = getPaidInfo(s);
 
-    const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
-    const adj = recalcPaymentsToDue(due, existingGcash);
-
     setPaymentTarget(s);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
-  };
-
-  const setGcashAndAutoCash = (s: CustomerSession, gcashStr: string): void => {
-    const due = getSessionSystemCost(s);
-    const gc = Math.max(0, toMoney(gcashStr));
-    const adj = recalcPaymentsToDue(due, gc);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
-  };
-
-  const setCashAndAutoGcash = (s: CustomerSession, cashStr: string): void => {
-    const due = round2(Math.max(0, getSessionSystemCost(s)));
-    const ca = round2(Math.max(0, toMoney(cashStr)));
-
-    const cash = round2(Math.min(due, ca));
-    const gcash = round2(Math.max(0, due - cash));
-
-    setCashInput(String(cash));
-    setGcashInput(String(gcash));
+    // ✅ Prefill with existing values (no forcing to due)
+    setGcashInput(String(pi.gcash));
+    setCashInput(String(pi.cash));
   };
 
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = getSessionSystemCost(paymentTarget);
-    const gcIn = Math.max(0, toMoney(gcashInput));
-    const adj = recalcPaymentsToDue(due, gcIn);
+    const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-    const totalPaid = round2(adj.gcash + adj.cash);
+    const g = round2(Math.max(0, toMoney(gcashInput)));
+    const c = round2(Math.max(0, toMoney(cashInput)));
+    const totalPaid = round2(g + c);
+
     const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
@@ -607,8 +577,8 @@ const Customer_Lists: React.FC = () => {
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
-          gcash_amount: adj.gcash,
-          cash_amount: adj.cash,
+          gcash_amount: g,
+          cash_amount: c,
           is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
@@ -854,9 +824,9 @@ const Customer_Lists: React.FC = () => {
 
                     const disp = getDisplayAmount(session);
 
-                    const systemCost = getSessionSystemCost(session);
+                    const systemCost = round2(Math.max(0, getSessionSystemCost(session)));
                     const pi = getPaidInfo(session);
-                    const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid));
+                    const remainingPay = round2(systemCost - pi.totalPaid); // ✅ can be negative (change)
 
                     const dp = getDownPayment(session);
                     const viewOn = isCustomerViewOnForSession(activeView, session.id);
@@ -906,13 +876,15 @@ const Customer_Lists: React.FC = () => {
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remainingPay.toFixed(2)}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              {remainingPay >= 0 ? `Remaining ₱${remainingPay.toFixed(2)}` : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
+                            </span>
 
                             <button
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
                               disabled={systemCost <= 0}
-                              title={systemCost <= 0 ? "No due" : "Set GCash/Cash payment (based on time consumed)"}
+                              title={systemCost <= 0 ? "No due" : "Set Cash & GCash freely (no limit)"}
                             >
                               Payment
                             </button>
@@ -1011,11 +983,7 @@ const Customer_Lists: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
-                  <button
-                    className="receipt-btn"
-                    onClick={() => setCancelTarget(null)}
-                    disabled={cancellingBusy}
-                  >
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancellingBusy}>
                     Back
                   </button>
 
@@ -1121,7 +1089,6 @@ const Customer_Lists: React.FC = () => {
                   const dueForPayment = round2(Math.max(0, discountedCost));
 
                   const prevPay = getPaidInfo(discountTarget);
-                  const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
 
                   return (
                     <>
@@ -1153,9 +1120,9 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Auto Payment After Save</span>
+                        <span>Current Payment</span>
                         <span>
-                          GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                          GCash ₱{prevPay.gcash.toFixed(2)} / Cash ₱{prevPay.cash.toFixed(2)}
                         </span>
                       </div>
 
@@ -1179,7 +1146,7 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL */}
+          {/* ✅ PAYMENT MODAL (NO LIMIT) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1189,13 +1156,14 @@ const Customer_Lists: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const due = getSessionSystemCost(paymentTarget);
+                  const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-                  const gcIn = Math.max(0, toMoney(gcashInput));
-                  const adj = recalcPaymentsToDue(due, gcIn);
+                  const g = round2(Math.max(0, toMoney(gcashInput)));
+                  const c = round2(Math.max(0, toMoney(cashInput)));
+                  const totalPaid = round2(g + c);
 
-                  const totalPaid = round2(adj.gcash + adj.cash);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                  const diff = round2(totalPaid - due); // + = change, - = remaining
+                  const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
                   return (
                     <>
@@ -1212,7 +1180,7 @@ const Customer_Lists: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={gcashInput}
-                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setGcashInput(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1224,7 +1192,7 @@ const Customer_Lists: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={cashInput}
-                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setCashInput(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1236,8 +1204,13 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining</span>
-                        <span>₱{remaining.toFixed(2)}</span>
+                        <span>{diff >= 0 ? "Change" : "Remaining"}</span>
+                        <span>₱{Math.abs(diff).toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Auto Status</span>
+                        <span className="receipt-status">{isPaidAuto ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       <div className="modal-actions">

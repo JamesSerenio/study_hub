@@ -4,9 +4,9 @@
 // ✅ Expense Amount AUTO = qty * add_ons.expenses_cost (UNIT COST)
 // ✅ If expenses_cost is 0 => fallback to price
 // ✅ Sort by Category OR Stock (asc/desc)
-// ✅ SEARCH (name/category) + classnames for CSS
-// ✅ NEW: Add Cash Outs modal (logs to cash_outs)
-// ✅ Cash Outs fields: type, description, amount
+// ✅ SEARCH (name/category/size) + classnames for CSS
+// ✅ Add Cash Outs modal (logs to cash_outs)
+// ✅ Cash Outs fields: type, description, amount + ✅ payment_method (cash/gcash)
 // ✅ Uses SAME pil-* classnames for styling
 // ✅ FIX: Cash outs now checks Supabase Auth session + shows real error
 // ✅ NEW: SIZE column (DB add_ons.size) shown in table + search + dropdown label
@@ -60,21 +60,20 @@ import type {
 
 type ExpenseType = "expired" | "staff_consumed";
 type SortKey = "category" | "stocks";
+type CashOutMethod = "cash" | "gcash";
 
 interface AddOn {
   id: string;
   category: string;
   name: string;
-  size: string | null; // ✅ NEW
+  size: string | null;
 
   price: number | string;
   restocked: number | string;
   sold: number | string;
 
-  // ✅ expenses_cost = UNIT COST (money)
-  // ✅ expenses = count/qty logged (not money)
-  expenses_cost: number | string;
-  expenses: number | string;
+  expenses_cost: number | string; // UNIT COST (money)
+  expenses: number | string; // qty only
 
   stocks: number | string;
   overall_sales: number | string;
@@ -92,7 +91,7 @@ interface AddOnExpenseInsert {
   product_name: string;
   quantity: number;
   expense_type: ExpenseType;
-  expense_amount: number; // ✅ AUTO money
+  expense_amount: number;
   description: string;
 }
 
@@ -100,6 +99,7 @@ interface CashOutInsert {
   type: string;
   description: string | null;
   amount: number;
+  payment_method: CashOutMethod; // ✅ NEW
 }
 
 /* =========================
@@ -151,7 +151,7 @@ const getAuthedUserId = async (): Promise<string | null> => {
 };
 
 /* =========================
-   AUTO COMPUTE
+   AUTO COMPUTE (expenses)
 ========================= */
 
 type UnitSource = "cost" | "price" | "none";
@@ -191,7 +191,7 @@ const Product_Item_Lists: React.FC = () => {
   const [sortKey, setSortKey] = useState<SortKey>("category");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
-  // ✅ search
+  // search
   const [search, setSearch] = useState<string>("");
 
   // EXPENSES modal
@@ -214,6 +214,7 @@ const Product_Item_Lists: React.FC = () => {
   const [cashOutType, setCashOutType] = useState<string>("");
   const [cashOutDesc, setCashOutDesc] = useState<string>("");
   const [cashOutAmount, setCashOutAmount] = useState<string>("");
+  const [cashOutMethod, setCashOutMethod] = useState<CashOutMethod>("cash"); // ✅ NEW
 
   const fetchAddOns = async (): Promise<void> => {
     setLoading(true);
@@ -240,7 +241,7 @@ const Product_Item_Lists: React.FC = () => {
   useEffect(() => {
     void fetchAddOns();
 
-    // ✅ optional debug: check session
+    // optional debug: check session
     void supabase.auth.getSession().then(({ data }) => {
       // eslint-disable-next-line no-console
       console.log("SESSION:", data.session);
@@ -276,7 +277,7 @@ const Product_Item_Lists: React.FC = () => {
       const name = (a.name ?? "").toString().toLowerCase();
       const cat = (a.category ?? "").toString().toLowerCase();
       const size = (a.size ?? "").toString().toLowerCase();
-      return name.includes(q) || cat.includes(q) || size.includes(q); // ✅ include size
+      return name.includes(q) || cat.includes(q) || size.includes(q);
     });
   }, [sortedAddOns, search]);
 
@@ -391,6 +392,7 @@ const Product_Item_Lists: React.FC = () => {
     setCashOutType("");
     setCashOutDesc("");
     setCashOutAmount("");
+    setCashOutMethod("cash"); // ✅ reset
     setIsCashOutOpen(true);
   };
 
@@ -407,6 +409,7 @@ const Product_Item_Lists: React.FC = () => {
     if (amt < 0) return "Amount must be 0 or higher.";
     if (amt === 0) return "Amount must be greater than 0.";
 
+    // cashOutMethod is always set ("cash" | "gcash") so no need extra validate
     return null;
   };
 
@@ -430,6 +433,7 @@ const Product_Item_Lists: React.FC = () => {
       type: cashOutType.trim(),
       description: cashOutDesc.trim() ? cashOutDesc.trim() : null,
       amount: clampMoney(cashOutAmount, 0),
+      payment_method: cashOutMethod, // ✅ NEW
     };
 
     setSavingCashOut(true);
@@ -454,6 +458,7 @@ const Product_Item_Lists: React.FC = () => {
       setCashOutType("");
       setCashOutDesc("");
       setCashOutAmount("");
+      setCashOutMethod("cash");
     } finally {
       setSavingCashOut(false);
     }
@@ -492,7 +497,9 @@ const Product_Item_Lists: React.FC = () => {
             <IonSelect
               className="pil-sort-select"
               value={sortKey}
-              onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setSortKey(String(e.detail.value) as SortKey)}
+              onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
+                setSortKey(String(e.detail.value) as SortKey)
+              }
             >
               <IonSelectOption value="category">Category</IonSelectOption>
               <IonSelectOption value="stocks">Stocks</IonSelectOption>
@@ -568,7 +575,11 @@ const Product_Item_Lists: React.FC = () => {
                 {filteredAddOns.map((a) => (
                   <IonRow className="pil-row" key={a.id}>
                     <IonCol className="pil-col pil-col--img">
-                      {a.image_url ? <IonImg className="pil-img" src={a.image_url} alt={a.name} /> : <span className="pil-muted">No image</span>}
+                      {a.image_url ? (
+                        <IonImg className="pil-img" src={a.image_url} alt={a.name} />
+                      ) : (
+                        <span className="pil-muted">No image</span>
+                      )}
                     </IonCol>
 
                     <IonCol className="pil-col pil-col--strong">{a.name}</IonCol>
@@ -785,6 +796,23 @@ const Product_Item_Lists: React.FC = () => {
                     autoGrow
                     onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) => setCashOutDesc(String(e.detail.value ?? ""))}
                   />
+                </IonItem>
+
+                {/* ✅ NEW: Cash / GCash selector */}
+                <IonItem className="pil-item">
+                  <IonLabel position="stacked" className="pil-label">
+                    Payment (Cash / GCash)
+                  </IonLabel>
+                  <IonSelect
+                    className="pil-select"
+                    value={cashOutMethod}
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
+                      setCashOutMethod(String(e.detail.value) as CashOutMethod)
+                    }
+                  >
+                    <IonSelectOption value="cash">Cash</IonSelectOption>
+                    <IonSelectOption value="gcash">GCash</IonSelectOption>
+                  </IonSelect>
                 </IonItem>
 
                 <IonItem className="pil-item">
