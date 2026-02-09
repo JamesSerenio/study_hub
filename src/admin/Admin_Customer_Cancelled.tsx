@@ -1,17 +1,25 @@
-// src/pages/Customer_Cancelled.tsx
-// ✅ Cancelled Records page (TABS: Add-Ons / Walk-in / Reservation)
-// ✅ Add-Ons tab: your existing logic (Asia/Manila day range +08:00)
+// src/admin/Admin_Customer_Cancelled.tsx
+// ✅ SAME UI/LOGIC as src/pages/Customer_Cancelled.tsx (TABS: Add-Ons / Walk-in / Reservation)
+// ✅ Add-Ons tab: existing grouped logic (Asia/Manila day range +08:00) from cancelled_at
 // ✅ Walk-in tab: reads public.customer_sessions_cancelled where reservation='no'
 // ✅ Reservation tab: reads public.customer_sessions_cancelled where reservation='yes'
-// ✅ Same layout/classnames style as your other tables (customer-*)
+// ✅ Same layout/classnames style (customer-*)
 // ✅ Receipt modal (view details)
-// ✅ READ-ONLY (NOT EDITABLE; no clickable "paid" badge / no updates)
+// ✅ READ-ONLY (NOT EDITABLE; paid badge NOT clickable; no updates)
+// ✅ ADMIN EXTRA:
+//    - Delete by DATE (top): deletes ALL cancelled records for selectedDate (Add-Ons + Sessions)
+//    - Delete per row/group (Action)
+//    - Export to Excel (ONE FILE) with 3 sections: Add-Ons (TOP) + Walk-in + Reservation
 // ✅ STRICT TS (no any)
 
 import React, { useEffect, useMemo, useState } from "react";
-import { IonPage, IonContent, IonText } from "@ionic/react";
+import { IonPage, IonContent, IonText, IonAlert, IonSpinner } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
+
+// ✅ EXCEL
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 /* =========================
    TYPES (Add-Ons)
@@ -294,7 +302,7 @@ const ReadOnlyBadge: React.FC<{ paid: boolean }> = ({ paid }) => {
         fontWeight: 900,
         fontSize: 12,
         userSelect: "none",
-        pointerEvents: "none", // ✅ cannot click
+        pointerEvents: "none",
       }}
       aria-label={paid ? "PAID" : "UNPAID"}
     >
@@ -310,7 +318,7 @@ const GROUP_WINDOW_MS = 10_000;
 ========================= */
 type CancelTab = "addons" | "walkin" | "reservation";
 
-const Customer_Cancelled: React.FC = () => {
+const Admin_Customer_Cancelled: React.FC = () => {
   const [tab, setTab] = useState<CancelTab>("addons");
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
@@ -323,6 +331,13 @@ const Customer_Cancelled: React.FC = () => {
   // Sessions data (walk-in + reservation)
   const [rowsSessions, setRowsSessions] = useState<CancelledSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<CancelledSession | null>(null);
+
+  // ✅ Admin actions state
+  const [confirmDeleteDate, setConfirmDeleteDate] = useState<boolean>(false);
+  const [confirmDeleteAddOnGroup, setConfirmDeleteAddOnGroup] = useState<CancelGroupAddOn | null>(null);
+  const [confirmDeleteSession, setConfirmDeleteSession] = useState<CancelledSession | null>(null);
+  const [busyDelete, setBusyDelete] = useState<boolean>(false);
+  const [busyExport, setBusyExport] = useState<boolean>(false);
 
   useEffect(() => {
     void refresh();
@@ -346,6 +361,7 @@ const Customer_Cancelled: React.FC = () => {
       await fetchCancelledSessions(selectedDate, "yes");
     }
   };
+
 
   /* -----------------------------
      FETCH: Add-Ons Cancelled
@@ -432,8 +448,8 @@ const Customer_Cancelled: React.FC = () => {
     setLoading(false);
   };
 
-  const groupedAddOns = useMemo<CancelGroupAddOn[]>(() => {
-    if (rowsAddOns.length === 0) return [];
+  const groupAddOnsFromRows = (rows: CancelItemAddOn[]): CancelGroupAddOn[] => {
+    if (rows.length === 0) return [];
 
     const groups: CancelGroupAddOn[] = [];
     let current: CancelGroupAddOn | null = null;
@@ -444,7 +460,7 @@ const Customer_Cancelled: React.FC = () => {
       norm(a.seat_number) === norm(b.seat_number) &&
       norm(a.description) === norm(b.description);
 
-    for (const r of rowsAddOns) {
+    for (const r of rows) {
       const startNew =
         current === null ||
         last === null ||
@@ -493,17 +509,21 @@ const Customer_Cancelled: React.FC = () => {
     }
 
     return groups.sort((a, b) => ms(b.cancelled_at) - ms(a.cancelled_at));
-  }, [rowsAddOns]);
+  };
+
+  const groupedAddOns = useMemo<CancelGroupAddOn[]>(() => groupAddOnsFromRows(rowsAddOns), [rowsAddOns]);
 
   /* -----------------------------
      FETCH: Sessions Cancelled
-     - uses customer_sessions_cancelled
-     - filter date by cancelled_at day range (Manila)
-     - reservation = 'no' or 'yes'
   ------------------------------ */
   const fetchCancelledSessions = async (dateStr: string, reservation: "no" | "yes"): Promise<void> => {
     setLoading(true);
+    const mapped = await fetchCancelledSessionsReturn(dateStr, reservation);
+    setRowsSessions(mapped);
+    setLoading(false);
+  };
 
+  const fetchCancelledSessionsReturn = async (dateStr: string, reservation: "no" | "yes"): Promise<CancelledSession[]> => {
     const { startIso, endIso } = manilaDayRange(dateStr);
 
     const { data, error } = await supabase
@@ -550,9 +570,7 @@ const Customer_Cancelled: React.FC = () => {
     if (error) {
       // eslint-disable-next-line no-console
       console.error("FETCH CANCELLED SESSIONS ERROR:", error);
-      setRowsSessions([]);
-      setLoading(false);
-      return;
+      return [];
     }
 
     const mapped: CancelledSession[] = (data ?? []).map((r) => {
@@ -596,16 +614,533 @@ const Customer_Cancelled: React.FC = () => {
       };
     });
 
-    setRowsSessions(mapped);
-    setLoading(false);
+    return mapped;
   };
 
+  /* =========================
+     ADMIN: DELETE
+  ========================= */
+  const deleteByDateAll = async (): Promise<void> => {
+    try {
+      setBusyDelete(true);
+      const { startIso, endIso } = manilaDayRange(selectedDate);
+
+      const { error: e1 } = await supabase
+        .from("customer_session_add_ons_cancelled")
+        .delete()
+        .gte("cancelled_at", startIso)
+        .lt("cancelled_at", endIso);
+
+      if (e1) {
+        alert(`Delete Add-Ons by date failed: ${e1.message}`);
+        return;
+      }
+
+      const { error: e2 } = await supabase
+        .from("customer_sessions_cancelled")
+        .delete()
+        .gte("cancelled_at", startIso)
+        .lt("cancelled_at", endIso);
+
+      if (e2) {
+        alert(`Delete Sessions by date failed: ${e2.message}`);
+        return;
+      }
+
+      setConfirmDeleteDate(false);
+      await refresh();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(err);
+      alert("Delete by date failed.");
+    } finally {
+      setBusyDelete(false);
+    }
+  };
+
+  const deleteAddOnGroup = async (g: CancelGroupAddOn): Promise<void> => {
+    try {
+      setBusyDelete(true);
+      const ids = g.items.map((x) => x.id).filter((x) => String(x || "").length > 0);
+      if (ids.length === 0) return;
+
+      const { error } = await supabase.from("customer_session_add_ons_cancelled").delete().in("id", ids);
+      if (error) {
+        alert(`Delete group failed: ${error.message}`);
+        return;
+      }
+
+      setConfirmDeleteAddOnGroup(null);
+      setSelectedGroupAddOns(null);
+      await fetchCancelledAddOns(selectedDate);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(err);
+      alert("Delete group failed.");
+    } finally {
+      setBusyDelete(false);
+    }
+  };
+
+  const deleteSessionRow = async (s: CancelledSession): Promise<void> => {
+    try {
+      setBusyDelete(true);
+
+      const { error } = await supabase.from("customer_sessions_cancelled").delete().eq("id", s.id);
+      if (error) {
+        alert(`Delete row failed: ${error.message}`);
+        return;
+      }
+
+      setConfirmDeleteSession(null);
+      setSelectedSession(null);
+
+      // refresh current tab only
+      await fetchCancelledSessions(selectedDate, s.reservation === "yes" ? "yes" : "no");
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(err);
+      alert("Delete row failed.");
+    } finally {
+      setBusyDelete(false);
+    }
+  };
+
+  /* =========================
+     ADMIN: EXCEL (ONE FILE)
+  ========================= */
+  const exportExcelAll = async (): Promise<void> => {
+    try {
+      setBusyExport(true);
+
+      // Pull all sections fresh
+      const { startIso, endIso } = manilaDayRange(selectedDate);
+
+      // Add-ons
+      const { data: addData, error: addErr } = await supabase
+        .from("customer_session_add_ons_cancelled")
+        .select(
+          `
+          id,
+          cancelled_at,
+          original_id,
+          created_at,
+          add_on_id,
+          quantity,
+          price,
+          full_name,
+          seat_number,
+          gcash_amount,
+          cash_amount,
+          is_paid,
+          paid_at,
+          description,
+          add_ons (
+            id,
+            name,
+            category,
+            size
+          )
+        `
+        )
+        .gte("cancelled_at", startIso)
+        .lt("cancelled_at", endIso)
+        .order("cancelled_at", { ascending: true })
+        .returns<CancelRowDB_AddOns[]>();
+
+      if (addErr) throw addErr;
+
+      const addMapped: CancelItemAddOn[] = (addData ?? []).map((r) => {
+        const a = r.add_ons;
+        const qty = Math.max(0, Math.floor(Number(r.quantity) || 0));
+        const price = round2(Math.max(0, toNumber(r.price)));
+        const total = round2(qty * price);
+
+        return {
+          id: r.id,
+          original_id: r.original_id,
+          add_on_id: r.add_on_id,
+
+          item_name: a?.name ?? "-",
+          category: a?.category ?? "-",
+          size: a?.size ?? null,
+
+          quantity: qty,
+          price,
+          total,
+
+          cancelled_at: r.cancelled_at,
+          created_at: r.created_at ?? null,
+
+          full_name: r.full_name,
+          seat_number: r.seat_number,
+
+          gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
+          cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
+          is_paid: toBool(r.is_paid),
+          paid_at: r.paid_at ?? null,
+
+          description: String(r.description ?? "").trim(),
+        };
+      });
+
+      const addGroups = groupAddOnsFromRows(addMapped);
+
+      // Walk-in + Reservation
+      const walkin = await fetchCancelledSessionsReturn(selectedDate, "no");
+      const reservation = await fetchCancelledSessionsReturn(selectedDate, "yes");
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "Me Tyme Lounge";
+      wb.created = new Date();
+
+      const ws = wb.addWorksheet("Cancelled Records", {
+        pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+        properties: { defaultRowHeight: 18 },
+      });
+
+      ws.columns = [
+        { key: "c1", width: 22 },
+        { key: "c2", width: 18 },
+        { key: "c3", width: 18 },
+        { key: "c4", width: 26 },
+        { key: "c5", width: 14 },
+        { key: "c6", width: 14 },
+        { key: "c7", width: 18 },
+        { key: "c8", width: 14 },
+        { key: "c9", width: 14 },
+        { key: "c10", width: 14 },
+        { key: "c11", width: 16 },
+        { key: "c12", width: 34 },
+      ];
+
+      const borderAll: Partial<ExcelJS.Borders> = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+
+      const fillGray = (argb: string): ExcelJS.Fill => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
+
+      const setBorderRow = (rowNo: number, from: number, to: number): void => {
+        for (let c = from; c <= to; c++) ws.getCell(rowNo, c).border = borderAll;
+      };
+
+      const titleRow = (rowNo: number, text: string): void => {
+        ws.mergeCells(rowNo, 1, rowNo, 12);
+        const cell = ws.getCell(rowNo, 1);
+        cell.value = text;
+        cell.font = { bold: true, size: 14 };
+        cell.alignment = { vertical: "middle", horizontal: "left" };
+        cell.fill = fillGray("FFE5E7EB");
+        setBorderRow(rowNo, 1, 12);
+        ws.getRow(rowNo).height = 24;
+      };
+
+      const headerRow = (rowNo: number, values: string[]): void => {
+        ws.getRow(rowNo).values = ["", ...values];
+        const row = ws.getRow(rowNo);
+        row.font = { bold: true };
+        row.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        row.height = 22;
+        for (let c = 1; c <= 12; c++) {
+          const cell = ws.getCell(rowNo, c);
+          cell.fill = fillGray("FFF3F4F6");
+          cell.border = borderAll;
+        }
+      };
+
+      const setText = (rowNo: number, col: number, v: string): void => {
+        const cell = ws.getCell(rowNo, col);
+        cell.value = v;
+        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        cell.border = borderAll;
+      };
+
+      const setCenter = (rowNo: number, col: number, v: string): void => {
+        const cell = ws.getCell(rowNo, col);
+        cell.value = v;
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        cell.border = borderAll;
+      };
+
+      const setMoney = (rowNo: number, col: number, v: number): void => {
+        const cell = ws.getCell(rowNo, col);
+        cell.value = round2(v);
+        cell.numFmt = '₱#,##0.00';
+        cell.alignment = { vertical: "middle", horizontal: "right" };
+        cell.border = borderAll;
+      };
+
+      // Optional logo
+      try {
+        const res = await fetch(logo);
+        const buf = await res.arrayBuffer();
+        const imgId = wb.addImage({ buffer: buf, extension: "png" });
+        ws.addImage(imgId, { tl: { col: 0, row: 0 }, ext: { width: 90, height: 90 } });
+      } catch {
+        // ignore
+      }
+
+      ws.mergeCells(1, 1, 1, 12);
+      ws.getCell(1, 1).value = "ME TYME LOUNGE — CANCELLED RECORDS";
+      ws.getCell(1, 1).font = { bold: true, size: 16 };
+      ws.getCell(1, 1).alignment = { vertical: "middle", horizontal: "center" };
+
+      ws.mergeCells(2, 1, 2, 12);
+      ws.getCell(2, 1).value = `Date (Cancelled At / Manila): ${selectedDate}`;
+      ws.getCell(2, 1).font = { bold: true };
+      ws.getCell(2, 1).alignment = { vertical: "middle", horizontal: "center" };
+
+      ws.mergeCells(3, 1, 3, 12);
+      ws.getCell(3, 1).value = `Generated: ${new Date().toLocaleString("en-PH")}`;
+      ws.getCell(3, 1).alignment = { vertical: "middle", horizontal: "center" };
+
+      let r = 5;
+
+      // 1) ADD-ONS
+      titleRow(r, "1) CANCELLED ADD-ONS (Grouped)");
+      r++;
+
+      headerRow(r, ["Cancelled At", "Full Name", "Seat", "Item", "Category", "Size", "Qty", "Price", "Total", "Paid", "Description", "Group Key"]);
+      r++;
+
+      let addTotal = 0;
+
+      for (const g of addGroups) {
+        for (const it of g.items) {
+          addTotal = round2(addTotal + it.total);
+
+          setText(r, 1, formatDateTime(g.cancelled_at));
+          setText(r, 2, g.full_name || "-");
+          setText(r, 3, g.seat_number || "-");
+          setText(r, 4, it.item_name || "-");
+          setText(r, 5, it.category || "-");
+          setText(r, 6, sizeText(it.size));
+          setCenter(r, 7, String(it.quantity));
+          setMoney(r, 8, it.price);
+          setMoney(r, 9, it.total);
+          setCenter(r, 10, g.is_paid ? "PAID" : "UNPAID");
+          setText(r, 11, g.description || "-");
+          setText(r, 12, g.key);
+          r++;
+        }
+      }
+
+      ws.mergeCells(r, 1, r, 8);
+      ws.getCell(r, 1).value = "ADD-ONS TOTAL";
+      ws.getCell(r, 1).font = { bold: true };
+      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
+      setBorderRow(r, 1, 8);
+      setMoney(r, 9, addTotal);
+      setBorderRow(r, 10, 12);
+      ws.getCell(r, 10).value = "";
+      ws.getCell(r, 11).value = "";
+      ws.getCell(r, 12).value = "";
+      r += 2;
+
+      // 2) WALK-IN
+      titleRow(r, "2) CANCELLED WALK-IN");
+      r++;
+
+      headerRow(r, ["Cancelled At", "Date", "Full Name", "Phone", "Seat", "Type", "Hours", "Time In", "Time Out", "Amount (After Discount)", "Cancel Reason", "Paid"]);
+      r++;
+
+      let wTotal = 0;
+
+      for (const s of walkin) {
+        const base = round2(Math.max(0, s.total_amount));
+        const disc = applyDiscount(base, s.discount_kind, s.discount_value);
+        wTotal = round2(wTotal + disc.discountedCost);
+
+        setText(r, 1, formatDateTime(s.cancelled_at));
+        setText(r, 2, s.date);
+        setText(r, 3, s.full_name);
+        setText(r, 4, String(s.phone_number ?? "").trim() || "N/A");
+        setText(r, 5, s.seat_number);
+        setText(r, 6, s.customer_type);
+        setCenter(r, 7, s.hour_avail);
+        setText(r, 8, formatTimeText(s.time_started));
+        setText(r, 9, formatTimeText(s.time_ended));
+        setMoney(r, 10, disc.discountedCost);
+        setText(r, 11, s.cancel_reason || "-");
+        setCenter(r, 12, s.is_paid ? "PAID" : "UNPAID");
+        r++;
+      }
+
+      ws.mergeCells(r, 1, r, 9);
+      ws.getCell(r, 1).value = "WALK-IN TOTAL (After Discount)";
+      ws.getCell(r, 1).font = { bold: true };
+      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
+      setBorderRow(r, 1, 9);
+      setMoney(r, 10, wTotal);
+      setBorderRow(r, 11, 12);
+      ws.getCell(r, 11).value = "";
+      ws.getCell(r, 12).value = "";
+      r += 2;
+
+      // 3) RESERVATION
+      titleRow(r, "3) CANCELLED RESERVATION");
+      r++;
+
+      headerRow(r, ["Cancelled At", "Date", "Reservation Date", "Full Name", "Phone", "Seat", "Type", "Hours", "Time In", "Time Out", "Amount (After Discount)", "Cancel Reason"]);
+      r++;
+
+      let resTotal = 0;
+
+      for (const s of reservation) {
+        const base = round2(Math.max(0, s.total_amount));
+        const disc = applyDiscount(base, s.discount_kind, s.discount_value);
+        resTotal = round2(resTotal + disc.discountedCost);
+
+        setText(r, 1, formatDateTime(s.cancelled_at));
+        setText(r, 2, s.date);
+        setText(r, 3, s.reservation_date ?? "-");
+        setText(r, 4, s.full_name);
+        setText(r, 5, String(s.phone_number ?? "").trim() || "N/A");
+        setText(r, 6, s.seat_number);
+        setText(r, 7, s.customer_type);
+        setCenter(r, 8, s.hour_avail);
+        setText(r, 9, formatTimeText(s.time_started));
+        setText(r, 10, formatTimeText(s.time_ended));
+        setMoney(r, 11, disc.discountedCost);
+        setText(r, 12, s.cancel_reason || "-");
+        r++;
+      }
+
+      ws.mergeCells(r, 1, r, 10);
+      ws.getCell(r, 1).value = "RESERVATION TOTAL (After Discount)";
+      ws.getCell(r, 1).font = { bold: true };
+      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
+      setBorderRow(r, 1, 10);
+      setMoney(r, 11, resTotal);
+      setBorderRow(r, 12, 12);
+      ws.getCell(r, 12).value = "";
+      r += 2;
+
+      titleRow(r, "SUMMARY");
+      r++;
+
+      headerRow(r, ["Section", "Count", "Total", "", "", "", "", "", "", "", "", ""]);
+      r++;
+
+      const addCount = addGroups.reduce((acc, g) => acc + g.items.length, 0);
+
+      setText(r, 1, "Add-Ons (items)");
+      setCenter(r, 2, String(addCount));
+      setMoney(r, 3, addTotal);
+      setBorderRow(r, 4, 12);
+      r++;
+
+      setText(r, 1, "Walk-in");
+      setCenter(r, 2, String(walkin.length));
+      setMoney(r, 3, wTotal);
+      setBorderRow(r, 4, 12);
+      r++;
+
+      setText(r, 1, "Reservation");
+      setCenter(r, 2, String(reservation.length));
+      setMoney(r, 3, resTotal);
+      setBorderRow(r, 4, 12);
+      r++;
+
+      ws.mergeCells(r, 1, r, 2);
+      ws.getCell(r, 1).value = "GRAND TOTAL";
+      ws.getCell(r, 1).font = { bold: true };
+      ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
+      setBorderRow(r, 1, 2);
+      setMoney(r, 3, round2(addTotal + wTotal + resTotal));
+      setBorderRow(r, 4, 12);
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      saveAs(blob, `Cancelled_Records_${selectedDate}.xlsx`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(err);
+      alert("Export failed.");
+    } finally {
+      setBusyExport(false);
+    }
+  };
+
+  /* -----------------------------
+     UI
+  ------------------------------ */
   const tabTitle =
     tab === "addons" ? "Cancelled Add-Ons" : tab === "walkin" ? "Cancelled Walk-in" : "Cancelled Reservation";
 
   return (
     <IonPage>
       <IonContent className="cancelled-content">
+        {/* ✅ CONFIRM DELETE BY DATE */}
+        <IonAlert
+          isOpen={confirmDeleteDate}
+          onDidDismiss={() => setConfirmDeleteDate(false)}
+          header="Delete Cancelled Records"
+          message={`Delete ALL cancelled records for ${selectedDate}? (Add-Ons + Walk-in + Reservation)`}
+          buttons={[
+            { text: "Cancel", role: "cancel" },
+            {
+              text: busyDelete ? "Deleting..." : "Delete",
+              role: "destructive",
+              handler: () => {
+                void deleteByDateAll();
+              },
+            },
+          ]}
+        />
+
+        {/* ✅ CONFIRM DELETE GROUP */}
+        <IonAlert
+          isOpen={Boolean(confirmDeleteAddOnGroup)}
+          onDidDismiss={() => setConfirmDeleteAddOnGroup(null)}
+          header="Delete Cancelled Add-Ons"
+          message={
+            confirmDeleteAddOnGroup
+              ? `Delete this cancelled add-ons group for ${confirmDeleteAddOnGroup.full_name} (${confirmDeleteAddOnGroup.items.length} item(s))?`
+              : ""
+          }
+          buttons={[
+            { text: "Cancel", role: "cancel" },
+            {
+              text: busyDelete ? "Deleting..." : "Delete",
+              role: "destructive",
+              handler: () => {
+                if (confirmDeleteAddOnGroup) void deleteAddOnGroup(confirmDeleteAddOnGroup);
+              },
+            },
+          ]}
+        />
+
+        {/* ✅ CONFIRM DELETE SESSION */}
+        <IonAlert
+          isOpen={Boolean(confirmDeleteSession)}
+          onDidDismiss={() => setConfirmDeleteSession(null)}
+          header="Delete Cancelled Session"
+          message={
+            confirmDeleteSession
+              ? `Delete this cancelled ${confirmDeleteSession.reservation === "yes" ? "RESERVATION" : "WALK-IN"} record for ${
+                  confirmDeleteSession.full_name
+                }?`
+              : ""
+          }
+          buttons={[
+            { text: "Cancel", role: "cancel" },
+            {
+              text: busyDelete ? "Deleting..." : "Delete",
+              role: "destructive",
+              handler: () => {
+                if (confirmDeleteSession) void deleteSessionRow(confirmDeleteSession);
+              },
+            },
+          ]}
+        />
+
         <div className="customer-lists-container">
           {/* TOP BAR */}
           <div className="customer-topbar">
@@ -616,7 +1151,7 @@ const Customer_Cancelled: React.FC = () => {
                 {tab === "addons" ? `(${groupedAddOns.length})` : `(${rowsSessions.length})`}
               </div>
               <div className="customer-subtext" style={{ fontSize: 12, opacity: 0.75 }}>
-                Read-only: cancelled records cannot be edited.
+                Read-only: cancelled records cannot be edited. (Admin can delete/export)
               </div>
             </div>
 
@@ -626,7 +1161,11 @@ const Customer_Cancelled: React.FC = () => {
                 <div className="customer-searchbar-inner" style={{ gap: 8 }}>
                   <button
                     className={`receipt-btn ${tab === "addons" ? "pay-badge pay-badge--paid" : ""}`}
-                    onClick={() => setTab("addons")}
+                    onClick={() => {
+                      setSelectedGroupAddOns(null);
+                      setSelectedSession(null);
+                      setTab("addons");
+                    }}
                     style={{ whiteSpace: "nowrap" }}
                     type="button"
                   >
@@ -635,7 +1174,11 @@ const Customer_Cancelled: React.FC = () => {
 
                   <button
                     className={`receipt-btn ${tab === "walkin" ? "pay-badge pay-badge--paid" : ""}`}
-                    onClick={() => setTab("walkin")}
+                    onClick={() => {
+                      setSelectedGroupAddOns(null);
+                      setSelectedSession(null);
+                      setTab("walkin");
+                    }}
                     style={{ whiteSpace: "nowrap" }}
                     type="button"
                   >
@@ -644,7 +1187,11 @@ const Customer_Cancelled: React.FC = () => {
 
                   <button
                     className={`receipt-btn ${tab === "reservation" ? "pay-badge pay-badge--paid" : ""}`}
-                    onClick={() => setTab("reservation")}
+                    onClick={() => {
+                      setSelectedGroupAddOns(null);
+                      setSelectedSession(null);
+                      setTab("reservation");
+                    }}
                     style={{ whiteSpace: "nowrap" }}
                     type="button"
                   >
@@ -667,11 +1214,43 @@ const Customer_Cancelled: React.FC = () => {
                 </span>
               </label>
 
-              <button className="receipt-btn" onClick={() => void refresh()} style={{ whiteSpace: "nowrap" }} type="button">
+              <button
+                className="receipt-btn"
+                onClick={() => void refresh()}
+                style={{ whiteSpace: "nowrap" }}
+                type="button"
+                disabled={loading || busyDelete}
+              >
                 Refresh
+              </button>
+
+              <button
+                className="receipt-btn"
+                onClick={() => void exportExcelAll()}
+                style={{ whiteSpace: "nowrap" }}
+                type="button"
+                disabled={busyExport || busyDelete}
+              >
+                {busyExport ? "Exporting..." : "Export Excel (ALL)"}
+              </button>
+
+              <button
+                className="receipt-btn admin-danger"
+                onClick={() => setConfirmDeleteDate(true)}
+                style={{ whiteSpace: "nowrap" }}
+                type="button"
+                disabled={busyDelete || busyExport}
+              >
+                {busyDelete ? "Deleting..." : "Delete by Date"}
               </button>
             </div>
           </div>
+
+          {loading && (
+            <div className="customer-note" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <IonSpinner name="dots" /> Loading...
+            </div>
+          )}
 
           {/* =========================
               TAB: ADD-ONS
@@ -751,6 +1330,15 @@ const Customer_Cancelled: React.FC = () => {
                               <button className="receipt-btn" onClick={() => setSelectedGroupAddOns(g)} type="button">
                                 View Receipt
                               </button>
+
+                              <button
+                                className="receipt-btn admin-danger"
+                                onClick={() => setConfirmDeleteAddOnGroup(g)}
+                                type="button"
+                                disabled={busyDelete}
+                              >
+                                Delete
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -828,9 +1416,19 @@ const Customer_Cancelled: React.FC = () => {
                       <strong>Me Tyme Lounge</strong>
                     </p>
 
-                    <button className="close-btn" onClick={() => setSelectedGroupAddOns(null)} type="button">
-                      Close
-                    </button>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button className="close-btn" onClick={() => setSelectedGroupAddOns(null)} type="button">
+                        Close
+                      </button>
+                      <button
+                        className="receipt-btn admin-danger"
+                        onClick={() => setConfirmDeleteAddOnGroup(selectedGroupAddOns)}
+                        type="button"
+                        disabled={busyDelete}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -903,6 +1501,16 @@ const Customer_Cancelled: React.FC = () => {
                                 <button className="receipt-btn" onClick={() => setSelectedSession(s)} type="button">
                                   View Receipt
                                 </button>
+
+                                <button
+                                  className="receipt-btn admin-danger"
+                                  onClick={() => setConfirmDeleteSession(s)}
+                                  type="button"
+                                  disabled={busyDelete}
+                                >
+                                  Delete
+                                </button>
+
                                 <div style={{ fontSize: 12, opacity: 0.8 }}>
                                   After DP: <strong>{moneyText(afterDp)}</strong>
                                 </div>
@@ -1057,9 +1665,19 @@ const Customer_Cancelled: React.FC = () => {
                       <strong>Me Tyme Lounge</strong>
                     </p>
 
-                    <button className="close-btn" onClick={() => setSelectedSession(null)} type="button">
-                      Close
-                    </button>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button className="close-btn" onClick={() => setSelectedSession(null)} type="button">
+                        Close
+                      </button>
+                      <button
+                        className="receipt-btn admin-danger"
+                        onClick={() => setConfirmDeleteSession(selectedSession)}
+                        type="button"
+                        disabled={busyDelete}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1073,4 +1691,4 @@ const Customer_Cancelled: React.FC = () => {
   );
 };
 
-export default Customer_Cancelled;
+export default Admin_Customer_Cancelled;

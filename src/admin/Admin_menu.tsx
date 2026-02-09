@@ -3,6 +3,7 @@
 // ✅ STATIC flowers
 // ✅ Keeps your existing pages/files/menu items
 // ✅ VERCEL FIX: boot + resize/reflow so dashboard shows immediately after login
+// ✅ NEW: Admin Cancelled Records menu item + page
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -36,6 +37,7 @@ import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses&Expired";
 import Admin_Customer_Add_ons from "./Admin_Customer_Add_ons";
 import Admin_Sales_Report from "./Admin_Sales_Report";
 import Admin_Restock_Record from "./Admin_Restock_Record";
+import Admin_Customer_Cancelled from "./Admin_Customer_Cancelled"; // ✅ NEW
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -50,6 +52,7 @@ import expenseIcon from "../assets/expense.png";
 import hamburgerIcon from "../assets/hamburger.png";
 import salesIcon from "../assets/sales.png";
 import restockIcon from "../assets/restock.png";
+import cancelledIcon from "../assets/cancelled.png"; // ✅ NEW
 import studyHubLogo from "../assets/study_hub.png";
 import flowerImg from "../assets/flower.png";
 
@@ -63,6 +66,7 @@ type MenuKey =
   | "customer_add_ons"
   | "customer_list"
   | "customer_reservation"
+  | "customer_cancelled" // ✅ NEW
   | "seat_table"
   | "packages"
   | "discount_records";
@@ -110,6 +114,7 @@ const Admin_menu: React.FC = () => {
       { name: "Customer Add-Ons", key: "customer_add_ons", icon: hamburgerIcon },
       { name: "Customer List", key: "customer_list", icon: customerListIcon },
       { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
+      { name: "Cancelled Records", key: "customer_cancelled", icon: cancelledIcon }, // ✅ NEW
       { name: "Seat Table", key: "seat_table", icon: seatIcon },
       { name: "Promotions", key: "packages", icon: promotionIcon },
       { name: "Discount Records", key: "discount_records", icon: discountIcon },
@@ -150,6 +155,8 @@ const Admin_menu: React.FC = () => {
         return <Admin_customer_list />;
       case "customer_reservation":
         return <Admin_customer_reservation />;
+      case "customer_cancelled":
+        return <Admin_Customer_Cancelled />; // ✅ NEW
       case "seat_table":
         return <Admin_Seat_Table />;
       case "packages":
