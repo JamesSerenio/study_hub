@@ -12,6 +12,7 @@
 // ✅ Phone # column beside Full Name
 // ✅ View to Customer toggle now supports CROSS-DEVICE via Supabase table: customer_view_state (SINGLE ROW id=1)
 // ✅ Search bar (Full Name only)
+// ✅ NEW: Cancel button (DELETE record) in table + receipt
 // ✅ strict TS (NO "any")
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -186,6 +187,9 @@ const Customer_Lists: React.FC = () => {
   // ✅ customer view status (from DB)
   const [activeView, setActiveView] = useState<CustomerViewRow | null>(null);
   const [viewBusy, setViewBusy] = useState<boolean>(false);
+
+  // ✅ Cancel busy id
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   // Date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
@@ -663,6 +667,51 @@ const Customer_Lists: React.FC = () => {
   /* =========================
      STAFF BUTTON ACTIONS
   ========================= */
+
+  // ❌ CANCEL (DELETE) — used in table + receipt
+  const cancelSession = async (s: CustomerSession): Promise<void> => {
+    const ok = window.confirm(
+      `Cancel this session?\n\nCustomer: ${s.full_name}\nDate: ${s.date}\n\nThis will PERMANENTLY delete this record.`
+    );
+    if (!ok) return;
+
+    try {
+      setCancellingId(s.id);
+
+      // If this session is currently being viewed to customer, turn it OFF first
+      if (isCustomerViewOnForSession(activeView, s.id)) {
+        try {
+          setViewBusy(true);
+          await setCustomerViewState(false, null);
+          await readActiveCustomerView();
+        } catch {
+          // ignore
+        } finally {
+          setViewBusy(false);
+        }
+      }
+
+      const { error } = await supabase.from("customer_sessions").delete().eq("id", s.id);
+
+      if (error) {
+        alert(`Cancel failed: ${error.message}`);
+        return;
+      }
+
+      setSessions((prev) => prev.filter((x) => x.id !== s.id));
+
+      if (selectedSession?.id === s.id) {
+        setSelectedSession(null);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Cancel failed.");
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const toggleCustomerViewForSelected = async (): Promise<void> => {
     if (!selectedSession) return;
 
@@ -720,9 +769,7 @@ const Customer_Lists: React.FC = () => {
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
                 Customer View:{" "}
                 <strong>
-                  {activeView?.enabled
-                    ? `ON (${String(activeView.session_id ?? "").slice(0, 8)}...)`
-                    : "OFF"}
+                  {activeView?.enabled ? `ON (${String(activeView.session_id ?? "").slice(0, 8)}...)` : "OFF"}
                 </strong>
               </div>
             </div>
@@ -811,7 +858,6 @@ const Customer_Lists: React.FC = () => {
                     const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid));
 
                     const dp = getDownPayment(session);
-
                     const viewOn = isCustomerViewOnForSession(activeView, session.id);
 
                     return (
@@ -859,9 +905,7 @@ const Customer_Lists: React.FC = () => {
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              Remaining ₱{remainingPay.toFixed(2)}
-                            </span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remainingPay.toFixed(2)}</span>
 
                             <button
                               className="receipt-btn"
@@ -907,6 +951,16 @@ const Customer_Lists: React.FC = () => {
 
                             <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
                               View Receipt
+                            </button>
+
+                            {/* ❌ CANCEL */}
+                            <button
+                              className="receipt-btn admin-danger"
+                              onClick={() => void cancelSession(session)}
+                              disabled={cancellingId === session.id}
+                              title="Cancel = delete this record"
+                            >
+                              {cancellingId === session.id ? "Cancelling..." : "Cancel"}
                             </button>
 
                             {/* ✅ quick indicator */}
@@ -1315,11 +1369,19 @@ const Customer_Lists: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
+                <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button className="receipt-btn" onClick={() => void toggleCustomerViewForSelected()} disabled={viewBusy}>
-                    {isCustomerViewOnForSession(activeView, selectedSession.id)
-                      ? "Stop View to Customer"
-                      : "View to Customer"}
+                    {isCustomerViewOnForSession(activeView, selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
+                  </button>
+
+                  {/* ❌ CANCEL IN RECEIPT */}
+                  <button
+                    className="receipt-btn admin-danger"
+                    onClick={() => void cancelSession(selectedSession)}
+                    disabled={cancellingId === selectedSession.id || viewBusy}
+                    title="Cancel = delete this record"
+                  >
+                    {cancellingId === selectedSession.id ? "Cancelling..." : "Cancel"}
                   </button>
 
                   <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy}>
