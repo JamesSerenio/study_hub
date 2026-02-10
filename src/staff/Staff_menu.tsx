@@ -23,6 +23,7 @@ import { supabase } from "../utils/supabaseClient";
 import type {
   RealtimePostgresInsertPayload,
   RealtimePostgresUpdatePayload,
+  RealtimePostgresDeletePayload,
 } from "@supabase/supabase-js";
 
 /* pages */
@@ -34,8 +35,6 @@ import Product_Item_Lists from "./Product_Item_lists";
 import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
-
-/* ✅ cancelled page */
 import Customer_Cancelled from "./Customer_Cancelled";
 
 /* assets */
@@ -183,22 +182,20 @@ const Staff_menu: React.FC = () => {
     refreshTimerRef.current = null;
   };
 
-  const scheduleUnreadRefresh = (): void => {
+  const scheduleRecount = (delayMs = 220): void => {
     if (suspendRefreshRef.current) return;
-
     cancelScheduledRefresh();
     refreshTimerRef.current = window.setTimeout(() => {
       if (suspendRefreshRef.current) return;
       void fetchUnreadCount();
       if (notifOpenRef.current) void fetchNotifications();
-    }, 150);
+    }, delayMs);
   };
 
   /* =========================
       ✅ AUTO-READ on open
   ========================= */
   const markAllAsReadSilent = async (): Promise<void> => {
-    // prevent realtime recount while we bulk update
     cancelScheduledRefresh();
     suspendRefreshRef.current = true;
 
@@ -207,11 +204,11 @@ const Staff_menu: React.FC = () => {
 
     const nowIso = new Date().toISOString();
 
-    // update all unread -> read
+    // ✅ update only unread
     const { error } = await supabase
       .from(NOTIF_TABLE)
       .update({ is_read: true, read_at: nowIso })
-      .neq("is_read", true);
+      .eq("is_read", false);
 
     if (error) {
       // eslint-disable-next-line no-console
@@ -224,10 +221,8 @@ const Staff_menu: React.FC = () => {
     // update UI list too
     setNotifItems((prev) => prev.map((n) => ({ ...n, is_read: true, read_at: nowIso })));
 
-    // wait to ensure DB committed, then recount (0 unless new inserts happened)
-    await sleep(220);
+    await sleep(180);
     await fetchUnreadCount();
-
     suspendRefreshRef.current = false;
   };
 
@@ -245,13 +240,9 @@ const Staff_menu: React.FC = () => {
     computePopoverPosition();
     setNotifOpen(true);
 
-    // load list first (so you see items)
     await fetchNotifications();
-
-    // ✅ AUTO READ ON OPEN (badge should disappear)
     await markAllAsReadSilent();
 
-    // optional: keep list fresh after marking read
     if (notifOpenRef.current) await fetchNotifications();
   };
 
@@ -285,7 +276,7 @@ const Staff_menu: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ✅ PRODUCTION REALTIME SUBSCRIBE ONCE (Vercel-safe) */
+  /* ✅ PRODUCTION REALTIME SUBSCRIBE ONCE (INSTANT BADGE) */
   useEffect(() => {
     void fetchUnreadCount();
     void fetchNotifications();
@@ -298,17 +289,23 @@ const Staff_menu: React.FC = () => {
         (payload: RealtimePostgresInsertPayload<AddOnNotifRow>) => {
           const newRow = payload.new;
 
+          // ✅ prepend row
           setNotifItems((prev) => {
             if (prev.some((x) => x.id === newRow.id)) return prev;
             return [newRow, ...prev].slice(0, 30);
           });
 
-          // if notif panel is OPEN, treat new inserts as "seen" immediately
+          // ✅ INSTANT badge update
           if (notifOpenRef.current) {
+            // open = considered seen
             void markAllAsReadSilent();
           } else {
-            scheduleUnreadRefresh();
+            // closed = count increases immediately if unread
+            if (!newRow.is_read) setUnreadCount((c) => c + 1);
           }
+
+          // safety recount (optional)
+          scheduleRecount(600);
         }
       )
       .on(
@@ -316,6 +313,7 @@ const Staff_menu: React.FC = () => {
         { event: "UPDATE", schema: "public", table: NOTIF_TABLE },
         (payload: RealtimePostgresUpdatePayload<AddOnNotifRow>) => {
           const newRow = payload.new;
+          const oldRow = payload.old;
 
           setNotifItems((prev) => {
             const idx = prev.findIndex((x) => x.id === newRow.id);
@@ -325,17 +323,35 @@ const Staff_menu: React.FC = () => {
             return copy;
           });
 
-          scheduleUnreadRefresh();
+          // ✅ adjust badge when is_read flips
+          if (!notifOpenRef.current) {
+            const wasUnread = oldRow ? !(oldRow as Partial<AddOnNotifRow>).is_read : null;
+            const isUnreadNow = !newRow.is_read;
+
+            if (wasUnread === true && isUnreadNow === false) {
+              setUnreadCount((c) => Math.max(0, c - 1));
+            } else if (wasUnread === false && isUnreadNow === true) {
+              setUnreadCount((c) => c + 1);
+            } else {
+              // fallback recount for weird cases
+              scheduleRecount(350);
+            }
+          }
         }
       )
       .on(
         "postgres_changes",
         { event: "DELETE", schema: "public", table: NOTIF_TABLE },
-        () => {
-          scheduleUnreadRefresh();
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        (_payload: RealtimePostgresDeletePayload<AddOnNotifRow>) => {
+          // safest: recount
+          scheduleRecount(250);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // eslint-disable-next-line no-console
+        console.log("NOTIF CHANNEL:", status);
+      });
 
     const onFocusOrWake = (): void => {
       void fetchUnreadCount();
