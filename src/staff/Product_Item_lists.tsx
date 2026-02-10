@@ -659,7 +659,7 @@ const Product_Item_Lists: React.FC = () => {
                     onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setExpenseType(e.detail.value as ExpenseType)}
                   >
                     <IonSelectOption value="expired">Expired / Damaged</IonSelectOption>
-                    <IonSelectOption value="staff_consumed">Staff Consumed</IonSelectOption>
+                    <IonSelectOption value="staff_consumed">Invetory Loss</IonSelectOption>
                   </IonSelect>
                 </IonItem>
 
