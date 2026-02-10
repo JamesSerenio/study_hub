@@ -41,7 +41,6 @@ setupIonicReact();
 /* 🔔 ALERT TIMES */
 const ALERT_MINUTES: number[] = [5, 3, 1];
 
-/** 4:59 => 5 minutes left */
 const minutesLeftCeil = (endIso: string): number => {
   const end = new Date(endIso).getTime();
   const now = Date.now();
@@ -69,13 +68,10 @@ type CustomerSessionRow = {
   full_name: string;
   seat_number: string | string[] | null;
 
-  // ✅ YOUR DB COLUMN
+  // ✅ your real column
   time_ended: string | null;
 
-  // ✅ yes/no
   reservation: string; // "yes" | "no"
-
-  // ✅ promo link
   promo_booking_id: string | null;
 };
 
@@ -83,35 +79,33 @@ type PromoBookingRow = {
   id: string;
   created_at: string;
   full_name: string;
-
   area: "common_area" | "conference_room";
   seat_number: string | null;
-
   start_at: string;
   end_at: string;
-
   status: string;
 };
 
+type AlertKind = "walkin" | "reservation" | "promo";
+
 type AlertItem = {
+  key: string; // unique: kind-id-minute
+  kind: AlertKind;
   id: string;
-  kind: "walkin" | "reservation" | "promo";
   full_name: string;
   seat_number: string;
+  minutes_left: number;
   end_iso: string;
 };
 
-const kindLabel = (k: AlertItem["kind"]): string => {
-  if (k === "walkin") return "WALK-IN";
-  if (k === "reservation") return "RESERVATION";
-  return "PROMO / MEMBERSHIP";
-};
 
-const getRoleLocal = (): string => (localStorage.getItem("role") || "").toLowerCase();
+const getRoleLocal = (): string =>
+  (localStorage.getItem("role") || "").toLowerCase();
 
 const App: React.FC = () => {
+  // ✅ multi-alert list
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [showAlert, setShowAlert] = useState<boolean>(false);
-  const [alertMessage, setAlertMessage] = useState<string>("");
 
   // ✅ role state (starts from local, then verified by Supabase)
   const [role, setRole] = useState<string>(getRoleLocal());
@@ -126,13 +120,13 @@ const App: React.FC = () => {
 
   /* =========================
      ✅ ALWAYS SYNC ROLE FROM SUPABASE
+     (important sa Vercel)
   ========================= */
   const syncRoleFromSupabase = async (): Promise<void> => {
     const { data: sess } = await supabase.auth.getSession();
     const user = sess.session?.user;
 
     if (!user?.id) {
-      // logged out
       localStorage.removeItem("role");
       setRole("");
       return;
@@ -145,7 +139,6 @@ const App: React.FC = () => {
       .maybeSingle<ProfileRow>();
 
     if (error) {
-      // fallback to local
       setRole(getRoleLocal());
       return;
     }
@@ -162,7 +155,6 @@ const App: React.FC = () => {
       void syncRoleFromSupabase();
     });
 
-    // also update when localStorage changes (multi-tab)
     const onStorage = (e: StorageEvent): void => {
       if (e.key === "role") setRole(getRoleLocal());
     };
@@ -175,26 +167,39 @@ const App: React.FC = () => {
   }, []);
 
   /* =========================
-     ALERT LOGIC
+     ALERT LOGIC (MULTI)
   ========================= */
-  const fireAlert = (item: AlertItem): void => {
-    const mLeft = minutesLeftCeil(item.end_iso);
+
+  const addAlert = (a: AlertItem): void => {
+    setAlerts((prev) => {
+      if (prev.some((x) => x.key === a.key)) return prev;
+
+      // ✅ sort: pinakamalapit na time on top (1min first)
+      const next = [...prev, a].sort((x, y) => x.minutes_left - y.minutes_left);
+      return next;
+    });
+
+    // ✅ open modal
+    setShowAlert(true);
+  };
+
+  const fireAlert = (kind: AlertKind, id: string, full_name: string, seat_number: string, end_iso: string): void => {
+    const mLeft = minutesLeftCeil(end_iso);
     if (!ALERT_MINUTES.includes(mLeft)) return;
 
-    const key = `${item.kind}-${item.id}-${mLeft}`;
+    const key = `${kind}-${id}-${mLeft}`;
     if (triggeredRef.current.has(key)) return;
     triggeredRef.current.add(key);
 
-    setAlertMessage(`
-      <h2>⏰ ${mLeft} MINUTE(S) LEFT</h2>
-      <p>
-        <strong>Type:</strong> ${kindLabel(item.kind)}<br/>
-        <strong>Customer:</strong> ${item.full_name}<br/>
-        <strong>Seat:</strong> ${item.seat_number || "-"}
-      </p>
-    `);
-
-    setShowAlert(true);
+    addAlert({
+      key,
+      kind,
+      id,
+      full_name,
+      seat_number,
+      minutes_left: mLeft,
+      end_iso,
+    });
   };
 
   const tickCheckAll = (): void => {
@@ -211,20 +216,14 @@ const App: React.FC = () => {
         return;
       }
 
-      const kind: AlertItem["kind"] =
+      const kind: AlertKind =
         s.promo_booking_id
           ? "promo"
           : String(s.reservation ?? "").toLowerCase() === "yes"
           ? "reservation"
           : "walkin";
 
-      fireAlert({
-        id: s.id,
-        kind,
-        full_name: s.full_name,
-        seat_number: seatText(s.seat_number),
-        end_iso: endIso,
-      });
+      fireAlert(kind, s.id, s.full_name, seatText(s.seat_number), endIso);
     });
 
     // promo_bookings (extra safety)
@@ -235,14 +234,13 @@ const App: React.FC = () => {
         return;
       }
 
-      fireAlert({
-        id: p.id,
-        kind: "promo",
-        full_name: p.full_name,
-        seat_number: p.area === "conference_room" ? "CONFERENCE ROOM" : p.seat_number ?? "-",
-        end_iso: p.end_at,
-      });
+      const seat = p.area === "conference_room" ? "CONFERENCE ROOM" : (p.seat_number ?? "-");
+      fireAlert("promo", p.id, p.full_name, seat, p.end_at);
     });
+
+    // ✅ if no alerts left, close modal
+    // (but keep open if there are still alerts)
+    // note: we DO NOT auto-close here because user may be reading.
   };
 
   const loadActiveCustomerSessions = async (): Promise<void> => {
@@ -288,6 +286,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isStaff) {
       setShowAlert(false);
+      setAlerts([]);
       triggeredRef.current.clear();
       sessionsRef.current.clear();
       promosRef.current.clear();
@@ -367,13 +366,13 @@ const App: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ tick every 1s (para sure hindi mamiss 5/3/1)
+    // ✅ tick every 1s so we never miss 5/3/1 (even on Vercel)
     const tick = window.setInterval(() => tickCheckAll(), 1000);
 
     const refresh = (): void => {
       void loadActiveCustomerSessions();
       void loadActivePromos();
-      window.setTimeout(() => tickCheckAll(), 150);
+      window.setTimeout(() => tickCheckAll(), 200);
     };
 
     const onVis = (): void => {
@@ -395,13 +394,24 @@ const App: React.FC = () => {
     };
   }, [isStaff]);
 
+  // ✅ stop one alert
+  const stopOne = (key: string): void => {
+    setAlerts((prev) => {
+      const next = prev.filter((x) => x.key !== key);
+      // if empty -> close
+      if (next.length === 0) setShowAlert(false);
+      return next;
+    });
+  };
+
   return (
     <IonApp>
       <TimeAlertModal
         isOpen={showAlert}
-        message={alertMessage}
-        onClose={() => setShowAlert(false)}
         role={role}
+        alerts={alerts}
+        onStopOne={stopOne}
+        onClose={() => setShowAlert(false)} // just close modal UI, alerts list stays (optional)
       />
 
       <IonReactRouter>
