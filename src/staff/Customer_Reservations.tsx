@@ -20,6 +20,11 @@
 //    - Uses RPC cancel_customer_session (moves to customer_sessions_cancelled)
 //    - Stops View to Customer if active
 //    - Releases reserved seats
+// ✅ NEW (YOUR REQUEST):
+//    ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
+//       - no clamping, no auto-balancing
+//       - Save stores exactly what you typed
+//       - Auto PAID/UNPAID based on totalPaid >= due
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -157,6 +162,7 @@ const applyDiscount = (
 };
 
 // ✅ keep gcash (clamp to due), cash = remaining
+// (used by DISCOUNT save only; payment modal is now FREE INPUTS)
 const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
   const d = round2(Math.max(0, due));
   if (d <= 0) return { gcash: 0, cash: 0 };
@@ -497,7 +503,10 @@ const Customer_Reservations: React.FC = () => {
     }
 
     const ids = rows.map((r) => r.id);
-    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped/cancelled" }).in("id", ids);
+    const { error: upErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped/cancelled" })
+      .in("id", ids);
 
     if (upErr) {
       // eslint-disable-next-line no-console
@@ -647,6 +656,7 @@ const Customer_Reservations: React.FC = () => {
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
     const dueForPayment = round2(Math.max(0, discounted));
 
+    // ✅ keep your old behavior here (auto adjusts to due)
     const prevPay = getPaidInfo(discountTarget);
     const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
 
@@ -730,47 +740,38 @@ const Customer_Reservations: React.FC = () => {
   };
 
   // -----------------------
-  // PAYMENT MODAL
+  // ✅ PAYMENT MODAL (FREE INPUTS — NO LIMIT)
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
-    const due = getSessionSystemCost(s);
     const pi = getPaidInfo(s);
-
-    const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
-    const adj = recalcPaymentsToDue(due, existingGcash);
-
     setPaymentTarget(s);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+
+    // ✅ FREE INPUTS: show existing values, do NOT auto-adjust to due
+    setGcashInput(String(pi.gcash));
+    setCashInput(String(pi.cash));
   };
 
-  const setGcashAndAutoCash = (s: CustomerSession, gcashStr: string): void => {
-    const due = getSessionSystemCost(s);
-    const gc = Math.max(0, toMoney(gcashStr));
-    const adj = recalcPaymentsToDue(due, gc);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+  // ✅ FREE INPUTS: do not auto-balance other field
+  const setGcashFree = (gcashStr: string): void => {
+    const v = round2(Math.max(0, toMoney(gcashStr)));
+    setGcashInput(String(v));
   };
 
-  const setCashAndAutoGcash = (s: CustomerSession, cashStr: string): void => {
-    const due = round2(Math.max(0, getSessionSystemCost(s)));
-    const ca = round2(Math.max(0, toMoney(cashStr)));
-
-    const cash = round2(Math.min(due, ca));
-    const gcash = round2(Math.max(0, due - cash));
-
-    setCashInput(String(cash));
-    setGcashInput(String(gcash));
+  const setCashFree = (cashStr: string): void => {
+    const v = round2(Math.max(0, toMoney(cashStr)));
+    setCashInput(String(v));
   };
 
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = getSessionSystemCost(paymentTarget);
-    const gcIn = Math.max(0, toMoney(gcashInput));
-    const adj = recalcPaymentsToDue(due, gcIn);
+    const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-    const totalPaid = round2(adj.gcash + adj.cash);
+    // ✅ store EXACT typed amounts (non-negative only)
+    const gc = round2(Math.max(0, toMoney(gcashInput)));
+    const ca = round2(Math.max(0, toMoney(cashInput)));
+
+    const totalPaid = round2(gc + ca);
     const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
@@ -779,8 +780,8 @@ const Customer_Reservations: React.FC = () => {
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
-          gcash_amount: adj.gcash,
-          cash_amount: adj.cash,
+          gcash_amount: gc,
+          cash_amount: ca,
           is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
@@ -944,7 +945,7 @@ const Customer_Reservations: React.FC = () => {
 
                     const systemCost = getSessionSystemCost(session);
                     const pi = getPaidInfo(session);
-                    const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid));
+                    const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid)); // keep display as remaining only
 
                     const dp = getDownPayment(session);
 
@@ -999,7 +1000,7 @@ const Customer_Reservations: React.FC = () => {
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
                               disabled={systemCost <= 0}
-                              title={systemCost <= 0 ? "No due" : "Set GCash/Cash payment (based on time consumed)"}
+                              title={systemCost <= 0 ? "No due" : "Set GCash/Cash payment (FREE INPUTS, can exceed due)"}
                             >
                               Payment
                             </button>
@@ -1117,7 +1118,14 @@ const Customer_Reservations: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Down Payment (₱)</span>
-                  <input className="money-input" type="number" min="0" step="0.01" value={dpInput} onChange={(e) => setDpInput(e.currentTarget.value)} />
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={dpInput}
+                    onChange={(e) => setDpInput(e.currentTarget.value)}
+                  />
                 </div>
 
                 <div className="modal-actions">
@@ -1240,7 +1248,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL */}
+          {/* ✅ PAYMENT MODAL (FREE INPUTS — NO LIMIT) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1250,12 +1258,15 @@ const Customer_Reservations: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const due = getSessionSystemCost(paymentTarget);
-                  const gcIn = Math.max(0, toMoney(gcashInput));
-                  const adj = recalcPaymentsToDue(due, gcIn);
+                  const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-                  const totalPaid = round2(adj.gcash + adj.cash);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                  const gc = round2(Math.max(0, toMoney(gcashInput)));
+                  const ca = round2(Math.max(0, toMoney(cashInput)));
+                  const totalPaid = round2(gc + ca);
+
+                  const diff = round2(due - totalPaid);
+                  const label = diff > 0 ? "Remaining" : "Change";
+                  const value = diff > 0 ? diff : Math.abs(diff);
 
                   return (
                     <>
@@ -1264,14 +1275,33 @@ const Customer_Reservations: React.FC = () => {
                         <span>₱{due.toFixed(2)}</span>
                       </div>
 
+                      <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
+                        <span>Mode</span>
+                        <span>FREE INPUTS (Cash/GCash can exceed due)</span>
+                      </div>
+
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <input className="money-input" type="number" min="0" step="0.01" value={gcashInput} onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)} />
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashInput}
+                          onChange={(e) => setGcashFree(e.currentTarget.value)}
+                        />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <input className="money-input" type="number" min="0" step="0.01" value={cashInput} onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)} />
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={cashInput}
+                          onChange={(e) => setCashFree(e.currentTarget.value)}
+                        />
                       </div>
 
                       <hr />
@@ -1282,8 +1312,13 @@ const Customer_Reservations: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining</span>
-                        <span>₱{remaining.toFixed(2)}</span>
+                        <span>{label}</span>
+                        <span>₱{value.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Will be marked</span>
+                        <span className="receipt-status">{due <= 0 ? "PAID" : totalPaid >= due ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       <div className="modal-actions">
@@ -1366,7 +1401,11 @@ const Customer_Reservations: React.FC = () => {
 
                 {isOpenTimeSession(selectedSession) && (
                   <div className="block-top">
-                    <button className="receipt-btn btn-full" disabled={stoppingId === selectedSession.id} onClick={() => void stopOpenTime(selectedSession)}>
+                    <button
+                      className="receipt-btn btn-full"
+                      disabled={stoppingId === selectedSession.id}
+                      onClick={() => void stopOpenTime(selectedSession)}
+                    >
                       {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
