@@ -1,7 +1,11 @@
 // src/pages/Admin_Customer_Add_ons.tsx
 // ✅ UI MATCHES Customer_Lists
 // ✅ FIX: PH/Manila date filtering (day range +08:00) so records show correctly
-// ✅ VOID ONLY: reverses SOLD only (stocks & overall_sales auto-recompute because GENERATED) + auto DELETE rows in DB (via RPC)
+// ✅ UPDATED: Cancel (requires description) like Customer_Add_ons.tsx via RPC cancel_add_on_order
+//    - moves rows to cancel table
+//    - reverses SOLD
+//    - deletes originals
+// ✅ NEW: Delete by Date (requires description) -> cancels ALL rows for selected date via same RPC (so SOLD is reversed)
 // ✅ Payment modal + manual PAID toggle (updates all rows in grouped order)
 // ✅ Excel export (REAL XLSX + images) + shows SIZE
 // ✅ No "any"
@@ -168,7 +172,7 @@ const samePersonSeat = (a: CustomerAddOnMerged, b: CustomerAddOnMerged): boolean
    ✅ Excel helpers
 ========================= */
 
-const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
+const clamp = (n: number, minV: number, maxV: number): number => Math.min(maxV, Math.max(minV, n));
 
 const cellText = (v: ExcelJS.Cell["value"]): string => {
   if (v == null) return "";
@@ -269,8 +273,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
-  const [voidingKey, setVoidingKey] = useState<string | null>(null);
-
   const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
 
   const [paymentTarget, setPaymentTarget] = useState<OrderGroup | null>(null);
@@ -279,6 +281,16 @@ const Admin_Customer_Add_ons: React.FC = () => {
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
   const [togglingPaidKey, setTogglingPaidKey] = useState<string | null>(null);
+
+  // ✅ CANCEL states (per order)
+  const [cancelTarget, setCancelTarget] = useState<OrderGroup | null>(null);
+  const [cancelDesc, setCancelDesc] = useState<string>("");
+  const [cancellingKey, setCancellingKey] = useState<string | null>(null);
+
+  // ✅ DELETE BY DATE states (cancel all rows by date)
+  const [deleteDateOpen, setDeleteDateOpen] = useState<boolean>(false);
+  const [deleteDateDesc, setDeleteDateDesc] = useState<string>("");
+  const [deletingDate, setDeletingDate] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchAddOns(selectedDate);
@@ -319,6 +331,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       .returns<CustomerSessionAddOnRow[]>();
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error("Error fetching customer_session_add_ons:", error);
       setRecords([]);
       setLoading(false);
@@ -340,7 +353,10 @@ const Admin_Customer_Add_ons: React.FC = () => {
       .in("id", addOnIds)
       .returns<AddOnLookup[]>();
 
-    if (addOnErr) console.error("Error fetching add_ons:", addOnErr);
+    if (addOnErr) {
+      // eslint-disable-next-line no-console
+      console.error("Error fetching add_ons:", addOnErr);
+    }
 
     const addOnMap = new Map<string, AddOnLookup>();
     (addOnRows ?? []).forEach((a) => addOnMap.set(a.id, a));
@@ -569,47 +585,117 @@ const Admin_Customer_Add_ons: React.FC = () => {
       const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       saveAs(blob, `admin_addons_${selectedDate}.xlsx`);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Export failed. (If images are blocked, check CORS or use public URLs.)");
     }
   };
 
   /* =========================================================
-     ✅ VOID ONLY (RPC)
-     - Reverse SOLD only then delete rows in DB (transaction, bypasses RLS if configured)
-     IMPORTANT:
-       Create this function in Supabase SQL Editor:
-       public.void_customer_add_on_rows(p_ids uuid[])
+     ✅ CANCEL (per order) — same as Customer_Add_ons.tsx
+     - RPC: cancel_add_on_order(p_item_ids uuid[], p_description text)
   ========================================================= */
 
-  const voidOrder = async (o: OrderGroup): Promise<void> => {
-    const ok = window.confirm(
-      `VOID this whole order?\n\n${o.full_name}\nSeat: ${o.seat_number}\nItems: ${o.items.length}\nGrand Total: ${moneyText(
-        o.grand_total
-      )}\nDate: ${formatDateTime(o.created_at)}\n\n✅ VOID will reverse SOLD then DELETE rows in DB.`
-    );
-    if (!ok) return;
+  const openCancelModal = (o: OrderGroup): void => {
+    setCancelTarget(o);
+    setCancelDesc("");
+  };
 
-    const ids = o.items.map((x) => x.id);
+  const submitCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
+
+    const desc = cancelDesc.trim();
+    if (!desc) {
+      alert("Description is required before you can cancel.");
+      return;
+    }
+
+    const itemIds = cancelTarget.items.map((x) => x.id);
+    if (itemIds.length === 0) {
+      alert("Nothing to cancel.");
+      return;
+    }
 
     try {
-      setVoidingKey(o.key);
+      setCancellingKey(cancelTarget.key);
 
-      // ✅ one DB transaction: reverse sold + delete rows
-      const { error } = await supabase.rpc("void_customer_add_on_rows", { p_ids: ids });
+      const { error } = await supabase.rpc("cancel_add_on_order", {
+        p_item_ids: itemIds,
+        p_description: desc,
+      });
 
       if (error) {
-        alert(`VOID error: ${error.message}`);
+        alert(`Cancel error: ${error.message}`);
         return;
       }
 
+      setCancelTarget(null);
       setSelectedOrder(null);
       await fetchAddOns(selectedDate);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
-      alert("VOID order failed.");
+      alert("Cancel failed.");
     } finally {
-      setVoidingKey(null);
+      setCancellingKey(null);
+    }
+  };
+
+  /* =========================================================
+     ✅ DELETE BY DATE (Cancel ALL rows for selected date)
+     - also uses cancel_add_on_order so SOLD is reversed
+  ========================================================= */
+
+  const openDeleteByDate = (): void => {
+    if (!selectedDate) return;
+    if (records.length === 0) {
+      alert("No records to delete on this date.");
+      return;
+    }
+    setDeleteDateDesc("");
+    setDeleteDateOpen(true);
+  };
+
+  const submitDeleteByDate = async (): Promise<void> => {
+    const desc = deleteDateDesc.trim();
+    if (!desc) {
+      alert("Description is required.");
+      return;
+    }
+
+    if (!selectedDate) return;
+    if (records.length === 0) return;
+
+    const ok = window.confirm(
+      `Cancel/Delete ALL add-ons on ${selectedDate}?\n\nRows: ${records.length}\n\nThis will move rows to the cancel table and reverse SOLD.`
+    );
+    if (!ok) return;
+
+    const ids = records.map((r) => r.id);
+    if (ids.length === 0) return;
+
+    try {
+      setDeletingDate(selectedDate);
+
+      const { error } = await supabase.rpc("cancel_add_on_order", {
+        p_item_ids: ids,
+        p_description: desc,
+      });
+
+      if (error) {
+        alert(`Delete by date error: ${error.message}`);
+        return;
+      }
+
+      setDeleteDateOpen(false);
+      setSelectedOrder(null);
+      await fetchAddOns(selectedDate);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Delete by date failed.");
+    } finally {
+      setDeletingDate(null);
     }
   };
 
@@ -678,6 +764,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       setPaymentTarget(null);
       await fetchAddOns(selectedDate);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
@@ -710,6 +797,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       await fetchAddOns(selectedDate);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -723,7 +811,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         <div className="customer-lists-container">
           <div className="customer-topbar">
             <div className="customer-topbar-left">
-              <h2 className="customer-lists-title">Add-Ons Records</h2>
+              <h2 className="customer-lists-title">Add-Ons Records (Admin)</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong> ({groupedOrders.length})
               </div>
@@ -744,12 +832,21 @@ const Admin_Customer_Add_ons: React.FC = () => {
               </label>
 
               <div className="admin-tools-row">
-                <button className="receipt-btn" onClick={() => void fetchAddOns(selectedDate)}>
+                <button className="receipt-btn" onClick={() => void fetchAddOns(selectedDate)} disabled={loading}>
                   Refresh
                 </button>
 
                 <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={records.length === 0}>
                   Export to Excel
+                </button>
+
+                {/* ✅ DELETE BY DATE */}
+                <button
+                  className="receipt-btn admin-danger"
+                  onClick={openDeleteByDate}
+                  disabled={records.length === 0 || deletingDate === selectedDate || loading}
+                >
+                  {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
                 </button>
               </div>
             </div>
@@ -782,7 +879,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                     const remaining = round2(Math.max(0, due - totalPaid));
                     const paid = toBool(o.is_paid);
 
-                    const busyOrder = voidingKey === o.key;
+                    const busyCancel = cancellingKey === o.key;
 
                     return (
                       <tr key={o.key}>
@@ -852,8 +949,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
                               View Receipt
                             </button>
 
-                            <button className="receipt-btn" disabled={busyOrder} onClick={() => void voidOrder(o)}>
-                              {voidingKey === o.key ? "Voiding..." : "Void"}
+                            {/* ✅ CANCEL (same as customer add-ons) */}
+                            <button className="receipt-btn" disabled={busyCancel} onClick={() => openCancelModal(o)}>
+                              {busyCancel ? "Cancelling..." : "Cancel"}
                             </button>
                           </div>
                         </td>
@@ -936,6 +1034,112 @@ const Admin_Customer_Add_ons: React.FC = () => {
                     </>
                   );
                 })()}
+              </div>
+            </div>
+          )}
+
+          {/* ✅ CANCEL DESCRIPTION MODAL */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancellingKey ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL ORDER</h3>
+                <p className="receipt-subtitle">
+                  {cancelTarget.full_name} • Seat {cancelTarget.seat_number}
+                </p>
+
+                <hr />
+
+                <div style={{ fontWeight: 800, marginBottom: 8 }}>Required: Description / Reason</div>
+
+                <textarea
+                  value={cancelDesc}
+                  onChange={(e) => setCancelDesc(e.currentTarget.value)}
+                  placeholder="Example: Customer changed mind / wrong item / duplicate order..."
+                  style={{
+                    width: "100%",
+                    minHeight: 110,
+                    resize: "vertical",
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid rgba(0,0,0,0.15)",
+                    outline: "none",
+                    fontSize: 14,
+                  }}
+                  disabled={cancellingKey === cancelTarget.key}
+                />
+
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
+                  ⚠️ Cancel will archive this order to the cancel table and reverse SOLD.
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 14 }}>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setCancelTarget(null)}
+                    disabled={cancellingKey === cancelTarget.key}
+                  >
+                    Close
+                  </button>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void submitCancel()}
+                    disabled={cancellingKey === cancelTarget.key || cancelDesc.trim().length === 0}
+                    title={cancelDesc.trim().length === 0 ? "Description required" : "Submit cancel"}
+                  >
+                    {cancellingKey === cancelTarget.key ? "Cancelling..." : "Submit Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ✅ DELETE BY DATE MODAL (requires description) */}
+          {deleteDateOpen && (
+            <div className="receipt-overlay" onClick={() => (deletingDate ? null : setDeleteDateOpen(false))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DELETE BY DATE</h3>
+                <p className="receipt-subtitle">
+                  Date: <strong>{selectedDate}</strong> • Rows: <strong>{records.length}</strong>
+                </p>
+
+                <hr />
+
+                <div style={{ fontWeight: 800, marginBottom: 8 }}>Required: Description / Reason</div>
+
+                <textarea
+                  value={deleteDateDesc}
+                  onChange={(e) => setDeleteDateDesc(e.currentTarget.value)}
+                  placeholder="Example: End of day cleanup / wrong date / duplicate imports..."
+                  style={{
+                    width: "100%",
+                    minHeight: 110,
+                    resize: "vertical",
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid rgba(0,0,0,0.15)",
+                    outline: "none",
+                    fontSize: 14,
+                  }}
+                  disabled={Boolean(deletingDate)}
+                />
+
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
+                  ⚠️ This will CANCEL ALL rows for the date (moves to cancel table + reverses SOLD).
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 14 }}>
+                  <button className="receipt-btn" onClick={() => setDeleteDateOpen(false)} disabled={Boolean(deletingDate)}>
+                    Close
+                  </button>
+                  <button
+                    className="receipt-btn admin-danger"
+                    onClick={() => void submitDeleteByDate()}
+                    disabled={Boolean(deletingDate) || deleteDateDesc.trim().length === 0}
+                    title={deleteDateDesc.trim().length === 0 ? "Description required" : "Delete all rows for this date"}
+                  >
+                    {deletingDate ? "Deleting..." : "Submit Delete"}
+                  </button>
+                </div>
               </div>
             </div>
           )}

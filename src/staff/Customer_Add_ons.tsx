@@ -3,10 +3,7 @@
 // ✅ FIX: joins add_ons (name/category/size)
 // ✅ NEW: CANCEL (requires description, moves rows to cancel table, reverses SOLD, deletes originals) via RPC
 // ✅ Payment modal + manual PAID toggle (updates all rows in grouped order)
-// ✅ IMPORTANT: Requires RLS policies:
-//    - SELECT/UPDATE/DELETE on customer_session_add_ons
-//    - SELECT on add_ons
-//    - EXECUTE on function cancel_add_on_order
+// ✅ NEW: Search bar (same UI as customer list search bar)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -167,6 +164,9 @@ const Customer_Add_ons: React.FC = () => {
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
+  // ✅ Search
+  const [searchText, setSearchText] = useState<string>("");
+
   const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
 
   const [paymentTarget, setPaymentTarget] = useState<OrderGroup | null>(null);
@@ -261,7 +261,7 @@ const Customer_Add_ons: React.FC = () => {
     setLoading(false);
   };
 
-  const groupedOrders = useMemo<OrderGroup[]>(() => {
+  const groupedOrdersAll = useMemo<OrderGroup[]>(() => {
     if (records.length === 0) return [];
 
     const groups: OrderGroup[] = [];
@@ -319,6 +319,19 @@ const Customer_Add_ons: React.FC = () => {
 
     return groups.sort((a, b) => ms(b.created_at) - ms(a.created_at));
   }, [records]);
+
+  // ✅ Search filter (Full Name + Seat + Item name)
+  const groupedOrders = useMemo<OrderGroup[]>(() => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return groupedOrdersAll;
+
+    return groupedOrdersAll.filter((o) => {
+      const name = String(o.full_name ?? "").toLowerCase();
+      const seat = String(o.seat_number ?? "").toLowerCase();
+      const items = o.items.some((it) => String(it.item_name ?? "").toLowerCase().includes(q));
+      return name.includes(q) || seat.includes(q) || items;
+    });
+  }, [groupedOrdersAll, searchText]);
 
   /* ---------------- payment modal ---------------- */
 
@@ -427,10 +440,6 @@ const Customer_Add_ons: React.FC = () => {
   /* =========================================================
      ✅ CANCEL (requires description)
      - uses RPC cancel_add_on_order(item_ids[], description)
-     - DB will:
-       (1) insert rows into customer_session_add_ons_cancelled
-       (2) reverse SOLD
-       (3) delete original rows
   ========================================================= */
 
   const openCancelModal = (o: OrderGroup): void => {
@@ -491,6 +500,29 @@ const Customer_Add_ons: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
+              {/* ✅ SEARCH BAR (same UI as other pages) */}
+              <div className="customer-searchbar-inline">
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    placeholder="Search name / seat / item..."
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.currentTarget.value)}
+                  />
+
+                  {searchText.trim() && (
+                    <button className="customer-search-clear" onClick={() => setSearchText("")}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <label className="date-pill">
                 <span className="date-pill-label">Date</span>
                 <input
@@ -504,9 +536,16 @@ const Customer_Add_ons: React.FC = () => {
                 </span>
               </label>
 
-              <button className="receipt-btn" onClick={() => void fetchAddOns(selectedDate)} style={{ whiteSpace: "nowrap" }}>
-                Refresh
-              </button>
+              <div className="admin-tools-row">
+                <button
+                  className="receipt-btn"
+                  onClick={() => void fetchAddOns(selectedDate)}
+                  style={{ whiteSpace: "nowrap" }}
+                  disabled={loading}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
           </div>
 
@@ -617,7 +656,6 @@ const Customer_Add_ons: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ✅ CANCEL (with required description) */}
                             <button className="receipt-btn" disabled={busyCancel} onClick={() => openCancelModal(o)}>
                               {busyCancel ? "Cancelling..." : "Cancel"}
                             </button>
