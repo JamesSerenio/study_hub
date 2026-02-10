@@ -1,8 +1,10 @@
 // src/pages/Customer_Cancelled.tsx
-// ✅ Cancelled Records page (TABS: Add-Ons / Walk-in / Reservation)
+// ✅ Cancelled Records page (DROPDOWN: Add-Ons / Walk-in / Reservation / Promo Membership)
 // ✅ Add-Ons tab: your existing logic (Asia/Manila day range +08:00)
 // ✅ Walk-in tab: reads public.customer_sessions_cancelled where reservation='no'
 // ✅ Reservation tab: reads public.customer_sessions_cancelled where reservation='yes'
+// ✅ Promo tab: reads public.promo_bookings_cancelled (your cancelled promo/membership)
+// ✅ FIX: Promo Membership now works EVEN WITHOUT FK relationships (no nested select required)
 // ✅ Same layout/classnames style as your other tables (customer-*)
 // ✅ Receipt modal (view details)
 // ✅ READ-ONLY (NOT EDITABLE; no clickable "paid" badge / no updates)
@@ -186,6 +188,88 @@ type CancelledSession = {
 };
 
 /* =========================
+   TYPES (Promo Cancelled)
+========================= */
+type PackageArea = "common_area" | "conference_room";
+type DurationUnit = "hour" | "day" | "month" | "year";
+
+type CancelledPromoDB = {
+  id: string;
+  cancelled_at: string;
+  original_id: string;
+  description: string;
+
+  created_at: string;
+  user_id: string | null;
+
+  full_name: string;
+  phone_number: string | null;
+
+  area: PackageArea;
+  package_id: string;
+  package_option_id: string;
+
+  seat_number: string | null;
+  start_at: string;
+  end_at: string;
+
+  price: number | string;
+  status: string;
+
+  gcash_amount: number | string;
+  cash_amount: number | string;
+  is_paid: boolean | number | string | null;
+  paid_at: string | null;
+
+  discount_reason: string | null;
+  discount_kind: DiscountKind | string;
+  discount_value: number | string;
+};
+
+// lookup tables (no "any")
+type PackageRow = { id: string; title: string | null };
+type PackageOptionRow = {
+  id: string;
+  option_name: string | null;
+  duration_value: number | null;
+  duration_unit: DurationUnit | null;
+};
+
+type CancelledPromo = {
+  id: string;
+  cancelled_at: string;
+  original_id: string;
+  description: string;
+
+  created_at: string;
+  full_name: string;
+  phone_number: string | null;
+
+  area: PackageArea;
+  seat_number: string | null;
+
+  start_at: string;
+  end_at: string;
+
+  price: number;
+  status: string;
+
+  gcash_amount: number;
+  cash_amount: number;
+  is_paid: boolean;
+  paid_at: string | null;
+
+  discount_kind: DiscountKind;
+  discount_value: number;
+  discount_reason: string | null;
+
+  package_title: string;
+  option_name: string;
+  duration_value: number | null;
+  duration_unit: DurationUnit | null;
+};
+
+/* =========================
    HELPERS
 ========================= */
 const toNumber = (v: NumericLike | null | undefined): number => {
@@ -280,6 +364,38 @@ const getDiscountText = (kind: DiscountKind, value: number): string => {
   return "—";
 };
 
+const normalizeDiscountKind = (v: unknown): DiscountKind => {
+  const s = String(v ?? "none").trim().toLowerCase();
+  if (s === "percent") return "percent";
+  if (s === "amount") return "amount";
+  return "none";
+};
+
+const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
+
+const seatLabelPromo = (area: PackageArea, seat: string | null): string =>
+  area === "conference_room" ? "CONFERENCE ROOM" : String(seat ?? "").trim() || "N/A";
+
+const formatDuration = (v: number, u: DurationUnit): string => {
+  const unit =
+    u === "hour"
+      ? v === 1
+        ? "hour"
+        : "hours"
+      : u === "day"
+      ? v === 1
+        ? "day"
+        : "days"
+      : u === "month"
+      ? v === 1
+        ? "month"
+        : "months"
+      : v === 1
+      ? "year"
+      : "years";
+  return `${v} ${unit}`;
+};
+
 // ✅ read-only badge (NOT a button)
 const ReadOnlyBadge: React.FC<{ paid: boolean }> = ({ paid }) => {
   return (
@@ -294,7 +410,7 @@ const ReadOnlyBadge: React.FC<{ paid: boolean }> = ({ paid }) => {
         fontWeight: 900,
         fontSize: 12,
         userSelect: "none",
-        pointerEvents: "none", // ✅ cannot click
+        pointerEvents: "none",
       }}
       aria-label={paid ? "PAID" : "UNPAID"}
     >
@@ -308,7 +424,21 @@ const GROUP_WINDOW_MS = 10_000;
 /* =========================
    COMPONENT
 ========================= */
-type CancelTab = "addons" | "walkin" | "reservation";
+type CancelTab = "addons" | "walkin" | "reservation" | "promo";
+
+const TAB_LABEL: Record<CancelTab, string> = {
+  addons: "Add-Ons",
+  walkin: "Walk-in",
+  reservation: "Reservation",
+  promo: "Promo (Membership)",
+};
+
+const tabTitleFrom = (tab: CancelTab): string => {
+  if (tab === "addons") return "Cancelled Add-Ons";
+  if (tab === "walkin") return "Cancelled Walk-in";
+  if (tab === "reservation") return "Cancelled Reservation";
+  return "Cancelled Promo Membership";
+};
 
 const Customer_Cancelled: React.FC = () => {
   const [tab, setTab] = useState<CancelTab>("addons");
@@ -324,6 +454,10 @@ const Customer_Cancelled: React.FC = () => {
   const [rowsSessions, setRowsSessions] = useState<CancelledSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<CancelledSession | null>(null);
 
+  // Promo cancelled data
+  const [rowsPromo, setRowsPromo] = useState<CancelledPromo[]>([]);
+  const [selectedPromo, setSelectedPromo] = useState<CancelledPromo | null>(null);
+
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,13 +471,16 @@ const Customer_Cancelled: React.FC = () => {
   const refresh = async (): Promise<void> => {
     setSelectedGroupAddOns(null);
     setSelectedSession(null);
+    setSelectedPromo(null);
 
     if (tab === "addons") {
       await fetchCancelledAddOns(selectedDate);
     } else if (tab === "walkin") {
       await fetchCancelledSessions(selectedDate, "no");
-    } else {
+    } else if (tab === "reservation") {
       await fetchCancelledSessions(selectedDate, "yes");
+    } else {
+      await fetchCancelledPromo(selectedDate);
     }
   };
 
@@ -497,9 +634,6 @@ const Customer_Cancelled: React.FC = () => {
 
   /* -----------------------------
      FETCH: Sessions Cancelled
-     - uses customer_sessions_cancelled
-     - filter date by cancelled_at day range (Manila)
-     - reservation = 'no' or 'yes'
   ------------------------------ */
   const fetchCancelledSessions = async (dateStr: string, reservation: "no" | "yes"): Promise<void> => {
     setLoading(true);
@@ -600,8 +734,150 @@ const Customer_Cancelled: React.FC = () => {
     setLoading(false);
   };
 
-  const tabTitle =
-    tab === "addons" ? "Cancelled Add-Ons" : tab === "walkin" ? "Cancelled Walk-in" : "Cancelled Reservation";
+  /* -----------------------------
+     FETCH: Promo Cancelled  ✅ FIXED
+     IMPORTANT:
+     - Your promo_bookings_cancelled has NO FK constraints by default.
+     - Supabase nested select (packages:package_id / package_options:package_option_id) only works if FK exists.
+     - So we do 3 queries: cancelled rows + packages + package_options, then merge.
+  ------------------------------ */
+  const fetchCancelledPromo = async (dateStr: string): Promise<void> => {
+    setLoading(true);
+    const { startIso, endIso } = manilaDayRange(dateStr);
+
+    // 1) get cancelled rows
+    const { data, error } = await supabase
+      .from("promo_bookings_cancelled")
+      .select(
+        `
+        id,
+        cancelled_at,
+        original_id,
+        description,
+        created_at,
+        user_id,
+        full_name,
+        phone_number,
+        area,
+        package_id,
+        package_option_id,
+        seat_number,
+        start_at,
+        end_at,
+        price,
+        status,
+        gcash_amount,
+        cash_amount,
+        is_paid,
+        paid_at,
+        discount_reason,
+        discount_kind,
+        discount_value
+      `
+      )
+      .gte("cancelled_at", startIso)
+      .lt("cancelled_at", endIso)
+      .order("cancelled_at", { ascending: false })
+      .returns<CancelledPromoDB[]>();
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error("FETCH CANCELLED PROMO ERROR:", error);
+      setRowsPromo([]);
+      setLoading(false);
+      return;
+    }
+
+    const rows = data ?? [];
+    if (rows.length === 0) {
+      setRowsPromo([]);
+      setLoading(false);
+      return;
+    }
+
+    // 2) lookup packages + options
+    const pkgIds = Array.from(new Set(rows.map((r) => String(r.package_id)).filter((x) => x.length > 0)));
+    const optIds = Array.from(new Set(rows.map((r) => String(r.package_option_id)).filter((x) => x.length > 0)));
+
+    const [pkgRes, optRes] = await Promise.all([
+      pkgIds.length
+        ? supabase.from("packages").select("id,title").in("id", pkgIds).returns<PackageRow[]>()
+        : Promise.resolve({ data: [] as PackageRow[], error: null as unknown }),
+      optIds.length
+        ? supabase
+            .from("package_options")
+            .select("id,option_name,duration_value,duration_unit")
+            .in("id", optIds)
+            .returns<PackageOptionRow[]>()
+        : Promise.resolve({ data: [] as PackageOptionRow[], error: null as unknown }),
+    ]);
+
+    // if these fail, still show promo rows with fallback names
+    if ((pkgRes as { error: unknown }).error) {
+      // eslint-disable-next-line no-console
+      console.error("FETCH PACKAGES LOOKUP ERROR:", (pkgRes as { error: unknown }).error);
+    }
+    if ((optRes as { error: unknown }).error) {
+      // eslint-disable-next-line no-console
+      console.error("FETCH PACKAGE_OPTIONS LOOKUP ERROR:", (optRes as { error: unknown }).error);
+    }
+
+    const pkgMap = new Map<string, PackageRow>();
+    ((pkgRes as { data: PackageRow[] }).data ?? []).forEach((p) => pkgMap.set(p.id, p));
+
+    const optMap = new Map<string, PackageOptionRow>();
+    ((optRes as { data: PackageOptionRow[] }).data ?? []).forEach((o) => optMap.set(o.id, o));
+
+    // 3) map to UI type
+    const mapped: CancelledPromo[] = rows.map((r) => {
+      const kind = normalizeDiscountKind(r.discount_kind);
+      const price = round2(Math.max(0, toNumber(r.price as NumericLike)));
+      const discVal = round2(Math.max(0, toNumber(r.discount_value as NumericLike)));
+
+      const pkg = pkgMap.get(String(r.package_id));
+      const opt = optMap.get(String(r.package_option_id));
+
+      return {
+        id: r.id,
+        cancelled_at: r.cancelled_at,
+        original_id: r.original_id,
+        description: String(r.description ?? "").trim() || "-",
+
+        created_at: r.created_at,
+        full_name: String(r.full_name ?? "-"),
+        phone_number: r.phone_number ?? null,
+
+        area: r.area,
+        seat_number: r.seat_number ?? null,
+
+        start_at: r.start_at,
+        end_at: r.end_at,
+
+        price,
+        status: String(r.status ?? "pending"),
+
+        gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount as NumericLike))),
+        cash_amount: round2(Math.max(0, toNumber(r.cash_amount as NumericLike))),
+        is_paid: toBool(r.is_paid),
+        paid_at: r.paid_at ?? null,
+
+        discount_kind: kind,
+        discount_value: discVal,
+        discount_reason: r.discount_reason ?? null,
+
+        package_title: String(pkg?.title ?? "").trim() || "—",
+        option_name: String(opt?.option_name ?? "").trim() || "—",
+        duration_value: opt?.duration_value ?? null,
+        duration_unit: opt?.duration_unit ?? null,
+      };
+    });
+
+    setRowsPromo(mapped);
+    setLoading(false);
+  };
+
+  const tabTitle = tabTitleFrom(tab);
+  const countText = tab === "addons" ? groupedAddOns.length : tab === "promo" ? rowsPromo.length : rowsSessions.length;
 
   return (
     <IonPage>
@@ -612,8 +888,7 @@ const Customer_Cancelled: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">{tabTitle} Records</h2>
               <div className="customer-subtext">
-                Showing cancelled records for: <strong>{selectedDate}</strong>{" "}
-                {tab === "addons" ? `(${groupedAddOns.length})` : `(${rowsSessions.length})`}
+                Showing cancelled records for: <strong>{selectedDate}</strong> ({countText})
               </div>
               <div className="customer-subtext" style={{ fontSize: 12, opacity: 0.75 }}>
                 Read-only: cancelled records cannot be edited.
@@ -621,37 +896,25 @@ const Customer_Cancelled: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right" style={{ gap: 10, display: "flex", alignItems: "center", flexWrap: "wrap" }}>
-              {/* ✅ TABS */}
-              <div className="customer-searchbar-inline" style={{ minWidth: 360 }}>
-                <div className="customer-searchbar-inner" style={{ gap: 8 }}>
-                  <button
-                    className={`receipt-btn ${tab === "addons" ? "pay-badge pay-badge--paid" : ""}`}
-                    onClick={() => setTab("addons")}
-                    style={{ whiteSpace: "nowrap" }}
-                    type="button"
-                  >
-                    Add-Ons
-                  </button>
-
-                  <button
-                    className={`receipt-btn ${tab === "walkin" ? "pay-badge pay-badge--paid" : ""}`}
-                    onClick={() => setTab("walkin")}
-                    style={{ whiteSpace: "nowrap" }}
-                    type="button"
-                  >
-                    Walk-in
-                  </button>
-
-                  <button
-                    className={`receipt-btn ${tab === "reservation" ? "pay-badge pay-badge--paid" : ""}`}
-                    onClick={() => setTab("reservation")}
-                    style={{ whiteSpace: "nowrap" }}
-                    type="button"
-                  >
-                    Reservation
-                  </button>
-                </div>
-              </div>
+              {/* DROPDOWN */}
+              <label className="date-pill" style={{ minWidth: 240 }}>
+                <span className="date-pill-label">Type</span>
+                <select
+                  className="date-pill-input"
+                  value={tab}
+                  onChange={(e) => setTab(e.currentTarget.value as CancelTab)}
+                  aria-label="Cancelled type"
+                  style={{ paddingRight: 34 }}
+                >
+                  <option value="addons">{TAB_LABEL.addons}</option>
+                  <option value="walkin">{TAB_LABEL.walkin}</option>
+                  <option value="reservation">{TAB_LABEL.reservation}</option>
+                  <option value="promo">{TAB_LABEL.promo}</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
 
               {/* DATE */}
               <label className="date-pill">
@@ -840,7 +1103,7 @@ const Customer_Cancelled: React.FC = () => {
           {/* =========================
               TAB: WALK-IN / RESERVATION
           ========================= */}
-          {tab !== "addons" && (
+          {tab !== "addons" && tab !== "promo" && (
             <>
               {loading ? (
                 <p className="customer-note">Loading...</p>
@@ -924,9 +1187,7 @@ const Customer_Cancelled: React.FC = () => {
 
                     <h3 className="receipt-title">ME TYME LOUNGE</h3>
                     <p className="receipt-subtitle">
-                      {selectedSession.reservation === "yes"
-                        ? "CANCELLED RESERVATION RECEIPT"
-                        : "CANCELLED WALK-IN RECEIPT"}
+                      {selectedSession.reservation === "yes" ? "CANCELLED RESERVATION RECEIPT" : "CANCELLED WALK-IN RECEIPT"}
                     </p>
 
                     <hr />
@@ -1058,6 +1319,229 @@ const Customer_Cancelled: React.FC = () => {
                     </p>
 
                     <button className="close-btn" onClick={() => setSelectedSession(null)} type="button">
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* =========================
+              TAB: PROMO (Membership)
+          ========================= */}
+          {tab === "promo" && (
+            <>
+              {loading ? (
+                <p className="customer-note">Loading...</p>
+              ) : rowsPromo.length === 0 ? (
+                <p className="customer-note">No cancelled promo (membership) records found for this date</p>
+              ) : (
+                <div className="customer-table-wrap" key={`${selectedDate}-promo`}>
+                  <table className="customer-table">
+                    <thead>
+                      <tr>
+                        <th>Cancelled At</th>
+                        <th>Customer</th>
+                        <th>Phone #</th>
+                        <th>Area</th>
+                        <th>Seat</th>
+                        <th>Package</th>
+                        <th>Option</th>
+                        <th>Start</th>
+                        <th>End</th>
+                        <th>Total</th>
+                        <th>Discount</th>
+                        <th>Paid</th>
+                        <th>Description</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {rowsPromo.map((p) => {
+                        const base = round2(Math.max(0, p.price));
+                        const disc = applyDiscount(base, p.discount_kind, p.discount_value);
+                        const due = round2(disc.discountedCost);
+
+                        return (
+                          <tr key={p.id}>
+                            <td>{formatDateTime(p.cancelled_at)}</td>
+                            <td>{p.full_name}</td>
+                            <td>{String(p.phone_number ?? "").trim() || "N/A"}</td>
+                            <td>{prettyArea(p.area)}</td>
+                            <td>{seatLabelPromo(p.area, p.seat_number)}</td>
+                            <td>{p.package_title}</td>
+                            <td>
+                              {p.duration_value && p.duration_unit
+                                ? `${p.option_name} • ${formatDuration(Number(p.duration_value), p.duration_unit)}`
+                                : p.option_name}
+                            </td>
+                            <td>{formatDateTime(p.start_at)}</td>
+                            <td>{formatDateTime(p.end_at)}</td>
+                            <td style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(due)}</td>
+                            <td>{getDiscountText(p.discount_kind, p.discount_value)}</td>
+                            <td>
+                              <ReadOnlyBadge paid={p.is_paid} />
+                            </td>
+                            <td style={{ minWidth: 220 }}>
+                              <div className="cancel-desc">{p.description || "-"}</div>
+                            </td>
+                            <td>
+                              <div className="action-stack">
+                                <button className="receipt-btn" onClick={() => setSelectedPromo(p)} type="button">
+                                  View Receipt
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* RECEIPT MODAL (PROMO) */}
+              {selectedPromo && (
+                <div className="receipt-overlay" onClick={() => setSelectedPromo(null)}>
+                  <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                    <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+
+                    <h3 className="receipt-title">ME TYME LOUNGE</h3>
+                    <p className="receipt-subtitle">CANCELLED PROMO (MEMBERSHIP) RECEIPT</p>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Cancelled At</span>
+                      <span>{formatDateTime(selectedPromo.cancelled_at)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Customer</span>
+                      <span>{selectedPromo.full_name}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Phone #</span>
+                      <span>{String(selectedPromo.phone_number ?? "").trim() || "N/A"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Area</span>
+                      <span>{prettyArea(selectedPromo.area)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Seat</span>
+                      <span>{seatLabelPromo(selectedPromo.area, selectedPromo.seat_number)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Description</span>
+                      <span style={{ fontWeight: 800 }}>{selectedPromo.description || "-"}</span>
+                    </div>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Package</span>
+                      <span>{selectedPromo.package_title}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Option</span>
+                      <span>
+                        {selectedPromo.duration_value && selectedPromo.duration_unit
+                          ? `${selectedPromo.option_name} • ${formatDuration(
+                              Number(selectedPromo.duration_value),
+                              selectedPromo.duration_unit
+                            )}`
+                          : selectedPromo.option_name}
+                      </span>
+                    </div>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Start</span>
+                      <span>{formatDateTime(selectedPromo.start_at)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>End</span>
+                      <span>{formatDateTime(selectedPromo.end_at)}</span>
+                    </div>
+
+                    <hr />
+
+                    {(() => {
+                      const base = round2(Math.max(0, selectedPromo.price));
+                      const disc = applyDiscount(base, selectedPromo.discount_kind, selectedPromo.discount_value);
+                      const due = round2(disc.discountedCost);
+
+                      const paidTotal = round2(selectedPromo.gcash_amount + selectedPromo.cash_amount);
+                      const remaining = round2(Math.max(0, due - paidTotal));
+
+                      return (
+                        <>
+                          <div className="receipt-row">
+                            <span>System Cost (Before)</span>
+                            <span>{moneyText(base)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Discount</span>
+                            <span>{getDiscountText(selectedPromo.discount_kind, selectedPromo.discount_value)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Final Cost</span>
+                            <span>{moneyText(due)}</span>
+                          </div>
+
+                          <hr />
+
+                          <div className="receipt-row">
+                            <span>GCash</span>
+                            <span>{moneyText(selectedPromo.gcash_amount)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Cash</span>
+                            <span>{moneyText(selectedPromo.cash_amount)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Total Paid</span>
+                            <span>{moneyText(paidTotal)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Remaining</span>
+                            <span>{moneyText(remaining)}</span>
+                          </div>
+
+                          <div className="receipt-row">
+                            <span>Status</span>
+                            <span className="receipt-status">{selectedPromo.is_paid ? "PAID" : "UNPAID"}</span>
+                          </div>
+
+                          <div className="receipt-total">
+                            <span>TOTAL</span>
+                            <span>{moneyText(due)}</span>
+                          </div>
+                        </>
+                      );
+                    })()}
+
+                    <p className="receipt-footer">
+                      Cancelled record archived <br />
+                      <strong>Me Tyme Lounge</strong>
+                    </p>
+
+                    <button className="close-btn" onClick={() => setSelectedPromo(null)} type="button">
                       Close
                     </button>
                   </div>

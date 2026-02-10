@@ -4,6 +4,11 @@
 // ✅ strict TS (NO "any")
 // ✅ ADD Phone # in table + receipt + excel
 // ✅ NEW: Refresh button (reload list)
+// ✅ UPDATED: Payment modal is FREE INPUTS (same as Customer_Discount_List.tsx) — Cash & GCash can exceed due ✅
+// ✅ UPDATED: Action "Delete" replaced with "Cancel" (same cancel flow as Customer_Discount_List.tsx):
+//    - requires DESCRIPTION
+//    - copy to promo_bookings_cancelled
+//    - delete from promo_bookings
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -209,33 +214,7 @@ const applyDiscount = (
   return { discountedCost: round2(cost), discountAmount: 0 };
 };
 
-/**
- * ✅ Total Paid must equal Due.
- * If user edits GCash -> Cash auto updates.
- * If user edits Cash -> GCash auto updates.
- */
-const normalizePaymentToDue = (
-  due: number,
-  gcash: number,
-  cash: number,
-  edited: "gcash" | "cash"
-): { gcash: number; cash: number } => {
-  const d = round2(Math.max(0, due));
-  if (d <= 0) return { gcash: 0, cash: 0 };
-
-  const gIn = round2(Math.max(0, gcash));
-  const cIn = round2(Math.max(0, cash));
-
-  if (edited === "gcash") {
-    const g = round2(Math.min(d, gIn));
-    const c = round2(Math.max(0, d - g));
-    return { gcash: g, cash: c };
-  }
-
-  const c = round2(Math.min(d, cIn));
-  const g = round2(Math.max(0, d - c));
-  return { gcash: g, cash: c };
-};
+const moneyFromStr = (s: string): number => round2(Math.max(0, toNumber(s)));
 
 const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
   const kind = normalizeDiscountKind(row.discount_kind);
@@ -287,7 +266,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const [rows, setRows] = useState<PromoBookingRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [selected, setSelected] = useState<PromoBookingRow | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // ✅ NEW: refresh busy
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -299,11 +277,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
 
-  // ✅ date filter + delete by date
+  // ✅ date filter + delete by date (kept)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
   const [deletingDate, setDeletingDate] = useState<string | null>(null);
 
-  // payment modal
+  // payment modal (FREE INPUTS like Customer)
   const [paymentTarget, setPaymentTarget] = useState<PromoBookingRow | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
@@ -318,6 +296,13 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
   // paid toggle
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
+
+  // CANCEL modal (same as Customer_Discount_List)
+  const [cancelTarget, setCancelTarget] = useState<PromoBookingRow | null>(null);
+  const [cancelDesc, setCancelDesc] = useState<string>("");
+  const [cancelError, setCancelError] = useState<string>("");
+  const [cancelling, setCancelling] = useState<boolean>(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   const selectPromoBookings = `
     id,
@@ -347,10 +332,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const fetchPromoBookings = async (): Promise<void> => {
     setLoading(true);
 
-    const { data, error } = await supabase
-      .from("promo_bookings")
-      .select(selectPromoBookings)
-      .order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("promo_bookings").select(selectPromoBookings).order("created_at", {
+      ascending: false,
+    });
 
     if (error) {
       // eslint-disable-next-line no-console
@@ -620,48 +604,25 @@ const Admin_Customer_Discount_List: React.FC = () => {
     saveAs(blob, `admin_promo_records_${selectedDate}.xlsx`);
   };
 
-  /* ====== PAYMENT ====== */
+  /* ================= PAYMENT (FREE INPUTS like Customer_Discount_List) ================= */
 
   const openPaymentModal = (r: PromoBookingRow): void => {
-    const d = getDueAfterDiscount(r).due;
-    const pi = getPaidInfo(r);
-
-    const adj = normalizePaymentToDue(d, pi.gcash, pi.cash, "gcash");
-
     setPaymentTarget(r);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
-  };
-
-  const onChangeGcash = (r: PromoBookingRow, gcashStr: string): void => {
-    const d = getDueAfterDiscount(r).due;
-    const g = toNumber(gcashStr);
-    const c = toNumber(cashInput);
-    const adj = normalizePaymentToDue(d, g, c, "gcash");
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
-  };
-
-  const onChangeCash = (r: PromoBookingRow, cashStr: string): void => {
-    const d = getDueAfterDiscount(r).due;
-    const c = toNumber(cashStr);
-    const g = toNumber(gcashInput);
-    const adj = normalizePaymentToDue(d, g, c, "cash");
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+    setGcashInput(String(round2(Math.max(0, toNumber(r.gcash_amount)))));
+    setCashInput(String(round2(Math.max(0, toNumber(r.cash_amount)))));
   };
 
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = getDueAfterDiscount(paymentTarget).due;
+    const base = round2(Math.max(0, toNumber(paymentTarget.price)));
+    const calc = applyDiscount(base, paymentTarget.discount_kind, paymentTarget.discount_value);
+    const due = round2(calc.discountedCost);
 
-    const g = round2(Math.max(0, toNumber(gcashInput)));
-    const c = round2(Math.max(0, toNumber(cashInput)));
-    const adj = normalizePaymentToDue(due, g, c, "gcash");
-
-    const totalPaid = round2(adj.gcash + adj.cash);
-    const isPaidAuto = due > 0 ? totalPaid >= due : false;
+    const g = moneyFromStr(gcashInput);
+    const c = moneyFromStr(cashInput);
+    const totalPaid = round2(g + c);
+    const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
       setSavingPayment(true);
@@ -669,8 +630,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
       const { data, error } = await supabase
         .from("promo_bookings")
         .update({
-          gcash_amount: adj.gcash,
-          cash_amount: adj.cash,
+          gcash_amount: g,
+          cash_amount: c,
           is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
@@ -684,7 +645,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
       }
 
       const updated = normalizeRow(data as unknown as PromoBookingDBRow);
-
       setRows((prev) => prev.map((x) => (x.id === paymentTarget.id ? updated : x)));
       setSelected((prev) => (prev?.id === paymentTarget.id ? updated : prev));
       setPaymentTarget(null);
@@ -697,7 +657,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  /* ====== DISCOUNT ====== */
+  /* ================= DISCOUNT (keep payments as-is; no clamping) ================= */
 
   const openDiscountModal = (r: PromoBookingRow): void => {
     setDiscountTarget(r);
@@ -705,11 +665,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
     setDiscountValueInput(String(round2(toNumber(r.discount_value))));
     setDiscountReasonInput(String(r.discount_reason ?? ""));
 
-    const dueNow = getDueAfterDiscount(r).due;
-    const pi = getPaidInfo(r);
-    const adj = normalizePaymentToDue(dueNow, pi.gcash, pi.cash, "gcash");
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+    // keep current payments as-is (no clamping)
+    setGcashInput(String(round2(Math.max(0, toNumber(r.gcash_amount)))));
+    setCashInput(String(round2(Math.max(0, toNumber(r.cash_amount)))));
   };
 
   const saveDiscount = async (): Promise<void> => {
@@ -724,12 +682,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
     const calc = applyDiscount(base, discountKind, finalVal);
     const newDue = round2(calc.discountedCost);
 
-    const g = round2(Math.max(0, toNumber(gcashInput)));
-    const c = round2(Math.max(0, toNumber(cashInput)));
-    const adjPay = normalizePaymentToDue(newDue, g, c, "gcash");
+    const g = moneyFromStr(gcashInput);
+    const c = moneyFromStr(cashInput);
+    const totalPaid = round2(g + c);
 
-    const totalPaid = round2(adjPay.gcash + adjPay.cash);
-    const isPaidAuto = newDue > 0 ? totalPaid >= newDue : false;
+    const isPaidAuto = newDue <= 0 ? true : totalPaid >= newDue;
 
     try {
       setSavingDiscount(true);
@@ -741,8 +698,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
           discount_value: finalVal,
           discount_reason: discountReasonInput.trim() || null,
 
-          gcash_amount: adjPay.gcash,
-          cash_amount: adjPay.cash,
+          gcash_amount: g,
+          cash_amount: c,
           is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
@@ -825,56 +782,119 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  const deletePromoBooking = async (row: PromoBookingRow): Promise<void> => {
-    const ok = window.confirm(
-      `Delete this promo record?\n\n${row.full_name}\nPhone: ${safePhone(row.phone_number)}\n${prettyArea(row.area)} - ${seatLabel(
-        row
-      )}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
-    );
-    if (!ok) return;
+  /* ================= CANCEL FLOW (same as Customer_Discount_List) =================
+     ✅ Requires description
+     ✅ Copy row -> promo_bookings_cancelled
+     ✅ Delete from promo_bookings
+  */
+
+  const openCancelModal = (r: PromoBookingRow): void => {
+    setCancelTarget(r);
+    setCancelDesc("");
+    setCancelError("");
+  };
+
+  const runCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
+
+    const desc = cancelDesc.trim();
+    if (!desc) {
+      setCancelError("Description / reason is required.");
+      return;
+    }
 
     try {
-      setDeletingId(row.id);
+      setCancelling(true);
+      setCancellingId(cancelTarget.id);
+      setCancelError("");
 
-      const { error: csErr1 } = await supabase.from("customer_sessions").delete().eq("promo_booking_id", row.id);
+      const { data: fullRow, error: fullErr } = await supabase
+        .from("promo_bookings")
+        .select(
+          `
+          id,
+          created_at,
+          user_id,
+          full_name,
+          phone_number,
+          area,
+          package_id,
+          package_option_id,
+          seat_number,
+          start_at,
+          end_at,
+          price,
+          status,
+          gcash_amount,
+          cash_amount,
+          is_paid,
+          paid_at,
+          discount_reason,
+          discount_kind,
+          discount_value
+        `
+        )
+        .eq("id", cancelTarget.id)
+        .single();
 
-      if (csErr1 && /promo_booking_id/i.test(csErr1.message)) {
-        const seat = row.area === "conference_room" ? "CONFERENCE ROOM" : row.seat_number ?? "";
-
-        const { error: csErr2 } = await supabase
-          .from("customer_sessions")
-          .delete()
-          .eq("customer_type", "promo")
-          .eq("full_name", row.full_name)
-          .eq("seat_number", seat)
-          .eq("time_started", row.start_at)
-          .eq("time_ended", row.end_at);
-
-        if (csErr2) {
-          alert(`Delete customer session error: ${csErr2.message}`);
-          return;
-        }
-      } else if (csErr1) {
-        alert(`Delete customer session error: ${csErr1.message}`);
+      if (fullErr || !fullRow) {
+        setCancelError(`Failed to load booking: ${fullErr?.message ?? "Unknown error"}`);
         return;
       }
 
-      const { data, error } = await supabase.from("promo_bookings").delete().eq("id", row.id).select("id").maybeSingle();
+      const { error: insErr } = await supabase.from("promo_bookings_cancelled").insert({
+        original_id: fullRow.id,
+        description: desc,
 
-      if (error) {
-        alert(`Delete promo error: ${error.message}`);
+        created_at: fullRow.created_at,
+        user_id: fullRow.user_id ?? null,
+        full_name: fullRow.full_name,
+        phone_number: fullRow.phone_number ?? null,
+
+        area: fullRow.area,
+        package_id: fullRow.package_id,
+        package_option_id: fullRow.package_option_id,
+
+        seat_number: fullRow.seat_number ?? null,
+        start_at: fullRow.start_at,
+        end_at: fullRow.end_at,
+
+        price: fullRow.price ?? 0,
+        status: fullRow.status ?? "pending",
+
+        gcash_amount: fullRow.gcash_amount ?? 0,
+        cash_amount: fullRow.cash_amount ?? 0,
+        is_paid: Boolean(fullRow.is_paid),
+        paid_at: fullRow.paid_at ?? null,
+
+        discount_reason: fullRow.discount_reason ?? null,
+        discount_kind: String(fullRow.discount_kind ?? "none"),
+        discount_value: fullRow.discount_value ?? 0,
+      });
+
+      if (insErr) {
+        setCancelError(`Cancel save failed: ${insErr.message}`);
         return;
       }
 
-      if (!data?.id) {
-        alert("Delete failed: not permitted by RLS or record not found.");
+      const { error: delErr } = await supabase.from("promo_bookings").delete().eq("id", cancelTarget.id);
+      if (delErr) {
+        setCancelError(
+          `Inserted to cancelled, but delete failed: ${delErr.message}. (You may now have duplicate if you retry.)`
+        );
         return;
       }
 
-      setRows((prev) => prev.filter((x) => x.id !== row.id));
-      setSelected((prev) => (prev?.id === row.id ? null : prev));
+      setRows((prev) => prev.filter((x) => x.id !== cancelTarget.id));
+      setSelected((prev) => (prev?.id === cancelTarget.id ? null : prev));
+      setCancelTarget(null);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      setCancelError("Cancel failed (unexpected error).");
     } finally {
-      setDeletingId(null);
+      setCancelling(false);
+      setCancellingId(null);
     }
   };
 
@@ -893,7 +913,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
     try {
       setDeletingDate(selectedDate);
 
-      const { error } = await supabase.from("promo_bookings").delete().gte("created_at", range.startIso).lt("created_at", range.endIso);
+      const { error } = await supabase
+        .from("promo_bookings")
+        .delete()
+        .gte("created_at", range.startIso)
+        .lt("created_at", range.endIso);
 
       if (error) {
         alert(`Delete by date error: ${error.message}`);
@@ -938,7 +962,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
               </label>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                {/* ✅ NEW: Refresh */}
                 <button className="receipt-btn" onClick={() => void refreshAll()} disabled={loading || refreshing}>
                   {refreshing ? "Refreshing..." : "Refresh"}
                 </button>
@@ -1057,8 +1080,13 @@ const Admin_Customer_Discount_List: React.FC = () => {
                               View Receipt
                             </button>
 
-                            <button className="receipt-btn" disabled={deletingId === r.id} onClick={() => void deletePromoBooking(r)}>
-                              {deletingId === r.id ? "Deleting..." : "Delete"}
+                            {/* ✅ REPLACED DELETE with CANCEL */}
+                            <button
+                              className="receipt-btn"
+                              disabled={cancelling || cancellingId === r.id}
+                              onClick={() => openCancelModal(r)}
+                            >
+                              {cancellingId === r.id ? "Cancelling..." : "Cancel"}
                             </button>
                           </div>
                         </td>
@@ -1070,25 +1098,69 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL */}
+          {/* CANCEL MODAL (requires description) */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancelling ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL PROMO</h3>
+                <p className="receipt-subtitle">
+                  {cancelTarget.full_name} • {safePhone(cancelTarget.phone_number)}
+                </p>
+
+                <hr />
+
+                <div className="receipt-row" style={{ alignItems: "flex-start" }}>
+                  <span style={{ paddingTop: 6 }}>Description</span>
+                  <div style={{ width: "100%" }}>
+                    <textarea
+                      className="reason-input"
+                      style={{ width: "100%", minHeight: 90, resize: "vertical" }}
+                      value={cancelDesc}
+                      onChange={(e) => setCancelDesc(e.currentTarget.value)}
+                      placeholder="Required: reason / description for cancellation..."
+                      disabled={cancelling}
+                    />
+                    {cancelError ? <div style={{ marginTop: 8, color: "#b00020", fontSize: 12 }}>{cancelError}</div> : null}
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancelling}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void runCancel()} disabled={cancelling}>
+                    {cancelling ? "Cancelling..." : "Confirm Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PAYMENT MODAL (FREE INPUTS like Customer) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">PAYMENT</h3>
-                <p className="receipt-subtitle">{paymentTarget.full_name}</p>
+                <p className="receipt-subtitle">
+                  {paymentTarget.full_name} • {safePhone(paymentTarget.phone_number)}
+                </p>
 
                 <hr />
 
                 {(() => {
-                  const { due } = getDueAfterDiscount(paymentTarget);
+                  const base = round2(Math.max(0, toNumber(paymentTarget.price)));
+                  const calc = applyDiscount(base, paymentTarget.discount_kind, paymentTarget.discount_value);
+                  const due = round2(calc.discountedCost);
 
-                  const gIn = round2(Math.max(0, toNumber(gcashInput)));
-                  const cIn = round2(Math.max(0, toNumber(cashInput)));
-                  const adj = normalizePaymentToDue(due, gIn, cIn, "gcash");
+                  const g = moneyFromStr(gcashInput);
+                  const c = moneyFromStr(cashInput);
+                  const totalPaid = round2(g + c);
 
-                  const totalPaid = round2(adj.gcash + adj.cash);
-                  const remaining = round2(Math.max(0, due - totalPaid));
-                  const willPaid = due > 0 && totalPaid >= due;
+                  const remainingSigned = round2(due - totalPaid);
+                  const isChange = remainingSigned < 0;
+                  const remainingAbs = round2(Math.abs(remainingSigned));
+
+                  const willPaid = due <= 0 ? true : totalPaid >= due;
 
                   return (
                     <>
@@ -1105,7 +1177,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={gcashInput}
-                          onChange={(e) => onChangeGcash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setGcashInput(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1117,7 +1189,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={cashInput}
-                          onChange={(e) => onChangeCash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setCashInput(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1129,13 +1201,13 @@ const Admin_Customer_Discount_List: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining</span>
-                        <span>₱{remaining.toFixed(2)}</span>
+                        <span>{isChange ? "Change" : "Remaining"}</span>
+                        <span>₱{remainingAbs.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Auto Status</span>
-                        <span style={{ fontWeight: 900 }}>{willPaid ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">{willPaid ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       <div className="modal-actions">
@@ -1158,7 +1230,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">DISCOUNT</h3>
-                <p className="receipt-subtitle">{discountTarget.full_name}</p>
+                <p className="receipt-subtitle">
+                  {discountTarget.full_name} • {safePhone(discountTarget.phone_number)}
+                </p>
 
                 <hr />
 
@@ -1204,13 +1278,17 @@ const Admin_Customer_Discount_List: React.FC = () => {
                   const val = discountKind === "percent" ? clamp(Math.max(0, rawVal), 0, 100) : Math.max(0, rawVal);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, val);
+                  const due = round2(discountedCost);
 
-                  const gIn = round2(Math.max(0, toNumber(gcashInput)));
-                  const cIn = round2(Math.max(0, toNumber(cashInput)));
-                  const adjPay = normalizePaymentToDue(discountedCost, gIn, cIn, "gcash");
+                  const g = moneyFromStr(gcashInput);
+                  const c = moneyFromStr(cashInput);
+                  const totalPaid = round2(g + c);
 
-                  const totalPaid = round2(adjPay.gcash + adjPay.cash);
-                  const willPaid = discountedCost > 0 && totalPaid >= discountedCost;
+                  const remainingSigned = round2(due - totalPaid);
+                  const isChange = remainingSigned < 0;
+                  const remainingAbs = round2(Math.abs(remainingSigned));
+
+                  const willPaid = due <= 0 ? true : totalPaid >= due;
 
                   return (
                     <>
@@ -1233,24 +1311,29 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Final System Cost</span>
-                        <span>₱{round2(discountedCost).toFixed(2)}</span>
+                        <span>₱{round2(due).toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-total">
                         <span>NEW TOTAL BALANCE</span>
-                        <span>₱{round2(discountedCost).toFixed(2)}</span>
+                        <span>₱{round2(due).toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
-                        <span>Auto Payment After</span>
+                        <span>Current Payment</span>
                         <span>
-                          GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                          GCash ₱{g.toFixed(2)} / Cash ₱{c.toFixed(2)}
                         </span>
                       </div>
 
                       <div className="receipt-row">
+                        <span>{isChange ? "Change" : "Remaining"}</span>
+                        <span>₱{remainingAbs.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
                         <span>Auto Paid</span>
-                        <span style={{ fontWeight: 900 }}>{willPaid ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">{willPaid ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       <div className="modal-actions">
