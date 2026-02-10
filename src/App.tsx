@@ -40,11 +40,20 @@ setupIonicReact();
 /* 🔔 ALERT TIMES */
 const ALERT_MINUTES: number[] = [5, 3, 1];
 
+/**
+ * ✅ IMPORTANT:
+ * Sa system mo, end time = "time_out" (from Customer Lists screenshot).
+ * If iba name mo, palitan mo lang ito.
+ */
+const END_COL = "time_out";
+
 type CustomerSessionRow = {
   id: string;
   full_name: string;
   seat_number: string | string[] | null;
-  time_ended: string; // timestamptz ISO
+
+  // ✅ end time column (timestamptz)
+  time_out: string | null;
 };
 
 const getRole = (): string => (localStorage.getItem("role") || "").toLowerCase();
@@ -54,10 +63,16 @@ const seatText = (seat: CustomerSessionRow["seat_number"]): string => {
   return seat ?? "";
 };
 
-const minuteDiff = (endIso: string, now: Date): number => {
-  const end = new Date(endIso);
-  const ms = end.getTime() - now.getTime();
-  return Math.floor(ms / 60000);
+/**
+ * ✅ FIX:
+ * Use CEIL so 4:59 => 5 minutes left
+ */
+const minutesLeftCeil = (endIso: string): number => {
+  const end = new Date(endIso).getTime();
+  const now = Date.now();
+  const ms = end - now;
+  if (!Number.isFinite(ms) || ms <= 0) return 0;
+  return Math.ceil(ms / 60000);
 };
 
 const App: React.FC = () => {
@@ -76,25 +91,25 @@ const App: React.FC = () => {
 
   // ✅ keep role updated if login changes localStorage role
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setRole(getRole());
-    }, 800);
+    const id = window.setInterval(() => setRole(getRole()), 800);
     return () => window.clearInterval(id);
   }, []);
 
   const fireAlertIfNeeded = (session: CustomerSessionRow): void => {
-    const now = new Date();
-    const diffMinutes = minuteDiff(session.time_ended, now);
+    const endIso = session.time_out;
+    if (!endIso) return;
 
-    if (!ALERT_MINUTES.includes(diffMinutes)) return;
+    const mLeft = minutesLeftCeil(endIso);
+    if (mLeft <= 0) return;
+    if (!ALERT_MINUTES.includes(mLeft)) return;
 
-    const key = `${session.id}-${diffMinutes}`;
+    const key = `${session.id}-${mLeft}`;
     if (triggeredRef.current.has(key)) return;
 
     triggeredRef.current.add(key);
 
     setAlertMessage(`
-      <h2>⏰ ${diffMinutes} MINUTE(S) LEFT</h2>
+      <h2>⏰ ${mLeft} MINUTE(S) LEFT</h2>
       <p>
         <strong>Customer:</strong> ${session.full_name}<br/>
         <strong>Seat:</strong> ${seatText(session.seat_number)}
@@ -107,10 +122,13 @@ const App: React.FC = () => {
   const loadActiveSessions = async (): Promise<void> => {
     const nowIso = new Date().toISOString();
 
+    // ✅ Only sessions that are still in the future
+    // NOTE: If time_out can be null for OPEN sessions, we ignore those.
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select("id, full_name, seat_number, time_ended")
-      .gt("time_ended", nowIso);
+      .select(`id, full_name, seat_number, ${END_COL}`)
+      .not(END_COL, "is", null)
+      .gt(END_COL, nowIso);
 
     if (error || !data) return;
 
@@ -120,7 +138,6 @@ const App: React.FC = () => {
     rows.forEach((r) => map.set(r.id, r));
     sessionsRef.current = map;
 
-    // check immediately
     rows.forEach((r) => fireAlertIfNeeded(r));
   };
 
@@ -133,12 +150,10 @@ const App: React.FC = () => {
       return;
     }
 
-    // initial load
     void loadActiveSessions();
 
-    // ✅ realtime subscribe (NO status callback — fixes your error)
     const ch = supabase
-      .channel("realtime_customer_sessions_time_ended")
+      .channel("realtime_customer_sessions_end_alerts")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "customer_sessions" },
@@ -159,8 +174,11 @@ const App: React.FC = () => {
 
           sessionsRef.current.set(row.id, row);
 
-          // if ended, remove
-          if (new Date(row.time_ended).getTime() <= Date.now()) {
+          const endIso = row.time_out;
+          if (!endIso) return;
+
+          // remove if ended
+          if (new Date(endIso).getTime() <= Date.now()) {
             sessionsRef.current.delete(row.id);
             return;
           }
@@ -178,25 +196,25 @@ const App: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ lightweight tick every 15s
+    // ✅ tick every 10s to avoid skipping 5/3/1
     const tick = window.setInterval(() => {
-      const now = new Date();
+      const now = Date.now();
+      const list = Array.from(sessionsRef.current.values());
 
-      const current = Array.from(sessionsRef.current.values());
-      current.forEach((s) => {
-        if (new Date(s.time_ended).getTime() <= now.getTime()) {
+      list.forEach((s) => {
+        const endIso = s.time_out;
+        if (!endIso) return;
+
+        if (new Date(endIso).getTime() <= now) {
           sessionsRef.current.delete(s.id);
           return;
         }
+
         fireAlertIfNeeded(s);
       });
-    }, 15000);
+    }, 10000);
 
-    // ✅ refresh on focus/visible
-    const onFocus = (): void => {
-      void loadActiveSessions();
-    };
-
+    const onFocus = (): void => void loadActiveSessions();
     const onVis = (): void => {
       if (document.visibilityState === "visible") void loadActiveSessions();
     };
