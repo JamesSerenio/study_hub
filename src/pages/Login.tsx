@@ -1,3 +1,4 @@
+// src/pages/Login.tsx
 import React, { useState } from "react";
 import { useHistory } from "react-router-dom";
 import {
@@ -70,7 +71,6 @@ const Login: React.FC = () => {
         return;
       }
 
-      // ✅ safest: check session + user
       if (!data.session || !data.user) {
         showError("Login failed. No session returned.");
         return;
@@ -87,10 +87,17 @@ const Login: React.FC = () => {
         return;
       }
 
+      const role = (profile?.role || "").toLowerCase();
+
+      // ✅ IMPORTANT: store role so App.tsx can detect staff and run alerts
+      localStorage.setItem("role", role);
+
+      // ✅ optional (helpful for debugging / future use)
+      localStorage.setItem("user_id", data.user.id);
+      localStorage.setItem("email", emailClean);
+
       setToastMsg("Login successful!");
       setShowToast(true);
-
-      const role = (profile?.role || "").toLowerCase();
 
       if (role === "staff") history.replace("/staff-menu");
       else if (role === "admin") history.replace("/admin-menu");
@@ -120,11 +127,7 @@ const Login: React.FC = () => {
         <div className="login-wrapper">
           <div className="login-box">
             <div className="login-header">
-              <img
-                src={studyHubLogo}
-                alt="Study Hub Logo"
-                className="login-logo"
-              />
+              <img src={studyHubLogo} alt="Study Hub Logo" className="login-logo" />
               <h2>Login</h2>
             </div>
 
@@ -147,9 +150,7 @@ const Login: React.FC = () => {
 
             <IonItem
               lines="none"
-              className={`input-item ${
-                passwordFocused ? "item-has-focus" : ""
-              }`}
+              className={`input-item ${passwordFocused ? "item-has-focus" : ""}`}
             >
               <IonIcon icon={lockClosedOutline} className="input-icon" />
               <IonInput

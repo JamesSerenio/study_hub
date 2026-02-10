@@ -41,14 +41,7 @@ setupIonicReact();
 /* 🔔 ALERT TIMES */
 const ALERT_MINUTES: number[] = [5, 3, 1];
 
-const getRole = (): string => (localStorage.getItem("role") || "").toLowerCase();
-
-const seatText = (seat: string | string[] | null | undefined): string => {
-  if (Array.isArray(seat)) return seat.join(", ");
-  return seat ?? "";
-};
-
-/** ✅ 4:59 => 5 minutes left */
+/** 4:59 => 5 minutes left */
 const minutesLeftCeil = (endIso: string): number => {
   const end = new Date(endIso).getTime();
   const now = Date.now();
@@ -57,11 +50,19 @@ const minutesLeftCeil = (endIso: string): number => {
   return Math.ceil(ms / 60000);
 };
 
+const seatText = (seat: string | string[] | null | undefined): string => {
+  if (Array.isArray(seat)) return seat.join(", ");
+  return seat ?? "";
+};
+
 /* =========================
    DB TYPES (MATCH YOUR DB)
 ========================= */
 
-// ✅ customer_sessions (walk-in / reservation / promo-link)
+type ProfileRow = {
+  role: string | null;
+};
+
 type CustomerSessionRow = {
   id: string;
   created_at: string | null;
@@ -78,7 +79,6 @@ type CustomerSessionRow = {
   promo_booking_id: string | null;
 };
 
-// ✅ promo_bookings (extra safety)
 type PromoBookingRow = {
   id: string;
   created_at: string;
@@ -107,11 +107,14 @@ const kindLabel = (k: AlertItem["kind"]): string => {
   return "PROMO / MEMBERSHIP";
 };
 
+const getRoleLocal = (): string => (localStorage.getItem("role") || "").toLowerCase();
+
 const App: React.FC = () => {
   const [showAlert, setShowAlert] = useState<boolean>(false);
   const [alertMessage, setAlertMessage] = useState<string>("");
 
-  const [role, setRole] = useState<string>(getRole());
+  // ✅ role state (starts from local, then verified by Supabase)
+  const [role, setRole] = useState<string>(getRoleLocal());
   const isStaff = useMemo(() => role === "staff", [role]);
 
   // prevent duplicates: "<kind>-<id>-<minute>"
@@ -121,11 +124,59 @@ const App: React.FC = () => {
   const sessionsRef = useRef<Map<string, CustomerSessionRow>>(new Map());
   const promosRef = useRef<Map<string, PromoBookingRow>>(new Map());
 
+  /* =========================
+     ✅ ALWAYS SYNC ROLE FROM SUPABASE
+  ========================= */
+  const syncRoleFromSupabase = async (): Promise<void> => {
+    const { data: sess } = await supabase.auth.getSession();
+    const user = sess.session?.user;
+
+    if (!user?.id) {
+      // logged out
+      localStorage.removeItem("role");
+      setRole("");
+      return;
+    }
+
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle<ProfileRow>();
+
+    if (error) {
+      // fallback to local
+      setRole(getRoleLocal());
+      return;
+    }
+
+    const r = (profile?.role || "").toLowerCase();
+    localStorage.setItem("role", r);
+    setRole(r);
+  };
+
   useEffect(() => {
-    const id = window.setInterval(() => setRole(getRole()), 800);
-    return () => window.clearInterval(id);
+    void syncRoleFromSupabase();
+
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      void syncRoleFromSupabase();
+    });
+
+    // also update when localStorage changes (multi-tab)
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key === "role") setRole(getRoleLocal());
+    };
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      sub.subscription.unsubscribe();
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
+  /* =========================
+     ALERT LOGIC
+  ========================= */
   const fireAlert = (item: AlertItem): void => {
     const mLeft = minutesLeftCeil(item.end_iso);
     if (!ALERT_MINUTES.includes(mLeft)) return;
@@ -188,7 +239,7 @@ const App: React.FC = () => {
         id: p.id,
         kind: "promo",
         full_name: p.full_name,
-        seat_number: p.area === "conference_room" ? "CONFERENCE ROOM" : (p.seat_number ?? "-"),
+        seat_number: p.area === "conference_room" ? "CONFERENCE ROOM" : p.seat_number ?? "-",
         end_iso: p.end_at,
       });
     });
@@ -205,11 +256,7 @@ const App: React.FC = () => {
       .order("time_ended", { ascending: true })
       .limit(400);
 
-    if (error || !data) {
-      // optional debug:
-      // console.log("loadActiveCustomerSessions error:", error?.message);
-      return;
-    }
+    if (error || !data) return;
 
     const rows = data as CustomerSessionRow[];
     const map = new Map<string, CustomerSessionRow>();
@@ -227,11 +274,7 @@ const App: React.FC = () => {
       .order("end_at", { ascending: true })
       .limit(400);
 
-    if (error || !data) {
-      // optional debug:
-      // console.log("loadActivePromos error:", error?.message);
-      return;
-    }
+    if (error || !data) return;
 
     const rows = data as PromoBookingRow[];
     const map = new Map<string, PromoBookingRow>();
@@ -239,6 +282,9 @@ const App: React.FC = () => {
     promosRef.current = map;
   };
 
+  /* =========================
+     STAFF-ONLY SUBSCRIPTIONS
+  ========================= */
   useEffect(() => {
     if (!isStaff) {
       setShowAlert(false);
@@ -248,14 +294,15 @@ const App: React.FC = () => {
       return;
     }
 
-    // ✅ initial load then immediate check
+    let alive = true;
+
+    // initial load + immediate check
     (async () => {
       await loadActiveCustomerSessions();
       await loadActivePromos();
-      tickCheckAll();
+      if (alive) tickCheckAll();
     })();
 
-    // ✅ realtime: customer_sessions
     const chSessions = supabase
       .channel("rt_customer_sessions_alerts")
       .on(
@@ -288,7 +335,6 @@ const App: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ realtime: promo_bookings
     const chPromos = supabase
       .channel("rt_promo_bookings_alerts")
       .on(
@@ -321,12 +367,9 @@ const App: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ tick every 2s (no skip)
-    const tick = window.setInterval(() => {
-      tickCheckAll();
-    }, 2000);
+    // ✅ tick every 1s (para sure hindi mamiss 5/3/1)
+    const tick = window.setInterval(() => tickCheckAll(), 1000);
 
-    // ✅ refresh on focus/visible
     const refresh = (): void => {
       void loadActiveCustomerSessions();
       void loadActivePromos();
@@ -341,9 +384,12 @@ const App: React.FC = () => {
     document.addEventListener("visibilitychange", onVis);
 
     return () => {
+      alive = false;
+
       window.clearInterval(tick);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVis);
+
       void supabase.removeChannel(chSessions);
       void supabase.removeChannel(chPromos);
     };
