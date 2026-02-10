@@ -1,3 +1,4 @@
+// src/App.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonApp, IonRouterOutlet, setupIonicReact } from "@ionic/react";
 import { IonReactRouter } from "@ionic/react-router";
@@ -40,33 +41,14 @@ setupIonicReact();
 /* 🔔 ALERT TIMES */
 const ALERT_MINUTES: number[] = [5, 3, 1];
 
-/**
- * ✅ IMPORTANT:
- * Sa system mo, end time = "time_out" (from Customer Lists screenshot).
- * If iba name mo, palitan mo lang ito.
- */
-const END_COL = "time_out";
-
-type CustomerSessionRow = {
-  id: string;
-  full_name: string;
-  seat_number: string | string[] | null;
-
-  // ✅ end time column (timestamptz)
-  time_out: string | null;
-};
-
 const getRole = (): string => (localStorage.getItem("role") || "").toLowerCase();
 
-const seatText = (seat: CustomerSessionRow["seat_number"]): string => {
+const seatText = (seat: string | string[] | null | undefined): string => {
   if (Array.isArray(seat)) return seat.join(", ");
   return seat ?? "";
 };
 
-/**
- * ✅ FIX:
- * Use CEIL so 4:59 => 5 minutes left
- */
+/** ✅ 4:59 => 5 minutes left */
 const minutesLeftCeil = (endIso: string): number => {
   const end = new Date(endIso).getTime();
   const now = Date.now();
@@ -75,94 +57,199 @@ const minutesLeftCeil = (endIso: string): number => {
   return Math.ceil(ms / 60000);
 };
 
+/* =========================
+   DATA TYPES
+========================= */
+
+type CustomerSessionRow = {
+  id: string;
+  created_at: string | null;
+  full_name: string;
+  seat_number: string | string[] | null;
+
+  // ✅ based on your table: customer_sessions.time_ended
+  time_ended: string;
+
+  // ✅ from your table: reservation text default 'no'
+  reservation: string; // "yes" | "no"
+
+  // ✅ from your table: promo link
+  promo_booking_id: string | null;
+};
+
+type PromoBookingRow = {
+  id: string;
+  created_at: string;
+  full_name: string;
+
+  area: "common_area" | "conference_room";
+  seat_number: string | null;
+
+  start_at: string;
+  end_at: string;
+
+  status: string; // pending/approved/paid/etc
+};
+
+type AlertItem = {
+  id: string;
+  kind: "walkin" | "reservation" | "promo";
+  full_name: string;
+  seat_number: string;
+  end_iso: string;
+};
+
+const kindLabel = (k: AlertItem["kind"]): string => {
+  if (k === "walkin") return "WALK-IN";
+  if (k === "reservation") return "RESERVATION";
+  return "PROMO / MEMBERSHIP";
+};
+
 const App: React.FC = () => {
   const [showAlert, setShowAlert] = useState<boolean>(false);
   const [alertMessage, setAlertMessage] = useState<string>("");
 
-  // ✅ staff guard
   const [role, setRole] = useState<string>(getRole());
   const isStaff = useMemo(() => role === "staff", [role]);
 
-  /* avoid duplicate alerts: id-minute */
+  // prevent duplicates: "<kind>-<id>-<minute>"
   const triggeredRef = useRef<Set<string>>(new Set());
 
-  /* keep latest sessions in memory (staff only) */
+  // keep latest rows in memory
   const sessionsRef = useRef<Map<string, CustomerSessionRow>>(new Map());
+  const promosRef = useRef<Map<string, PromoBookingRow>>(new Map());
 
-  // ✅ keep role updated if login changes localStorage role
   useEffect(() => {
     const id = window.setInterval(() => setRole(getRole()), 800);
     return () => window.clearInterval(id);
   }, []);
 
-  const fireAlertIfNeeded = (session: CustomerSessionRow): void => {
-    const endIso = session.time_out;
-    if (!endIso) return;
-
-    const mLeft = minutesLeftCeil(endIso);
-    if (mLeft <= 0) return;
+  const fireAlert = (item: AlertItem): void => {
+    const mLeft = minutesLeftCeil(item.end_iso);
     if (!ALERT_MINUTES.includes(mLeft)) return;
 
-    const key = `${session.id}-${mLeft}`;
+    const key = `${item.kind}-${item.id}-${mLeft}`;
     if (triggeredRef.current.has(key)) return;
-
     triggeredRef.current.add(key);
 
     setAlertMessage(`
       <h2>⏰ ${mLeft} MINUTE(S) LEFT</h2>
       <p>
-        <strong>Customer:</strong> ${session.full_name}<br/>
-        <strong>Seat:</strong> ${seatText(session.seat_number)}
+        <strong>Type:</strong> ${kindLabel(item.kind)}<br/>
+        <strong>Customer:</strong> ${item.full_name}<br/>
+        <strong>Seat:</strong> ${item.seat_number || "-"}
       </p>
     `);
 
     setShowAlert(true);
   };
 
-  const loadActiveSessions = async (): Promise<void> => {
+  const tickCheckAll = (): void => {
+    const now = Date.now();
+
+    // customer_sessions
+    Array.from(sessionsRef.current.values()).forEach((s) => {
+      const endMs = new Date(s.time_ended).getTime();
+
+      if (!Number.isFinite(endMs) || endMs <= now) {
+        sessionsRef.current.delete(s.id);
+        return;
+      }
+
+      const kind: AlertItem["kind"] =
+        s.promo_booking_id ? "promo" : String(s.reservation ?? "").toLowerCase() === "yes" ? "reservation" : "walkin";
+
+      fireAlert({
+        id: s.id,
+        kind,
+        full_name: s.full_name,
+        seat_number: seatText(s.seat_number),
+        end_iso: s.time_ended,
+      });
+    });
+
+    // promo_bookings (extra safety if you also want alerts even without customer_sessions link)
+    Array.from(promosRef.current.values()).forEach((p) => {
+      const endMs = new Date(p.end_at).getTime();
+
+      if (!Number.isFinite(endMs) || endMs <= now) {
+        promosRef.current.delete(p.id);
+        return;
+      }
+
+      fireAlert({
+        id: p.id,
+        kind: "promo",
+        full_name: p.full_name,
+        seat_number: p.area === "conference_room" ? "CONFERENCE ROOM" : (p.seat_number ?? "-"),
+        end_iso: p.end_at,
+      });
+    });
+  };
+
+  const loadActiveCustomerSessions = async (): Promise<void> => {
     const nowIso = new Date().toISOString();
 
-    // ✅ Only sessions that are still in the future
-    // NOTE: If time_out can be null for OPEN sessions, we ignore those.
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select(`id, full_name, seat_number, ${END_COL}`)
-      .not(END_COL, "is", null)
-      .gt(END_COL, nowIso);
+      .select("id, created_at, full_name, seat_number, time_ended, reservation, promo_booking_id")
+      .gt("time_ended", nowIso)
+      .order("time_ended", { ascending: true })
+      .limit(400);
 
     if (error || !data) return;
 
     const rows = data as CustomerSessionRow[];
-
     const map = new Map<string, CustomerSessionRow>();
     rows.forEach((r) => map.set(r.id, r));
     sessionsRef.current = map;
-
-    rows.forEach((r) => fireAlertIfNeeded(r));
   };
 
-  /* ✅ REALTIME + LIGHT TICK (STAFF ONLY) */
+  const loadActivePromos = async (): Promise<void> => {
+    const nowIso = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from("promo_bookings")
+      .select("id, created_at, full_name, seat_number, area, start_at, end_at, status")
+      .gt("end_at", nowIso)
+      .order("end_at", { ascending: true })
+      .limit(400);
+
+    if (error || !data) return;
+
+    const rows = data as PromoBookingRow[];
+    const map = new Map<string, PromoBookingRow>();
+    rows.forEach((r) => map.set(r.id, r));
+    promosRef.current = map;
+  };
+
   useEffect(() => {
     if (!isStaff) {
       setShowAlert(false);
       triggeredRef.current.clear();
       sessionsRef.current.clear();
+      promosRef.current.clear();
       return;
     }
 
-    void loadActiveSessions();
+    // ✅ initial load then immediate check (IMPORTANT!)
+    (async () => {
+      await loadActiveCustomerSessions();
+      await loadActivePromos();
+      tickCheckAll(); // ✅ do NOT wait for tick
+    })();
 
-    const ch = supabase
-      .channel("realtime_customer_sessions_end_alerts")
+    // ✅ realtime: customer_sessions
+    const chSessions = supabase
+      .channel("rt_customer_sessions_alerts")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "customer_sessions" },
         (payload: RealtimePostgresInsertPayload<CustomerSessionRow>) => {
           const row = payload.new;
           if (!row?.id) return;
-
           sessionsRef.current.set(row.id, row);
-          fireAlertIfNeeded(row);
+          tickCheckAll();
         }
       )
       .on(
@@ -171,19 +258,8 @@ const App: React.FC = () => {
         (payload: RealtimePostgresUpdatePayload<CustomerSessionRow>) => {
           const row = payload.new;
           if (!row?.id) return;
-
           sessionsRef.current.set(row.id, row);
-
-          const endIso = row.time_out;
-          if (!endIso) return;
-
-          // remove if ended
-          if (new Date(endIso).getTime() <= Date.now()) {
-            sessionsRef.current.delete(row.id);
-            return;
-          }
-
-          fireAlertIfNeeded(row);
+          tickCheckAll();
         }
       )
       .on(
@@ -196,37 +272,66 @@ const App: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ tick every 10s to avoid skipping 5/3/1
-    const tick = window.setInterval(() => {
-      const now = Date.now();
-      const list = Array.from(sessionsRef.current.values());
-
-      list.forEach((s) => {
-        const endIso = s.time_out;
-        if (!endIso) return;
-
-        if (new Date(endIso).getTime() <= now) {
-          sessionsRef.current.delete(s.id);
-          return;
+    // ✅ realtime: promo_bookings
+    const chPromos = supabase
+      .channel("rt_promo_bookings_alerts")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "promo_bookings" },
+        (payload: RealtimePostgresInsertPayload<PromoBookingRow>) => {
+          const row = payload.new;
+          if (!row?.id) return;
+          promosRef.current.set(row.id, row);
+          tickCheckAll();
         }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "promo_bookings" },
+        (payload: RealtimePostgresUpdatePayload<PromoBookingRow>) => {
+          const row = payload.new;
+          if (!row?.id) return;
+          promosRef.current.set(row.id, row);
+          tickCheckAll();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "promo_bookings" },
+        (payload: RealtimePostgresDeletePayload<PromoBookingRow>) => {
+          const oldRow = payload.old;
+          if (oldRow?.id) promosRef.current.delete(oldRow.id);
+        }
+      )
+      .subscribe();
 
-        fireAlertIfNeeded(s);
-      });
-    }, 10000);
+    // ✅ tick every 2s (no skip)
+    const tick = window.setInterval(() => {
+      tickCheckAll();
+    }, 2000);
 
-    const onFocus = (): void => void loadActiveSessions();
-    const onVis = (): void => {
-      if (document.visibilityState === "visible") void loadActiveSessions();
+    // ✅ refresh on focus/visible (Vercel/Chrome throttling safe)
+    const refresh = (): void => {
+      void loadActiveCustomerSessions();
+      void loadActivePromos();
+      // then check after a short delay so refs updated
+      window.setTimeout(() => tickCheckAll(), 150);
     };
 
-    window.addEventListener("focus", onFocus);
+    const onVis = (): void => {
+      if (document.visibilityState === "visible") refresh();
+    };
+
+    window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", onVis);
 
     return () => {
       window.clearInterval(tick);
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVis);
-      void supabase.removeChannel(ch);
+
+      void supabase.removeChannel(chSessions);
+      void supabase.removeChannel(chPromos);
     };
   }, [isStaff]);
 
