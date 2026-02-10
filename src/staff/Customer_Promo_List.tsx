@@ -12,6 +12,7 @@
 //    - label switches instantly (force re-render)
 //    - Close stops view (only if it is currently viewing this receipt)
 // ✅ NEW: Search bar (Full Name) beside Date (same classnames as Customer_Lists)
+// ✅ NEW: Refresh button beside Date filter (same style)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -305,12 +306,13 @@ const Customer_Discount_List: React.FC = () => {
 
   const viewHydratedRef = useRef<boolean>(false);
 
+  // ✅ refresh busy
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+
   const applyViewState = (enabled: boolean, sessionId: string): void => {
     setViewEnabled(enabled);
     setViewSessionId(sessionId);
-    // keep EXACT localStorage keys
     writeLocalView(enabled, enabled ? sessionId : null);
-    // force instant label switch
     setViewTick((x) => x + 1);
   };
 
@@ -330,17 +332,14 @@ const Customer_Discount_List: React.FC = () => {
       return;
     }
 
-    // fallback local
     const local = readLocalView();
     applyViewState(local.enabled, local.sessionId);
     viewHydratedRef.current = true;
   };
 
-  // ✅ IMPORTANT: SINGLE ROW TABLE -> use UPDATE not UPSERT
   const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
     const sid = enabled && sessionId ? sessionId : null;
 
-    // optimistic UI
     applyViewState(Boolean(enabled), String(sid ?? ""));
 
     const { error } = await supabase
@@ -353,7 +352,6 @@ const Customer_Discount_List: React.FC = () => {
       .eq("id", VIEW_STATE_ID);
 
     if (error) {
-      // DB failed → still keep local
       // eslint-disable-next-line no-console
       console.warn("setCustomerViewRealtime error:", error.message);
       writeLocalView(Boolean(enabled), sid);
@@ -369,7 +367,6 @@ const Customer_Discount_List: React.FC = () => {
     return viewEnabled && viewSessionId === sessionId;
   };
 
-  // listen realtime + storage
   useEffect(() => {
     void hydrateViewState();
 
@@ -473,6 +470,16 @@ const Customer_Discount_List: React.FC = () => {
     void fetchPromoBookings();
   }, []);
 
+  // ✅ Refresh button action (reload list + view state)
+  const refreshAll = async (): Promise<void> => {
+    try {
+      setRefreshing(true);
+      await Promise.all([fetchPromoBookings(), hydrateViewState()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   // ✅ Filter by date + full_name search
   const filteredRows = useMemo(() => {
     void tick;
@@ -545,7 +552,7 @@ const Customer_Discount_List: React.FC = () => {
     const adj = recalcPaymentsToDue(due, gcIn);
 
     const totalPaid = round2(adj.gcash + adj.cash);
-    const isPaidAuto = due <= 0 ? true : totalPaid >= due; // ✅ FIX (was false)
+    const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
       setSavingPayment(true);
@@ -636,8 +643,9 @@ const Customer_Discount_List: React.FC = () => {
 
     const gcIn = Math.max(0, toNumber(gcashInput));
     const adjPay = recalcPaymentsToDue(newDue, gcIn);
+
     const totalPaid = round2(adjPay.gcash + adjPay.cash);
-    const isPaidAuto = newDue <= 0 ? true : totalPaid >= newDue; // ✅ FIX (was false)
+    const isPaidAuto = newDue <= 0 ? true : totalPaid >= newDue;
 
     try {
       setSavingDiscount(true);
@@ -759,7 +767,6 @@ const Customer_Discount_List: React.FC = () => {
   };
 
   const closeReceipt = async (): Promise<void> => {
-    // ✅ only stop view if this receipt is the one being viewed
     if (selected && isCustomerViewOnFor(selected.id)) {
       try {
         await stopCustomerViewRealtime();
@@ -782,10 +789,7 @@ const Customer_Discount_List: React.FC = () => {
               </div>
 
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
-                Customer View:{" "}
-                <strong>
-                  {viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}
-                </strong>
+                Customer View: <strong>{viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}</strong>
               </div>
             </div>
 
@@ -811,18 +815,30 @@ const Customer_Discount_List: React.FC = () => {
                 </div>
               </div>
 
-              <label className="date-pill">
-                <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
-                <span className="date-pill-icon" aria-hidden="true">
-                  📅
-                </span>
-              </label>
+              {/* DATE + REFRESH (katabi) */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="date-pill">
+                  <span className="date-pill-label">Date</span>
+                  <input
+                    className="date-pill-input"
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                  />
+                  <span className="date-pill-icon" aria-hidden="true">
+                    📅
+                  </span>
+                </label>
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void refreshAll()}
+                  disabled={loading || refreshing}
+                  title="Refresh list"
+                >
+                  {refreshing ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -931,7 +947,10 @@ const Customer_Discount_List: React.FC = () => {
                             </button>
                             <button
                               className="receipt-btn"
-                              onClick={() => void setCustomerViewRealtime(!isCustomerViewOnFor(r.id), !isCustomerViewOnFor(r.id) ? r.id : null)}
+                              onClick={() => {
+                                const on = isCustomerViewOnFor(r.id);
+                                void setCustomerViewRealtime(!on, !on ? r.id : null);
+                              }}
                             >
                               {isCustomerViewOnFor(r.id) ? "Stop View" : "View"}
                             </button>
@@ -1286,7 +1305,6 @@ const Customer_Discount_List: React.FC = () => {
                   );
                 })()}
 
-                {/* ✅ SAME BUTTON AREA AS Customer_Lists (REALTIME) */}
                 <div className="modal-actions" style={{ display: "flex", gap: 8 }}>
                   <button
                     className="receipt-btn"
