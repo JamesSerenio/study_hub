@@ -61,22 +61,24 @@ const minutesLeftCeil = (endIso: string): number => {
    DATA TYPES
 ========================= */
 
+// ✅ customer_sessions source
 type CustomerSessionRow = {
   id: string;
   created_at: string | null;
   full_name: string;
   seat_number: string | string[] | null;
 
-  // ✅ based on your table: customer_sessions.time_ended
-  time_ended: string;
+  // ✅ NEW countdown base
+  expected_end_at: string | null;
 
-  // ✅ from your table: reservation text default 'no'
-  reservation: string; // "yes" | "no"
+  // ✅ yes/no
+  reservation: string;
 
-  // ✅ from your table: promo link
+  // ✅ promo link
   promo_booking_id: string | null;
 };
 
+// ✅ promo_bookings source (extra safety)
 type PromoBookingRow = {
   id: string;
   created_at: string;
@@ -88,7 +90,7 @@ type PromoBookingRow = {
   start_at: string;
   end_at: string;
 
-  status: string; // pending/approved/paid/etc
+  status: string;
 };
 
 type AlertItem = {
@@ -149,29 +151,34 @@ const App: React.FC = () => {
 
     // customer_sessions
     Array.from(sessionsRef.current.values()).forEach((s) => {
-      const endMs = new Date(s.time_ended).getTime();
+      const endIso = s.expected_end_at;
+      if (!endIso) return;
 
+      const endMs = new Date(endIso).getTime();
       if (!Number.isFinite(endMs) || endMs <= now) {
         sessionsRef.current.delete(s.id);
         return;
       }
 
       const kind: AlertItem["kind"] =
-        s.promo_booking_id ? "promo" : String(s.reservation ?? "").toLowerCase() === "yes" ? "reservation" : "walkin";
+        s.promo_booking_id
+          ? "promo"
+          : String(s.reservation ?? "").toLowerCase() === "yes"
+          ? "reservation"
+          : "walkin";
 
       fireAlert({
         id: s.id,
         kind,
         full_name: s.full_name,
         seat_number: seatText(s.seat_number),
-        end_iso: s.time_ended,
+        end_iso: endIso,
       });
     });
 
-    // promo_bookings (extra safety if you also want alerts even without customer_sessions link)
+    // promo_bookings (extra safety)
     Array.from(promosRef.current.values()).forEach((p) => {
       const endMs = new Date(p.end_at).getTime();
-
       if (!Number.isFinite(endMs) || endMs <= now) {
         promosRef.current.delete(p.id);
         return;
@@ -192,9 +199,10 @@ const App: React.FC = () => {
 
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select("id, created_at, full_name, seat_number, time_ended, reservation, promo_booking_id")
-      .gt("time_ended", nowIso)
-      .order("time_ended", { ascending: true })
+      .select("id, created_at, full_name, seat_number, expected_end_at, reservation, promo_booking_id")
+      .not("expected_end_at", "is", null)
+      .gt("expected_end_at", nowIso)
+      .order("expected_end_at", { ascending: true })
       .limit(400);
 
     if (error || !data) return;
@@ -232,11 +240,11 @@ const App: React.FC = () => {
       return;
     }
 
-    // ✅ initial load then immediate check (IMPORTANT!)
+    // ✅ initial load then immediate check
     (async () => {
       await loadActiveCustomerSessions();
       await loadActivePromos();
-      tickCheckAll(); // ✅ do NOT wait for tick
+      tickCheckAll();
     })();
 
     // ✅ realtime: customer_sessions
@@ -310,11 +318,10 @@ const App: React.FC = () => {
       tickCheckAll();
     }, 2000);
 
-    // ✅ refresh on focus/visible (Vercel/Chrome throttling safe)
+    // ✅ refresh on focus/visible
     const refresh = (): void => {
       void loadActiveCustomerSessions();
       void loadActivePromos();
-      // then check after a short delay so refs updated
       window.setTimeout(() => tickCheckAll(), 150);
     };
 
@@ -329,7 +336,6 @@ const App: React.FC = () => {
       window.clearInterval(tick);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVis);
-
       void supabase.removeChannel(chSessions);
       void supabase.removeChannel(chPromos);
     };
