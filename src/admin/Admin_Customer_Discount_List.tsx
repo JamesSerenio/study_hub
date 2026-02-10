@@ -3,6 +3,7 @@
 // ✅ Full code + Export to Excel (.xlsx) by selected date
 // ✅ strict TS (NO "any")
 // ✅ ADD Phone # in table + receipt + excel
+// ✅ NEW: Refresh button (reload list)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -288,6 +289,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const [selected, setSelected] = useState<PromoBookingRow | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // ✅ NEW: refresh busy
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+
   // refresh status/time
   const [tick, setTick] = useState<number>(Date.now());
   useEffect(() => {
@@ -343,7 +347,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const fetchPromoBookings = async (): Promise<void> => {
     setLoading(true);
 
-    const { data, error } = await supabase.from("promo_bookings").select(selectPromoBookings).order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("promo_bookings")
+      .select(selectPromoBookings)
+      .order("created_at", { ascending: false });
 
     if (error) {
       // eslint-disable-next-line no-console
@@ -357,6 +364,16 @@ const Admin_Customer_Discount_List: React.FC = () => {
     const dbRows = (data ?? []) as unknown as PromoBookingDBRow[];
     setRows(dbRows.map(normalizeRow));
     setLoading(false);
+  };
+
+  // ✅ NEW: refresh function
+  const refreshAll = async (): Promise<void> => {
+    try {
+      setRefreshing(true);
+      await fetchPromoBookings();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   useEffect(() => {
@@ -439,7 +456,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
       { header: "Reason", key: "reason", width: 24 },
     ];
 
-    // Title rows
     ws.mergeCells("A1", "U1");
     ws.getCell("A1").value = "ME TYME LOUNGE — DISCOUNT / PROMO REPORT";
     ws.getCell("A1").font = { bold: true, size: 16 };
@@ -458,7 +474,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
     ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(3).height = 18;
 
-    // Totals line
     const sumFinal = filteredRows.reduce((sum, r) => sum + getDueAfterDiscount(r).due, 0);
     const sumDiscount = filteredRows.reduce((sum, r) => sum + getDueAfterDiscount(r).discountAmount, 0);
     const sumPaid = filteredRows.reduce((sum, r) => sum + getPaidInfo(r).totalPaid, 0);
@@ -482,10 +497,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
     ws.getCell("A4").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(4).height = 18;
 
-    // Blank row 5
     ws.getRow(5).height = 6;
 
-    // Optional logo embed (top-right)
     if (isLikelyUrl(logo)) {
       const ab = await fetchAsArrayBuffer(logo);
       if (ab) {
@@ -498,7 +511,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
       }
     }
 
-    // Header row (row 6)
     const headerRowIndex = 6;
     const headerRow = ws.getRow(headerRowIndex);
     headerRow.values = ws.columns.map((c) => String(c.header ?? ""));
@@ -516,7 +528,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
       };
     });
 
-    // Rows
     filteredRows.forEach((r, idx) => {
       const opt = r.package_options;
       const optionText =
@@ -558,7 +569,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
       const rowIndex = row.number;
       ws.getRow(rowIndex).height = 18;
 
-      // zebra + borders
       row.eachCell((cell) => {
         cell.border = {
           top: { style: "thin", color: { argb: "FFE5E7EB" } },
@@ -571,14 +581,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
         cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
       });
 
-      // Left align text-heavy cols: Customer(2), Phone(3), Option(7), Reason(21)
       [2, 3, 7, 21].forEach((c) => {
         const cell = ws.getCell(rowIndex, c);
         cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
       });
 
-      // Force Date/Time columns to TEXT (Created/Start/End)
-      // col: 1, 8, 9 (because we inserted Phone #, Start/End shifted)
       [1, 8, 9].forEach((c) => {
         const cell = ws.getCell(rowIndex, c);
         cell.numFmt = "@";
@@ -586,8 +593,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
         cell.alignment = { vertical: "middle", horizontal: "center" };
       });
 
-      // Money columns formatting (shifted by +1 due to phone)
-      // base(10), discountAmount(13), final(14), gcash(15), cash(16), totalPaid(17), remaining(18)
       const moneyCols = [10, 13, 14, 15, 16, 17, 18];
       moneyCols.forEach((c) => {
         const cell = ws.getCell(rowIndex, c);
@@ -595,7 +600,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
         cell.alignment = { vertical: "middle", horizontal: "right" };
       });
 
-      // Paid badge coloring (col 19)
       const paidCell = ws.getCell(rowIndex, 19);
       if (String(paidCell.value) === "PAID") {
         paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
@@ -823,7 +827,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
   const deletePromoBooking = async (row: PromoBookingRow): Promise<void> => {
     const ok = window.confirm(
-      `Delete this promo record?\n\n${row.full_name}\nPhone: ${safePhone(row.phone_number)}\n${prettyArea(row.area)} - ${seatLabel(row)}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
+      `Delete this promo record?\n\n${row.full_name}\nPhone: ${safePhone(row.phone_number)}\n${prettyArea(row.area)} - ${seatLabel(
+        row
+      )}\nStart: ${new Date(row.start_at).toLocaleString("en-PH")}`
     );
     if (!ok) return;
 
@@ -909,7 +915,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
     <IonPage>
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR (same layout) */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Discount / Promo Records</h2>
@@ -932,8 +937,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 </span>
               </label>
 
-              {/* Buttons use same receipt-btn */}
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {/* ✅ NEW: Refresh */}
+                <button className="receipt-btn" onClick={() => void refreshAll()} disabled={loading || refreshing}>
+                  {refreshing ? "Refreshing..." : "Refresh"}
+                </button>
+
                 <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={filteredRows.length === 0}>
                   Export to Excel
                 </button>
@@ -945,7 +954,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           </div>
 
-          {/* TABLE */}
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredRows.length === 0 ? (

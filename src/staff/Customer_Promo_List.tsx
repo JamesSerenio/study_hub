@@ -8,11 +8,10 @@
 // ✅ strict TS (NO "any")
 // ✅ ADD: phone_number field (separate column) + Receipt shows Customer Name + Phone #
 // ✅ FIX: View to Customer REALTIME + EXACT same localStorage keys as Customer_Lists.tsx
-//    - uses ONLY: customer_view_enabled + customer_view_session_id (localStorage)
-//    - label switches instantly (force re-render)
-//    - Close stops view (only if it is currently viewing this receipt)
 // ✅ NEW: Search bar (Full Name) beside Date (same classnames as Customer_Lists)
 // ✅ NEW: Refresh button beside Date filter (same style)
+// ✅ NEW: Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due ✅
+// ✅ NEW: CANCEL requires DESCRIPTION and moves record to promo_bookings_cancelled table
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -50,6 +49,9 @@ interface PromoBookingRow {
     duration_value: number | null;
     duration_unit: DurationUnit | null;
   } | null;
+
+  // not selected in query, but exists in DB:
+  // package_id, package_option_id, user_id, status...
 }
 
 interface PromoBookingDBRow {
@@ -183,15 +185,6 @@ const formatDuration = (v: number, u: DurationUnit): string => {
   return `${v} ${unit}`;
 };
 
-const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
-  const d = round2(Math.max(0, due));
-  if (d <= 0) return { gcash: 0, cash: 0 };
-
-  const g = round2(Math.min(d, Math.max(0, gcash)));
-  const c = round2(Math.max(0, d - g));
-  return { gcash: g, cash: c };
-};
-
 const normalizeDiscountKind = (v: unknown): DiscountKind => {
   const s = String(v ?? "none").trim().toLowerCase();
   if (s === "percent") return "percent";
@@ -265,6 +258,8 @@ const safePhone = (v: string | null | undefined): string => {
   return p ? p : "—";
 };
 
+const moneyFromStr = (s: string): number => round2(Math.max(0, toNumber(s)));
+
 /* ================= VIEW-TO-CUSTOMER (REALTIME + localStorage keys stay same) ================= */
 
 const readLocalView = (): { enabled: boolean; sessionId: string } => {
@@ -300,7 +295,7 @@ const Customer_Discount_List: React.FC = () => {
   // ✅ force rerender for view-to-customer label switching
   const [, setViewTick] = useState<number>(0);
 
-  // ✅ realtime view state in memory (for instant isCustomerViewOnFor)
+  // ✅ realtime view state in memory
   const [viewEnabled, setViewEnabled] = useState<boolean>(false);
   const [viewSessionId, setViewSessionId] = useState<string>("");
 
@@ -419,6 +414,12 @@ const Customer_Discount_List: React.FC = () => {
   // paid toggle
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
+  // cancel modal
+  const [cancelTarget, setCancelTarget] = useState<PromoBookingRow | null>(null);
+  const [cancelDesc, setCancelDesc] = useState<string>("");
+  const [cancelError, setCancelError] = useState<string>("");
+  const [cancelling, setCancelling] = useState<boolean>(false);
+
   const fetchPromoBookings = async (): Promise<void> => {
     setLoading(true);
 
@@ -503,43 +504,15 @@ const Customer_Discount_List: React.FC = () => {
     return { gcash, cash, totalPaid };
   };
 
+  /* ================= PAYMENT MODAL (FREE INPUTS) ================= */
   const openPaymentModal = (r: PromoBookingRow): void => {
-    const base = round2(Math.max(0, toNumber(r.price)));
-    const calc = applyDiscount(base, r.discount_kind, r.discount_value);
-    const due = round2(calc.discountedCost);
-
-    const pi = getPaidInfo(r);
-    const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
-    const adj = recalcPaymentsToDue(due, existingGcash);
-
     setPaymentTarget(r);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+    setGcashInput(String(round2(Math.max(0, toNumber(r.gcash_amount)))));
+    setCashInput(String(round2(Math.max(0, toNumber(r.cash_amount)))));
   };
 
-  const setGcashAndAutoCash = (r: PromoBookingRow, gcashStr: string): void => {
-    const base = round2(Math.max(0, toNumber(r.price)));
-    const calc = applyDiscount(base, r.discount_kind, r.discount_value);
-    const due = round2(calc.discountedCost);
-
-    const gc = Math.max(0, toNumber(gcashStr));
-    const adj = recalcPaymentsToDue(due, gc);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
-  };
-
-  const setCashAndAutoGcash = (r: PromoBookingRow, cashStr: string): void => {
-    const base = round2(Math.max(0, toNumber(r.price)));
-    const calc = applyDiscount(base, r.discount_kind, r.discount_value);
-    const due = round2(calc.discountedCost);
-
-    const ca = round2(Math.max(0, toNumber(cashStr)));
-    const cash = round2(Math.min(due, ca));
-    const gcash = round2(Math.max(0, due - cash));
-
-    setCashInput(String(cash));
-    setGcashInput(String(gcash));
-  };
+  const onChangeGcashFree = (v: string): void => setGcashInput(v);
+  const onChangeCashFree = (v: string): void => setCashInput(v);
 
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
@@ -548,10 +521,9 @@ const Customer_Discount_List: React.FC = () => {
     const calc = applyDiscount(base, paymentTarget.discount_kind, paymentTarget.discount_value);
     const due = round2(calc.discountedCost);
 
-    const gcIn = Math.max(0, toNumber(gcashInput));
-    const adj = recalcPaymentsToDue(due, gcIn);
-
-    const totalPaid = round2(adj.gcash + adj.cash);
+    const g = moneyFromStr(gcashInput);
+    const c = moneyFromStr(cashInput);
+    const totalPaid = round2(g + c);
     const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
@@ -560,8 +532,8 @@ const Customer_Discount_List: React.FC = () => {
       const { data, error } = await supabase
         .from("promo_bookings")
         .update({
-          gcash_amount: adj.gcash,
-          cash_amount: adj.cash,
+          gcash_amount: g,
+          cash_amount: c,
           is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
@@ -618,15 +590,9 @@ const Customer_Discount_List: React.FC = () => {
     setDiscountValueInput(String(round2(toNumber(r.discount_value))));
     setDiscountReasonInput(String(r.discount_reason ?? ""));
 
-    const base = round2(Math.max(0, toNumber(r.price)));
-    const calc = applyDiscount(base, r.discount_kind, r.discount_value);
-    const due = round2(calc.discountedCost);
-
-    const pi = getPaidInfo(r);
-    const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
-    const adj = recalcPaymentsToDue(due, existingGcash);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+    // keep current payments as-is (no clamping)
+    setGcashInput(String(round2(Math.max(0, toNumber(r.gcash_amount)))));
+    setCashInput(String(round2(Math.max(0, toNumber(r.cash_amount)))));
   };
 
   const saveDiscount = async (): Promise<void> => {
@@ -641,10 +607,10 @@ const Customer_Discount_List: React.FC = () => {
     const calc = applyDiscount(base, discountKind, finalVal);
     const newDue = round2(calc.discountedCost);
 
-    const gcIn = Math.max(0, toNumber(gcashInput));
-    const adjPay = recalcPaymentsToDue(newDue, gcIn);
+    const g = moneyFromStr(gcashInput);
+    const c = moneyFromStr(cashInput);
+    const totalPaid = round2(g + c);
 
-    const totalPaid = round2(adjPay.gcash + adjPay.cash);
     const isPaidAuto = newDue <= 0 ? true : totalPaid >= newDue;
 
     try {
@@ -657,8 +623,8 @@ const Customer_Discount_List: React.FC = () => {
           discount_value: finalVal,
           discount_reason: discountReasonInput.trim() || null,
 
-          gcash_amount: adjPay.gcash,
-          cash_amount: adjPay.cash,
+          gcash_amount: g,
+          cash_amount: c,
           is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
@@ -766,6 +732,132 @@ const Customer_Discount_List: React.FC = () => {
     }
   };
 
+  /* ================= CANCEL FLOW =================
+     ✅ Requires description
+     ✅ Copy row -> promo_bookings_cancelled
+     ✅ Delete from promo_bookings
+  */
+  const openCancelModal = (r: PromoBookingRow): void => {
+    setCancelTarget(r);
+    setCancelDesc("");
+    setCancelError("");
+  };
+
+  const runCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
+
+    const desc = cancelDesc.trim();
+    if (!desc) {
+      setCancelError("Description / reason is required.");
+      return;
+    }
+
+    try {
+      setCancelling(true);
+      setCancelError("");
+
+      // If this record is currently being viewed to customer, stop it first
+      if (isCustomerViewOnFor(cancelTarget.id)) {
+        try {
+          await stopCustomerViewRealtime();
+        } catch {
+          // ignore
+        }
+      }
+
+      // Fetch full DB row needed for copying (package_id, package_option_id, user_id, status, etc.)
+      const { data: fullRow, error: fullErr } = await supabase
+        .from("promo_bookings")
+        .select(
+          `
+          id,
+          created_at,
+          user_id,
+          full_name,
+          phone_number,
+          area,
+          package_id,
+          package_option_id,
+          seat_number,
+          start_at,
+          end_at,
+          price,
+          status,
+          gcash_amount,
+          cash_amount,
+          is_paid,
+          paid_at,
+          discount_reason,
+          discount_kind,
+          discount_value
+        `
+        )
+        .eq("id", cancelTarget.id)
+        .single();
+
+      if (fullErr || !fullRow) {
+        setCancelError(`Failed to load booking: ${fullErr?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      // Insert into cancelled table
+      const { error: insErr } = await supabase.from("promo_bookings_cancelled").insert({
+        original_id: fullRow.id,
+        description: desc,
+
+        created_at: fullRow.created_at,
+        user_id: fullRow.user_id ?? null,
+        full_name: fullRow.full_name,
+        phone_number: fullRow.phone_number ?? null,
+
+        area: fullRow.area,
+        package_id: fullRow.package_id,
+        package_option_id: fullRow.package_option_id,
+
+        seat_number: fullRow.seat_number ?? null,
+        start_at: fullRow.start_at,
+        end_at: fullRow.end_at,
+
+        price: fullRow.price ?? 0,
+        status: fullRow.status ?? "pending",
+
+        gcash_amount: fullRow.gcash_amount ?? 0,
+        cash_amount: fullRow.cash_amount ?? 0,
+        is_paid: Boolean(fullRow.is_paid),
+        paid_at: fullRow.paid_at ?? null,
+
+        discount_reason: fullRow.discount_reason ?? null,
+        discount_kind: String(fullRow.discount_kind ?? "none"),
+        discount_value: fullRow.discount_value ?? 0,
+      });
+
+      if (insErr) {
+        setCancelError(`Cancel save failed: ${insErr.message}`);
+        return;
+      }
+
+      // Delete original row
+      const { error: delErr } = await supabase.from("promo_bookings").delete().eq("id", cancelTarget.id);
+      if (delErr) {
+        setCancelError(
+          `Inserted to cancelled, but delete failed: ${delErr.message}. (You may now have duplicate if you retry.)`
+        );
+        return;
+      }
+
+      // Update UI
+      setRows((prev) => prev.filter((x) => x.id !== cancelTarget.id));
+      setSelected((prev) => (prev?.id === cancelTarget.id ? null : prev));
+      setCancelTarget(null);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      setCancelError("Cancel failed (unexpected error).");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const closeReceipt = async (): Promise<void> => {
     if (selected && isCustomerViewOnFor(selected.id)) {
       try {
@@ -815,7 +907,7 @@ const Customer_Discount_List: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE + REFRESH (katabi) */}
+              {/* DATE + REFRESH */}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <label className="date-pill">
                   <span className="date-pill-label">Date</span>
@@ -945,14 +1037,8 @@ const Customer_Discount_List: React.FC = () => {
                             <button className="receipt-btn" onClick={() => setSelected(r)}>
                               View Receipt
                             </button>
-                            <button
-                              className="receipt-btn"
-                              onClick={() => {
-                                const on = isCustomerViewOnFor(r.id);
-                                void setCustomerViewRealtime(!on, !on ? r.id : null);
-                              }}
-                            >
-                              {isCustomerViewOnFor(r.id) ? "Stop View" : "View"}
+                            <button className="receipt-btn" onClick={() => openCancelModal(r)}>
+                              Cancel
                             </button>
                           </div>
                         </td>
@@ -964,7 +1050,47 @@ const Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL */}
+          {/* CANCEL MODAL (requires description) */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancelling ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL PROMO</h3>
+                <p className="receipt-subtitle">
+                  {cancelTarget.full_name} • {safePhone(cancelTarget.phone_number)}
+                </p>
+
+                <hr />
+
+                <div className="receipt-row" style={{ alignItems: "flex-start" }}>
+                  <span style={{ paddingTop: 6 }}>Description</span>
+                  <div style={{ width: "100%" }}>
+                    <textarea
+                      className="reason-input"
+                      style={{ width: "100%", minHeight: 90, resize: "vertical" }}
+                      value={cancelDesc}
+                      onChange={(e) => setCancelDesc(e.currentTarget.value)}
+                      placeholder="Required: reason / description for cancellation..."
+                      disabled={cancelling}
+                    />
+                    {cancelError ? (
+                      <div style={{ marginTop: 8, color: "#b00020", fontSize: 12 }}>{cancelError}</div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancelling}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void runCancel()} disabled={cancelling}>
+                    {cancelling ? "Cancelling..." : "Confirm Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PAYMENT MODAL (FREE INPUTS) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -980,11 +1106,14 @@ const Customer_Discount_List: React.FC = () => {
                   const calc = applyDiscount(base, paymentTarget.discount_kind, paymentTarget.discount_value);
                   const due = round2(calc.discountedCost);
 
-                  const gcIn = Math.max(0, toNumber(gcashInput));
-                  const adj = recalcPaymentsToDue(due, gcIn);
+                  const g = moneyFromStr(gcashInput);
+                  const c = moneyFromStr(cashInput);
+                  const totalPaid = round2(g + c);
 
-                  const totalPaid = round2(adj.gcash + adj.cash);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                  const remainingSigned = round2(due - totalPaid);
+                  const isChange = remainingSigned < 0;
+                  const remainingAbs = round2(Math.abs(remainingSigned));
+
                   const willPaid = due <= 0 ? true : totalPaid >= due;
 
                   return (
@@ -1002,7 +1131,7 @@ const Customer_Discount_List: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={gcashInput}
-                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => onChangeGcashFree(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1014,7 +1143,7 @@ const Customer_Discount_List: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={cashInput}
-                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => onChangeCashFree(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1026,8 +1155,8 @@ const Customer_Discount_List: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining</span>
-                        <span>₱{remaining.toFixed(2)}</span>
+                        <span>{isChange ? "Change" : "Remaining"}</span>
+                        <span>₱{remainingAbs.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1105,12 +1234,17 @@ const Customer_Discount_List: React.FC = () => {
                   const val = discountKind === "percent" ? clamp(Math.max(0, rawVal), 0, 100) : Math.max(0, rawVal);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, val);
+                  const due = round2(discountedCost);
 
-                  const gcIn = Math.max(0, toNumber(gcashInput));
-                  const adjPay = recalcPaymentsToDue(discountedCost, gcIn);
+                  const g = moneyFromStr(gcashInput);
+                  const c = moneyFromStr(cashInput);
+                  const totalPaid = round2(g + c);
 
-                  const totalPaid = round2(adjPay.gcash + adjPay.cash);
-                  const willPaid = discountedCost <= 0 ? true : totalPaid >= discountedCost;
+                  const remainingSigned = round2(due - totalPaid);
+                  const isChange = remainingSigned < 0;
+                  const remainingAbs = round2(Math.abs(remainingSigned));
+
+                  const willPaid = due <= 0 ? true : totalPaid >= due;
 
                   return (
                     <>
@@ -1133,19 +1267,24 @@ const Customer_Discount_List: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Final System Cost</span>
-                        <span>₱{round2(discountedCost).toFixed(2)}</span>
+                        <span>₱{round2(due).toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-total">
                         <span>NEW TOTAL BALANCE</span>
-                        <span>₱{round2(discountedCost).toFixed(2)}</span>
+                        <span>₱{round2(due).toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
-                        <span>Auto Payment After</span>
+                        <span>Current Payment</span>
                         <span>
-                          GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                          GCash ₱{g.toFixed(2)} / Cash ₱{c.toFixed(2)}
                         </span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>{isChange ? "Change" : "Remaining"}</span>
+                        <span>₱{remainingAbs.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
