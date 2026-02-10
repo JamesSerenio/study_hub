@@ -1,12 +1,11 @@
 // src/pages/Admin_Customer_Add_ons.tsx
 // ✅ UI MATCHES Customer_Lists
 // ✅ FIX: PH/Manila date filtering (day range +08:00) so records show correctly
-// ✅ UPDATED: Cancel (requires description) like Customer_Add_ons.tsx via RPC cancel_add_on_order
-//    - moves rows to cancel table
-//    - reverses SOLD
-//    - deletes originals
-// ✅ NEW: Delete by Date (requires description) -> cancels ALL rows for selected date via same RPC (so SOLD is reversed)
-// ✅ Payment modal + manual PAID toggle (updates all rows in grouped order)
+// ✅ CANCEL: requires DESCRIPTION -> RPC cancel_add_on_order
+// ✅ Delete by Date: requires DESCRIPTION -> cancel_add_on_order
+// ✅ Payment modal: FREE INPUTS (NO LIMIT / NO FORCING to due)
+// ✅ FIXED: Payment SAVE now uses RPC set_addon_payment (AUTO PAID/UNPAID in DB)
+// ✅ FIXED: Manual PAID toggle now uses RPC set_addon_paid_status
 // ✅ Excel export (REAL XLSX + images) + shows SIZE
 // ✅ No "any"
 
@@ -154,15 +153,6 @@ const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } 
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 };
 
-const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
-  const d = round2(Math.max(0, due));
-  if (d <= 0) return { gcash: 0, cash: 0 };
-
-  const g = round2(Math.min(d, Math.max(0, gcash)));
-  const c = round2(Math.max(0, d - g));
-  return { gcash: g, cash: c };
-};
-
 const GROUP_WINDOW_MS = 10_000;
 
 const samePersonSeat = (a: CustomerAddOnMerged, b: CustomerAddOnMerged): boolean =>
@@ -272,9 +262,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
-
   const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
 
+  // ✅ Payment modal (FREE INPUTS, NO LIMIT)
   const [paymentTarget, setPaymentTarget] = useState<OrderGroup | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
@@ -592,8 +582,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
   };
 
   /* =========================================================
-     ✅ CANCEL (per order) — same as Customer_Add_ons.tsx
-     - RPC: cancel_add_on_order(p_item_ids uuid[], p_description text)
+     ✅ CANCEL (per order) — requires description
+     RPC: cancel_add_on_order(p_item_ids uuid[], p_description text)
   ========================================================= */
 
   const openCancelModal = (o: OrderGroup): void => {
@@ -643,7 +633,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
   /* =========================================================
      ✅ DELETE BY DATE (Cancel ALL rows for selected date)
-     - also uses cancel_add_on_order so SOLD is reversed
+     - uses cancel_add_on_order so SOLD is reversed
   ========================================================= */
 
   const openDeleteByDate = (): void => {
@@ -699,62 +689,34 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
   };
 
-  /* ---------------- payment modal ---------------- */
+  /* =========================================================
+     ✅ PAYMENT MODAL (FREE INPUTS, NO LIMIT)
+     ✅ FIX: uses RPC set_addon_payment so it SAVES even if no UPDATE policy
+  ========================================================= */
 
   const openPaymentModal = (o: OrderGroup): void => {
-    const due = round2(Math.max(0, o.grand_total));
-    const existingTotalPaid = round2(o.gcash_amount + o.cash_amount);
-    const existingGcash = existingTotalPaid > 0 ? o.gcash_amount : 0;
-
-    const adj = recalcPaymentsToDue(due, existingGcash);
     setPaymentTarget(o);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
-  };
-
-  const setGcashAndAutoCash = (o: OrderGroup, gcashStr: string): void => {
-    const due = round2(Math.max(0, o.grand_total));
-    const gc = round2(Math.max(0, Number(gcashStr) || 0));
-    const adj = recalcPaymentsToDue(due, gc);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
-  };
-
-  const setCashAndAutoGcash = (o: OrderGroup, cashStr: string): void => {
-    const due = round2(Math.max(0, o.grand_total));
-    const ca = round2(Math.max(0, Number(cashStr) || 0));
-
-    const cash = round2(Math.min(due, ca));
-    const gcash = round2(Math.max(0, due - cash));
-
-    setCashInput(String(cash));
-    setGcashInput(String(gcash));
+    setGcashInput(String(round2(Math.max(0, o.gcash_amount))));
+    setCashInput(String(round2(Math.max(0, o.cash_amount))));
   };
 
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = round2(Math.max(0, paymentTarget.grand_total));
-    const gcIn = round2(Math.max(0, Number(gcashInput) || 0));
-    const adj = recalcPaymentsToDue(due, gcIn);
-
-    const totalPaid = round2(adj.gcash + adj.cash);
-    const isPaidAuto = due > 0 && totalPaid >= due;
+    const g = round2(Math.max(0, toNumber(gcashInput)));
+    const c = round2(Math.max(0, toNumber(cashInput)));
 
     const itemIds = paymentTarget.items.map((x) => x.id);
+    if (itemIds.length === 0) return;
 
     try {
       setSavingPayment(true);
 
-      const { error } = await supabase
-        .from("customer_session_add_ons")
-        .update({
-          gcash_amount: adj.gcash,
-          cash_amount: adj.cash,
-          is_paid: isPaidAuto,
-          paid_at: isPaidAuto ? new Date().toISOString() : null,
-        })
-        .in("id", itemIds);
+      const { error } = await supabase.rpc("set_addon_payment", {
+        p_item_ids: itemIds,
+        p_gcash: g,
+        p_cash: c,
+      });
 
       if (error) {
         alert(`Save payment error: ${error.message}`);
@@ -772,23 +734,24 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
   };
 
-  /* ---------------- manual paid toggle ---------------- */
+  /* =========================================================
+     ✅ manual paid toggle
+     ✅ FIX: uses RPC set_addon_paid_status so it SAVES even if no UPDATE policy
+  ========================================================= */
 
   const togglePaid = async (o: OrderGroup): Promise<void> => {
     const itemIds = o.items.map((x) => x.id);
+    if (itemIds.length === 0) return;
 
     try {
       setTogglingPaidKey(o.key);
 
       const nextPaid = !toBool(o.is_paid);
 
-      const { error } = await supabase
-        .from("customer_session_add_ons")
-        .update({
-          is_paid: nextPaid,
-          paid_at: nextPaid ? new Date().toISOString() : null,
-        })
-        .in("id", itemIds);
+      const { error } = await supabase.rpc("set_addon_paid_status", {
+        p_item_ids: itemIds,
+        p_is_paid: nextPaid,
+      });
 
       if (error) {
         alert(`Toggle paid error: ${error.message}`);
@@ -840,7 +803,6 @@ const Admin_Customer_Add_ons: React.FC = () => {
                   Export to Excel
                 </button>
 
-                {/* ✅ DELETE BY DATE */}
                 <button
                   className="receipt-btn admin-danger"
                   onClick={openDeleteByDate}
@@ -876,9 +838,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
                   {groupedOrders.map((o) => {
                     const due = round2(o.grand_total);
                     const totalPaid = round2(o.gcash_amount + o.cash_amount);
-                    const remaining = round2(Math.max(0, due - totalPaid));
+                    const diff = round2(totalPaid - due);
                     const paid = toBool(o.is_paid);
-
                     const busyCancel = cancellingKey === o.key;
 
                     return (
@@ -912,7 +873,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
                         <td>
                           <div className="cell-stack">
                             <span className="cell-strong">{moneyText(due)}</span>
-                            {remaining > 0 && <span className="cell-muted">Remaining: {moneyText(remaining)}</span>}
+                            <span className="cell-muted">
+                              {diff >= 0 ? `Change: ${moneyText(Math.abs(diff))}` : `Remaining: ${moneyText(Math.abs(diff))}`}
+                            </span>
                           </div>
                         </td>
 
@@ -921,11 +884,12 @@ const Admin_Customer_Add_ons: React.FC = () => {
                             <span className="cell-strong">
                               GCash {moneyText(o.gcash_amount)} / Cash {moneyText(o.cash_amount)}
                             </span>
+
                             <button
                               className="receipt-btn"
                               onClick={() => openPaymentModal(o)}
                               disabled={due <= 0}
-                              title={due <= 0 ? "No amount due" : "Set GCash/Cash payment"}
+                              title={due <= 0 ? "No amount due" : "Set Cash & GCash freely (no limit)"}
                             >
                               Payment
                             </button>
@@ -949,8 +913,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ✅ CANCEL (same as customer add-ons) */}
-                            <button className="receipt-btn" disabled={busyCancel} onClick={() => openCancelModal(o)}>
+                            <button className="receipt-btn admin-danger" disabled={busyCancel} onClick={() => openCancelModal(o)}>
                               {busyCancel ? "Cancelling..." : "Cancel"}
                             </button>
                           </div>
@@ -963,7 +926,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL */}
+          {/* ✅ PAYMENT MODAL (NO LIMIT) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -974,16 +937,18 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
                 {(() => {
                   const due = round2(Math.max(0, paymentTarget.grand_total));
-                  const gcIn = round2(Math.max(0, Number(gcashInput) || 0));
-                  const adj = recalcPaymentsToDue(due, gcIn);
 
-                  const totalPaid = round2(adj.gcash + adj.cash);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                  const g = round2(Math.max(0, toNumber(gcashInput)));
+                  const c = round2(Math.max(0, toNumber(cashInput)));
+                  const totalPaid = round2(g + c);
+
+                  const diff = round2(totalPaid - due);
+                  const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>Total Balance (Due)</span>
+                        <span>Payment Due</span>
                         <span>{moneyText(due)}</span>
                       </div>
 
@@ -995,7 +960,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={gcashInput}
-                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setGcashInput(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1007,7 +972,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={cashInput}
-                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setCashInput(e.currentTarget.value)}
                         />
                       </div>
 
@@ -1019,8 +984,13 @@ const Admin_Customer_Add_ons: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining</span>
-                        <span>{moneyText(remaining)}</span>
+                        <span>{diff >= 0 ? "Change" : "Remaining"}</span>
+                        <span>{moneyText(Math.abs(diff))}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Auto Status</span>
+                        <span className="receipt-status">{isPaidAuto ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       <div className="modal-actions">
@@ -1073,15 +1043,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
                 </div>
 
                 <div className="modal-actions" style={{ marginTop: 14 }}>
-                  <button
-                    className="receipt-btn"
-                    onClick={() => setCancelTarget(null)}
-                    disabled={cancellingKey === cancelTarget.key}
-                  >
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancellingKey === cancelTarget.key}>
                     Close
                   </button>
                   <button
-                    className="receipt-btn"
+                    className="receipt-btn admin-danger"
                     onClick={() => void submitCancel()}
                     disabled={cancellingKey === cancelTarget.key || cancelDesc.trim().length === 0}
                     title={cancelDesc.trim().length === 0 ? "Description required" : "Submit cancel"}
@@ -1109,7 +1075,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                 <textarea
                   value={deleteDateDesc}
                   onChange={(e) => setDeleteDateDesc(e.currentTarget.value)}
-                  placeholder="Example: End of day cleanup / wrong date / duplicate imports..."
+                  placeholder="Example: End of day cleanup / wrong date / duplicate orders..."
                   style={{
                     width: "100%",
                     minHeight: 110,
@@ -1199,7 +1165,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
                   const gcash = round2(Math.max(0, selectedOrder.gcash_amount));
                   const cash = round2(Math.max(0, selectedOrder.cash_amount));
                   const totalPaid = round2(gcash + cash);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                  const diff = round2(totalPaid - due);
                   const paid = toBool(selectedOrder.is_paid);
 
                   return (
@@ -1227,8 +1193,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining Balance</span>
-                        <span>{moneyText(remaining)}</span>
+                        <span>{diff >= 0 ? "Change" : "Remaining"}</span>
+                        <span>{moneyText(Math.abs(diff))}</span>
                       </div>
 
                       <div className="receipt-row">

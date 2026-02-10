@@ -6,7 +6,10 @@
 //    - "Actual System" (same as staff actual)
 //    - "Sales System" (computed) = addonsPaid + totals.total_time + consignment.gross - discount
 //    - Sales Collected = Actual System - Bilin
-// ✅ UI UPDATE (your request):
+// ✅ FIX (your request):
+//    - Add-ons (Paid) is now based on PAYMENT amounts (gcash_amount + cash_amount) from Admin_Customer_Add_ons
+//    - Grouped per order (same full_name+seat within 10s) and uses MAX(gcash)+MAX(cash) to avoid double counting
+// ✅ UI UPDATE:
 //    - Inventory Loss moved to BOTTOM section, placed beside "Consignment Net" (same row)
 // ✅ PDF + Excel exports still include Inventory Loss
 
@@ -114,6 +117,15 @@ type ConsignmentState = {
   net: number;
 };
 
+// ✅ for Add-ons payment grouping (avoid double counting)
+type AddOnPaymentRow = {
+  created_at: string;
+  full_name: string;
+  seat_number: string;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -187,11 +199,93 @@ const isoToYMD = (iso: string): string => {
   return isYMD(ymd) ? ymd : todayYMD();
 };
 
+// ✅ Manila day range from YYYY-MM-DD (correct for Supabase timestamptz)
+const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } => {
+  const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+};
+
+const ms = (iso: string): number => {
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+
+const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+
 const buildZeroLines = (reportId: string): CashLine[] => {
   const merged: CashLine[] = [];
   for (const d of CASH_DENOMS) merged.push({ report_id: reportId, money_kind: "cash", denomination: d, qty: 0 });
   for (const d of COIN_DENOMS) merged.push({ report_id: reportId, money_kind: "coin", denomination: d, qty: 0 });
   return merged;
+};
+
+/* =========================
+   ADD-ONS PAYMENT GROUPING
+   - same full_name + seat_number within 10 seconds = 1 order
+   - payment per order = MAX(gcash_amount) + MAX(cash_amount)
+========================= */
+
+const GROUP_WINDOW_MS = 10_000;
+
+
+const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
+  if (rows.length === 0) return 0;
+
+  const sorted = [...rows].sort((a, b) => ms(a.created_at) - ms(b.created_at));
+
+  let total = 0;
+
+  let curName = "";
+  let curSeat = "";
+  let curStart = 0;
+  let curLast = 0;
+
+  let maxG = 0;
+  let maxC = 0;
+
+  const flush = (): void => {
+    const payment = Math.max(0, maxG) + Math.max(0, maxC);
+    total += payment;
+
+    maxG = 0;
+    maxC = 0;
+  };
+
+  for (const r of sorted) {
+    const t = ms(r.created_at);
+    const g = Math.max(0, toNumber(r.gcash_amount));
+    const c = Math.max(0, toNumber(r.cash_amount));
+
+    const isFirst = curStart === 0;
+    const startNew =
+      isFirst ||
+      norm(r.full_name) !== curName ||
+      norm(r.seat_number) !== curSeat ||
+      Math.abs(t - curLast) > GROUP_WINDOW_MS;
+
+    if (startNew) {
+      if (!isFirst) flush();
+
+      curName = norm(r.full_name);
+      curSeat = norm(r.seat_number);
+      curStart = t;
+      curLast = t;
+
+      maxG = g;
+      maxC = c;
+      continue;
+    }
+
+    curLast = t;
+    maxG = Math.max(maxG, g);
+    maxC = Math.max(maxC, c);
+  }
+
+  // last group
+  flush();
+
+  return total;
 };
 
 /* =========================
@@ -280,10 +374,7 @@ const AdminSalesReport: React.FC = () => {
   };
 
   const loadCashLines = async (reportId: string): Promise<void> => {
-    const res = await supabase
-      .from("daily_cash_count_lines")
-      .select("report_id, money_kind, denomination, qty")
-      .eq("report_id", reportId);
+    const res = await supabase.from("daily_cash_count_lines").select("report_id, money_kind, denomination, qty").eq("report_id", reportId);
 
     if (res.error) {
       console.error("daily_cash_count_lines select error:", res.error.message);
@@ -330,6 +421,7 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
+    // keep existing logic (paid consignment sales)
     const startISO = `${dateYMD}T00:00:00.000`;
     const endISO = `${dateYMD}T23:59:59.999`;
 
@@ -356,32 +448,44 @@ const AdminSalesReport: React.FC = () => {
     setConsignment({ gross, fee15, net });
   };
 
+  /**
+   * ✅ ADD-ONS (PAID) — FIXED
+   * - Based on PAYMENT INPUTS (gcash_amount + cash_amount)
+   * - Uses created_at day range in Manila (+08)
+   * - Groups per order (same full_name+seat within 10s)
+   * - Payment per order = MAX(gcash)+MAX(cash) to avoid double counting (since each row in the order gets same values)
+   *
+   * Example:
+   *  - you set payment 30 → addonsPaid = 30
+   *  - then another customer payment 40 → addonsPaid = 70
+   */
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setAddonsPaid(0);
       return;
     }
 
-    const startISO = `${dateYMD}T00:00:00.000`;
-    const endISO = `${dateYMD}T23:59:59.999`;
+    const { startIso, endIso } = manilaDayRange(dateYMD);
 
     const res = await supabase
       .from("customer_session_add_ons")
-      .select("total, paid_at")
-      .eq("is_paid", true)
-      .not("paid_at", "is", null)
-      .gte("paid_at", startISO)
-      .lte("paid_at", endISO);
+      .select("created_at, full_name, seat_number, gcash_amount, cash_amount")
+      .gte("created_at", startIso)
+      .lt("created_at", endIso);
 
     if (res.error) {
-      console.error("addonsPaid query error:", res.error.message);
+      console.error("addonsPaid(payment) query error:", res.error.message);
       setAddonsPaid(0);
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
-    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
-    setAddonsPaid(gross);
+    const rows = (res.data ?? []) as AddOnPaymentRow[];
+
+    // if no payments at all, will return 0
+    const onlyWithAnyPayment = rows.filter((r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0);
+
+    const totalPayments = computeAddonsPaidFromPayments(onlyWithAnyPayment);
+    setAddonsPaid(totalPayments);
   };
 
   /**
@@ -429,7 +533,10 @@ const AdminSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("daily_cash_count_lines")
-      .upsert({ report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty }, { onConflict: "report_id,money_kind,denomination" });
+      .upsert(
+        { report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty },
+        { onConflict: "report_id,money_kind,denomination" }
+      );
 
     if (res.error) {
       console.error("daily_cash_count_lines upsert error:", res.error.message);
@@ -585,32 +692,32 @@ const AdminSalesReport: React.FC = () => {
     const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
     const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
-    const inventoryLoss = totals ? toNumber(totals.expenses_amount) : 0;
-    const cashSales = totals ? toNumber(totals.cash_sales) : 0;
-    const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
+    const inventoryLossLocal = totals ? toNumber(totals.expenses_amount) : 0;
+    const cashSalesLocal = totals ? toNumber(totals.cash_sales) : 0;
+    const gcashSalesLocal = totals ? toNumber(totals.gcash_sales) : 0;
 
-    const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
-    const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
+    const paidResCashLocal = totals ? toNumber(totals.paid_reservation_cash) : 0;
+    const paidResGcashLocal = totals ? toNumber(totals.paid_reservation_gcash) : 0;
 
-    const advCash = totals ? toNumber(totals.advance_cash) : 0;
-    const advGcash = totals ? toNumber(totals.advance_gcash) : 0;
+    const advCashLocal = totals ? toNumber(totals.advance_cash) : 0;
+    const advGcashLocal = totals ? toNumber(totals.advance_gcash) : 0;
 
-    const walkCash = totals ? toNumber(totals.walkin_cash) : 0;
-    const walkGcash = totals ? toNumber(totals.walkin_gcash) : 0;
+    const walkCashLocal = totals ? toNumber(totals.walkin_cash) : 0;
+    const walkGcashLocal = totals ? toNumber(totals.walkin_gcash) : 0;
 
-    const startingCash = toNumber(report.starting_cash);
-    const startingGcash = toNumber(report.starting_gcash);
-    const bilin = toNumber(report.bilin_amount);
+    const startingCashLocal = toNumber(report.starting_cash);
+    const startingGcashLocal = toNumber(report.starting_gcash);
+    const bilinLocal = toNumber(report.bilin_amount);
 
-    const cohCash = cashTotalLocal + coinTotalLocal;
-    const cohGcash = gcashSales;
+    const cohCashLocal = cashTotalLocal + coinTotalLocal;
+    const cohGcashLocal = gcashSalesLocal;
 
-    // ✅ ACTUAL SYSTEM (same as staff)
-    const actualSystem = cohCash + cohGcash + paidResCash + advCash + walkCash - (startingCash + startingGcash);
-    const salesCollectedDisplay = actualSystem - bilin;
+    const actualSystemLocal =
+      cohCashLocal + cohGcashLocal + paidResCashLocal + advCashLocal + walkCashLocal - (startingCashLocal + startingGcashLocal);
 
-    // ✅ computed system (same as staff)
-    const addons = addonsPaid;
+    const salesCollectedDisplayLocal = actualSystemLocal - bilinLocal;
+
+    const addons = addonsPaid; // ✅ PAYMENT-based now
     const discount = totals ? toNumber(totals.discount_total) : 0;
     const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
     const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
@@ -685,13 +792,13 @@ const AdminSalesReport: React.FC = () => {
           <tr><th>CATEGORY</th><th>CASH</th><th>GCASH</th></tr>
         </thead>
         <tbody>
-          <tr><td>Starting Balance</td><td class="t-right">${peso(startingCash)}</td><td class="t-right">${peso(startingGcash)}</td></tr>
-          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cohCash)}</td><td class="t-right">${peso(cohGcash)}</td></tr>
+          <tr><td>Starting Balance</td><td class="t-right">${peso(startingCashLocal)}</td><td class="t-right">${peso(startingGcashLocal)}</td></tr>
+          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cohCashLocal)}</td><td class="t-right">${peso(cohGcashLocal)}</td></tr>
           <tr><td>Cash Outs</td><td class="t-right">${peso(cashOutsCash)}</td><td class="t-right">${peso(cashOutsGcash)}</td></tr>
-          <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCash)}</td><td class="t-right">${peso(paidResGcash)}</td></tr>
-          <tr><td>New Advance Payments</td><td class="t-right">${peso(advCash)}</td><td class="t-right">${peso(advGcash)}</td></tr>
-          <tr><td>Down payments within this day only</td><td class="t-right">${peso(walkCash)}</td><td class="t-right">${peso(walkGcash)}</td></tr>
-          <tr><td><b>Actual System</b></td><td class="t-right" colspan="2"><b>${peso(actualSystem)}</b></td></tr>
+          <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCashLocal)}</td><td class="t-right">${peso(paidResGcashLocal)}</td></tr>
+          <tr><td>New Advance Payments</td><td class="t-right">${peso(advCashLocal)}</td><td class="t-right">${peso(advGcashLocal)}</td></tr>
+          <tr><td>Down payments within this day only</td><td class="t-right">${peso(walkCashLocal)}</td><td class="t-right">${peso(walkGcashLocal)}</td></tr>
+          <tr><td><b>Actual System</b></td><td class="t-right" colspan="2"><b>${peso(actualSystemLocal)}</b></td></tr>
           <tr><td><b>Sales System (computed)</b></td><td class="t-right" colspan="2"><b>${peso(salesSystemComputed)}</b></td></tr>
         </tbody>
       </table>
@@ -699,7 +806,7 @@ const AdminSalesReport: React.FC = () => {
       <div class="summary">
         <div class="chip">
           <div class="row"><span>Consignment Net</span><b>${peso(consignment.net)}</b></div>
-          <div class="row"><span>Inventory Loss</span><b>${peso(inventoryLoss)}</b></div>
+          <div class="row"><span>Inventory Loss</span><b>${peso(inventoryLossLocal)}</b></div>
         </div>
       </div>
     </div>
@@ -723,15 +830,15 @@ const AdminSalesReport: React.FC = () => {
 
       <div class="summary">
         <div class="chip">
-          <div class="row"><span>Cash Sales</span><b>${peso(cashSales)}</b></div>
-          <div class="row"><span>GCash Sales</span><b>${peso(gcashSales)}</b></div>
-          <div class="row"><span>Bilin</span><b>${peso(Math.max(0, bilin))}</b></div>
-          <div class="row"><span>Sales Collected</span><b>${peso(salesCollectedDisplay)}</b></div>
+          <div class="row"><span>Cash Sales</span><b>${peso(cashSalesLocal)}</b></div>
+          <div class="row"><span>GCash Sales</span><b>${peso(gcashSalesLocal)}</b></div>
+          <div class="row"><span>Bilin</span><b>${peso(Math.max(0, bilinLocal))}</b></div>
+          <div class="row"><span>Sales Collected</span><b>${peso(salesCollectedDisplayLocal)}</b></div>
         </div>
 
         <div class="chip">
           <div class="row"><span>Total Time</span><b>${peso(totalTimeAmount)}</b></div>
-          <div class="row"><span>Add-ons (Paid)</span><b>${peso(addons)}</b></div>
+          <div class="row"><span>Add-ons (Payments)</span><b>${peso(addons)}</b></div>
           <div class="row"><span>Discounts</span><b>${peso(discount)}</b></div>
           <div class="row"><span>Consignment Sales</span><b>${peso(consignment.gross)}</b></div>
           <div class="row"><span>Consignment 15%</span><b>${peso(consignment.fee15)}</b></div>
@@ -777,30 +884,32 @@ const AdminSalesReport: React.FC = () => {
     const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
     const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
-    const inventoryLoss = totals ? toNumber(totals.expenses_amount) : 0;
-    const cashSales = totals ? toNumber(totals.cash_sales) : 0;
-    const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
+    const inventoryLossLocal = totals ? toNumber(totals.expenses_amount) : 0;
+    const cashSalesLocal = totals ? toNumber(totals.cash_sales) : 0;
+    const gcashSalesLocal = totals ? toNumber(totals.gcash_sales) : 0;
 
-    const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
-    const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
+    const paidResCashLocal = totals ? toNumber(totals.paid_reservation_cash) : 0;
+    const paidResGcashLocal = totals ? toNumber(totals.paid_reservation_gcash) : 0;
 
-    const advCash = totals ? toNumber(totals.advance_cash) : 0;
-    const advGcash = totals ? toNumber(totals.advance_gcash) : 0;
+    const advCashLocal = totals ? toNumber(totals.advance_cash) : 0;
+    const advGcashLocal = totals ? toNumber(totals.advance_gcash) : 0;
 
-    const walkCash = totals ? toNumber(totals.walkin_cash) : 0;
-    const walkGcash = totals ? toNumber(totals.walkin_gcash) : 0;
+    const walkCashLocal = totals ? toNumber(totals.walkin_cash) : 0;
+    const walkGcashLocal = totals ? toNumber(totals.walkin_gcash) : 0;
 
-    const startingCash = toNumber(report.starting_cash);
-    const startingGcash = toNumber(report.starting_gcash);
-    const bilin = toNumber(report.bilin_amount);
+    const startingCashLocal = toNumber(report.starting_cash);
+    const startingGcashLocal = toNumber(report.starting_gcash);
+    const bilinLocal = toNumber(report.bilin_amount);
 
-    const cohCash = cashTotalLocal + coinTotalLocal;
-    const cohGcash = gcashSales;
+    const cohCashLocal = cashTotalLocal + coinTotalLocal;
+    const cohGcashLocal = gcashSalesLocal;
 
-    const actualSystem = cohCash + cohGcash + paidResCash + advCash + walkCash - (startingCash + startingGcash);
-    const salesCollectedDisplay = actualSystem - bilin;
+    const actualSystemLocal =
+      cohCashLocal + cohGcashLocal + paidResCashLocal + advCashLocal + walkCashLocal - (startingCashLocal + startingGcashLocal);
 
-    const addons = addonsPaid;
+    const salesCollectedDisplayLocal = actualSystemLocal - bilinLocal;
+
+    const addons = addonsPaid; // ✅ PAYMENT-based now
     const discount = totals ? toNumber(totals.discount_total) : 0;
     const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
     const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
@@ -815,30 +924,30 @@ const AdminSalesReport: React.FC = () => {
     ws.addRow([]);
 
     ws.addRow(["CATEGORY", "CASH", "GCASH"]);
-    ws.addRow(["Starting Balance", startingCash, startingGcash]);
-    ws.addRow(["COH / Total of the Day", cohCash, cohGcash]);
+    ws.addRow(["Starting Balance", startingCashLocal, startingGcashLocal]);
+    ws.addRow(["COH / Total of the Day", cohCashLocal, cohGcashLocal]);
     ws.addRow(["Cash Outs", cashOutsCash, cashOutsGcash]);
-    ws.addRow(["Paid reservations for today", paidResCash, paidResGcash]);
-    ws.addRow(["New Advance Payments", advCash, advGcash]);
-    ws.addRow(["Down payments within this day only", walkCash, walkGcash]);
-    ws.addRow(["Actual System", actualSystem, ""]);
+    ws.addRow(["Paid reservations for today", paidResCashLocal, paidResGcashLocal]);
+    ws.addRow(["New Advance Payments", advCashLocal, advGcashLocal]);
+    ws.addRow(["Down payments within this day only", walkCashLocal, walkGcashLocal]);
+    ws.addRow(["Actual System", actualSystemLocal, ""]);
     ws.addRow(["Sales System (computed)", salesSystemComputed, ""]);
     ws.addRow([]);
 
-    ws.addRow(["Cash Sales", cashSales]);
-    ws.addRow(["GCash Sales", gcashSales]);
-    ws.addRow(["Bilin", bilin]);
-    ws.addRow(["Sales Collected (Actual System - Bilin)", salesCollectedDisplay]);
+    ws.addRow(["Cash Sales", cashSalesLocal]);
+    ws.addRow(["GCash Sales", gcashSalesLocal]);
+    ws.addRow(["Bilin", bilinLocal]);
+    ws.addRow(["Sales Collected (Actual System - Bilin)", salesCollectedDisplayLocal]);
     ws.addRow([]);
 
-    // ✅ bottom summary (requested: Inventory Loss beside Consignment Net — in Excel we keep them adjacent rows)
+    // ✅ bottom summary (requested)
     ws.addRow(["Consignment Net", consignment.net]);
-    ws.addRow(["Inventory Loss", inventoryLoss]);
+    ws.addRow(["Inventory Loss", inventoryLossLocal]);
     ws.addRow([]);
 
     ws.addRow(["Other Totals"]);
     ws.addRow(["Total Time", totalTimeAmount]);
-    ws.addRow(["Add-ons (Paid)", addons]);
+    ws.addRow(["Add-ons (Payments)", addons]);
     ws.addRow(["Discount (amount)", discount]);
     ws.addRow(["Consignment Sales", consignment.gross]);
     ws.addRow(["Consignment 15%", consignment.fee15]);
@@ -869,7 +978,7 @@ const AdminSalesReport: React.FC = () => {
     void loadReport(selectedDate);
     void loadTotals(selectedDate);
     void loadConsignment(selectedDate);
-    void loadAddonsPaid(selectedDate);
+    void loadAddonsPaid(selectedDate); // ✅ fixed
     void loadCashOutsTotal(selectedDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
@@ -916,7 +1025,7 @@ const AdminSalesReport: React.FC = () => {
   // ✅ Actual System (same as staff)
   const actualSystem = cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
 
-  // ✅ Sales System (computed like staff)
+  // ✅ Sales System (computed like staff) — uses PAYMENT-based addonsPaid now
   const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const salesSystemComputed = addonsPaid + totalTimeAmount + consignment.gross - discount;
@@ -1161,7 +1270,7 @@ const AdminSalesReport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* ✅ BOTTOM: Consignment + Inventory Loss (Inventory Loss beside Consignment Net) */}
+                  {/* ✅ BOTTOM: Consignment + Inventory Loss */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
@@ -1297,7 +1406,7 @@ const AdminSalesReport: React.FC = () => {
 
                   <div className="ssr-mini">
                     <div className="ssr-mini-row">
-                      <span>Add-ons (Paid)</span>
+                      <span>Add-ons (Payments)</span>
                       <b>{peso(addonsPaid)}</b>
                     </div>
                     <div className="ssr-mini-row">
