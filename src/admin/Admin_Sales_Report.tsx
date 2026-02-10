@@ -1,4 +1,15 @@
 // src/pages/Admin_Sales_Report.tsx
+// ✅ STRICT TS, NO any
+// ✅ Admin matches Staff logic:
+//    - Cash Outs split CASH/GCASH via cash_outs.payment_method (fallback all CASH if old schema)
+//    - "Inventory Loss" = totals.expenses_amount
+//    - "Actual System" (same as staff actual)
+//    - "Sales System" (computed) = addonsPaid + totals.total_time + consignment.gross - discount
+//    - Sales Collected = Actual System - Bilin
+// ✅ UI UPDATE (your request):
+//    - Inventory Loss moved to BOTTOM section, placed beside "Consignment Net" (same row)
+// ✅ PDF + Excel exports still include Inventory Loss
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
@@ -36,6 +47,7 @@ import { saveAs } from "file-saver";
 ========================= */
 
 type MoneyKind = "cash" | "coin";
+type CashOutMethod = "cash" | "gcash";
 
 interface DailyReportRow {
   id: string;
@@ -199,8 +211,9 @@ const AdminSalesReport: React.FC = () => {
   const [consignment, setConsignment] = useState<ConsignmentState>({ gross: 0, fee15: 0, net: 0 });
   const [addonsPaid, setAddonsPaid] = useState<number>(0);
 
-  // ✅ CASH OUTS TOTAL (cashout_date = selected date)
-  const [cashOutsTotal, setCashOutsTotal] = useState<number>(0);
+  // ✅ CASH OUTS split (cashout_date)
+  const [cashOutsCash, setCashOutsCash] = useState<number>(0);
+  const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(() => ({
@@ -235,7 +248,8 @@ const AdminSalesReport: React.FC = () => {
       setTotals(null);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       setAddonsPaid(0);
-      setCashOutsTotal(0);
+      setCashOutsCash(0);
+      setCashOutsGcash(0);
       setLoading(false);
       return;
     }
@@ -255,7 +269,8 @@ const AdminSalesReport: React.FC = () => {
       setTotals(null);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       setAddonsPaid(0);
-      setCashOutsTotal(0);
+      setCashOutsCash(0);
+      setCashOutsGcash(0);
       setLoading(false);
       return;
     }
@@ -298,11 +313,7 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase
-      .from("v_daily_sales_report_totals")
-      .select("*")
-      .eq("report_date", dateYMD)
-      .single<SalesTotalsRow>();
+    const res = await supabase.from("v_daily_sales_report_totals").select("*").eq("report_date", dateYMD).single<SalesTotalsRow>();
 
     if (res.error) {
       console.error("v_daily_sales_report_totals error:", res.error.message);
@@ -373,24 +384,44 @@ const AdminSalesReport: React.FC = () => {
     setAddonsPaid(gross);
   };
 
-  // ✅ CASH OUTS (ADMIN always visible + included in PDF/Excel)
+  /**
+   * ✅ CASH OUTS (ADMIN split CASH/GCASH like STAFF)
+   * - Prefer: cash_outs.payment_method ('cash' | 'gcash')
+   * - If column doesn't exist, fallback to old schema -> all CASH
+   */
   const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
-      setCashOutsTotal(0);
+      setCashOutsCash(0);
+      setCashOutsGcash(0);
       return;
     }
 
-    const res = await supabase.from("cash_outs").select("amount, cashout_date").eq("cashout_date", dateYMD);
+    const res = await supabase.from("cash_outs").select("amount, cashout_date, payment_method").eq("cashout_date", dateYMD);
 
     if (res.error) {
-      console.error("cash_outs query error:", res.error.message);
-      setCashOutsTotal(0);
+      const fallback = await supabase.from("cash_outs").select("amount, cashout_date").eq("cashout_date", dateYMD);
+
+      if (fallback.error) {
+        console.error("cash_outs query error:", fallback.error.message);
+        setCashOutsCash(0);
+        setCashOutsGcash(0);
+        return;
+      }
+
+      const rows = (fallback.data ?? []) as Array<{ amount: number | string | null }>;
+      const total = rows.reduce((sum, r) => sum + toNumber(r.amount), 0);
+      setCashOutsCash(total);
+      setCashOutsGcash(0);
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ amount: number | string | null }>;
-    const total = rows.reduce((sum, r) => sum + toNumber(r.amount), 0);
-    setCashOutsTotal(total);
+    const rows = (res.data ?? []) as Array<{ amount: number | string | null; payment_method?: CashOutMethod | null }>;
+
+    const cash = rows.filter((r) => (r.payment_method ?? "cash") === "cash").reduce((sum, r) => sum + toNumber(r.amount), 0);
+    const gcash = rows.filter((r) => (r.payment_method ?? "cash") === "gcash").reduce((sum, r) => sum + toNumber(r.amount), 0);
+
+    setCashOutsCash(cash);
+    setCashOutsGcash(gcash);
   };
 
   const upsertQty = async (line: CashLine, qty: number): Promise<void> => {
@@ -398,20 +429,14 @@ const AdminSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("daily_cash_count_lines")
-      .upsert(
-        { report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty },
-        { onConflict: "report_id,money_kind,denomination" }
-      );
+      .upsert({ report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty }, { onConflict: "report_id,money_kind,denomination" });
 
     if (res.error) {
       console.error("daily_cash_count_lines upsert error:", res.error.message);
       return;
     }
 
-    setLines((prev) =>
-      prev.map((x) => (x.money_kind === line.money_kind && x.denomination === line.denomination ? { ...x, qty } : x))
-    );
-
+    setLines((prev) => prev.map((x) => (x.money_kind === line.money_kind && x.denomination === line.denomination ? { ...x, qty } : x)));
     await loadTotals(selectedDate);
   };
 
@@ -475,10 +500,7 @@ const AdminSalesReport: React.FC = () => {
       }
     }
 
-    const res = await supabase
-      .from("daily_sales_reports")
-      .update({ is_submitted: true, submitted_at: new Date().toISOString() })
-      .eq("id", report.id);
+    const res = await supabase.from("daily_sales_reports").update({ is_submitted: true, submitted_at: new Date().toISOString() }).eq("id", report.id);
 
     if (res.error) {
       setToast({ open: true, msg: `Submit failed: ${res.error.message}`, color: "danger" });
@@ -508,11 +530,7 @@ const AdminSalesReport: React.FC = () => {
 
     setSubmitting(true);
 
-    const find = await supabase
-      .from("daily_sales_reports")
-      .select("id")
-      .eq("report_date", selectedDate)
-      .maybeSingle<{ id: string }>();
+    const find = await supabase.from("daily_sales_reports").select("id").eq("report_date", selectedDate).maybeSingle<{ id: string }>();
 
     if (find.error) {
       setToast({ open: true, msg: `Delete failed: ${find.error.message}`, color: "danger" });
@@ -544,6 +562,7 @@ const AdminSalesReport: React.FC = () => {
     setToast({ open: true, msg: `Deleted report for ${selectedDate}.`, color: "success" });
 
     await loadReport(selectedDate);
+    await loadTotals(selectedDate);
     await loadConsignment(selectedDate);
     await loadAddonsPaid(selectedDate);
     await loadCashOutsTotal(selectedDate);
@@ -566,7 +585,7 @@ const AdminSalesReport: React.FC = () => {
     const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
     const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
-    const expenses = totals ? toNumber(totals.expenses_amount) : 0;
+    const inventoryLoss = totals ? toNumber(totals.expenses_amount) : 0;
     const cashSales = totals ? toNumber(totals.cash_sales) : 0;
     const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
@@ -581,32 +600,20 @@ const AdminSalesReport: React.FC = () => {
 
     const startingCash = toNumber(report.starting_cash);
     const startingGcash = toNumber(report.starting_gcash);
-
     const bilin = toNumber(report.bilin_amount);
 
-    // ✅ SAME LOGIC AS STAFF:
-    // Sales System = (COH cash + COH gcash) + (paidRes CASH + adv CASH + dp CASH) - (starting cash + starting gcash)
-    // NOTE: do NOT include paidRes/adv/dp GCASH
     const cohCash = cashTotalLocal + coinTotalLocal;
     const cohGcash = gcashSales;
 
-    const salesSystem =
-      cohCash + cohGcash + paidResCash + advCash + walkCash - (startingCash + startingGcash);
+    // ✅ ACTUAL SYSTEM (same as staff)
+    const actualSystem = cohCash + cohGcash + paidResCash + advCash + walkCash - (startingCash + startingGcash);
+    const salesCollectedDisplay = actualSystem - bilin;
 
-    // ✅ Sales Collected = Sales System - Bilin
-    const salesCollectedDisplay = salesSystem - bilin;
-
+    // ✅ computed system (same as staff)
     const addons = addonsPaid;
     const discount = totals ? toNumber(totals.discount_total) : 0;
-
-    const totalTimeAmount =
-      (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
-
-    const consGross = consignment.gross;
-    const consFee = consignment.fee15;
-    const consNet = consignment.net;
-
-    const cashOuts = cashOutsTotal;
+    const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
+    const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
 
     const maxLen = Math.max(cashLines.length, coinLines.length);
     const rowsHtml = Array.from({ length: maxLen })
@@ -680,13 +687,21 @@ const AdminSalesReport: React.FC = () => {
         <tbody>
           <tr><td>Starting Balance</td><td class="t-right">${peso(startingCash)}</td><td class="t-right">${peso(startingGcash)}</td></tr>
           <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cohCash)}</td><td class="t-right">${peso(cohGcash)}</td></tr>
-          <tr><td>Expenses</td><td class="t-right">${peso(expenses)}</td><td class="t-right">—</td></tr>
+          <tr><td>Cash Outs</td><td class="t-right">${peso(cashOutsCash)}</td><td class="t-right">${peso(cashOutsGcash)}</td></tr>
           <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCash)}</td><td class="t-right">${peso(paidResGcash)}</td></tr>
           <tr><td>New Advance Payments</td><td class="t-right">${peso(advCash)}</td><td class="t-right">${peso(advGcash)}</td></tr>
           <tr><td>Down payments within this day only</td><td class="t-right">${peso(walkCash)}</td><td class="t-right">${peso(walkGcash)}</td></tr>
-          <tr><td><b>Sales System</b></td><td class="t-right" colspan="2"><b>${peso(salesSystem)}</b></td></tr>
+          <tr><td><b>Actual System</b></td><td class="t-right" colspan="2"><b>${peso(actualSystem)}</b></td></tr>
+          <tr><td><b>Sales System (computed)</b></td><td class="t-right" colspan="2"><b>${peso(salesSystemComputed)}</b></td></tr>
         </tbody>
       </table>
+
+      <div class="summary">
+        <div class="chip">
+          <div class="row"><span>Consignment Net</span><b>${peso(consignment.net)}</b></div>
+          <div class="row"><span>Inventory Loss</span><b>${peso(inventoryLoss)}</b></div>
+        </div>
+      </div>
     </div>
 
     <div class="box">
@@ -718,10 +733,10 @@ const AdminSalesReport: React.FC = () => {
           <div class="row"><span>Total Time</span><b>${peso(totalTimeAmount)}</b></div>
           <div class="row"><span>Add-ons (Paid)</span><b>${peso(addons)}</b></div>
           <div class="row"><span>Discounts</span><b>${peso(discount)}</b></div>
-          <div class="row"><span>Consignment Sales</span><b>${peso(consGross)}</b></div>
-          <div class="row"><span>Consignment 15%</span><b>${peso(consFee)}</b></div>
-          <div class="row"><span>Consignment Net</span><b>${peso(consNet)}</b></div>
-          <div class="row"><span>Cash Outs</span><b>${peso(cashOuts)}</b></div>
+          <div class="row"><span>Consignment Sales</span><b>${peso(consignment.gross)}</b></div>
+          <div class="row"><span>Consignment 15%</span><b>${peso(consignment.fee15)}</b></div>
+          <div class="row"><span>Cash Outs (Cash)</span><b>${peso(cashOutsCash)}</b></div>
+          <div class="row"><span>Cash Outs (GCash)</span><b>${peso(cashOutsGcash)}</b></div>
         </div>
       </div>
     </div>
@@ -762,7 +777,7 @@ const AdminSalesReport: React.FC = () => {
     const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
     const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
-    const expenses = totals ? toNumber(totals.expenses_amount) : 0;
+    const inventoryLoss = totals ? toNumber(totals.expenses_amount) : 0;
     const cashSales = totals ? toNumber(totals.cash_sales) : 0;
     const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
@@ -782,16 +797,13 @@ const AdminSalesReport: React.FC = () => {
     const cohCash = cashTotalLocal + coinTotalLocal;
     const cohGcash = gcashSales;
 
-    const salesSystem =
-      cohCash + cohGcash + paidResCash + advCash + walkCash - (startingCash + startingGcash);
-
-    const salesCollectedDisplay = salesSystem - bilin;
+    const actualSystem = cohCash + cohGcash + paidResCash + advCash + walkCash - (startingCash + startingGcash);
+    const salesCollectedDisplay = actualSystem - bilin;
 
     const addons = addonsPaid;
     const discount = totals ? toNumber(totals.discount_total) : 0;
-
-    const totalTimeAmount =
-      (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
+    const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
+    const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
 
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Report");
@@ -805,17 +817,23 @@ const AdminSalesReport: React.FC = () => {
     ws.addRow(["CATEGORY", "CASH", "GCASH"]);
     ws.addRow(["Starting Balance", startingCash, startingGcash]);
     ws.addRow(["COH / Total of the Day", cohCash, cohGcash]);
-    ws.addRow(["Expenses", expenses, ""]);
+    ws.addRow(["Cash Outs", cashOutsCash, cashOutsGcash]);
     ws.addRow(["Paid reservations for today", paidResCash, paidResGcash]);
     ws.addRow(["New Advance Payments", advCash, advGcash]);
     ws.addRow(["Down payments within this day only", walkCash, walkGcash]);
-    ws.addRow(["Sales System (computed)", salesSystem, ""]);
+    ws.addRow(["Actual System", actualSystem, ""]);
+    ws.addRow(["Sales System (computed)", salesSystemComputed, ""]);
     ws.addRow([]);
 
     ws.addRow(["Cash Sales", cashSales]);
     ws.addRow(["GCash Sales", gcashSales]);
     ws.addRow(["Bilin", bilin]);
-    ws.addRow(["Sales Collected (Sales System - Bilin)", salesCollectedDisplay]);
+    ws.addRow(["Sales Collected (Actual System - Bilin)", salesCollectedDisplay]);
+    ws.addRow([]);
+
+    // ✅ bottom summary (requested: Inventory Loss beside Consignment Net — in Excel we keep them adjacent rows)
+    ws.addRow(["Consignment Net", consignment.net]);
+    ws.addRow(["Inventory Loss", inventoryLoss]);
     ws.addRow([]);
 
     ws.addRow(["Other Totals"]);
@@ -824,31 +842,20 @@ const AdminSalesReport: React.FC = () => {
     ws.addRow(["Discount (amount)", discount]);
     ws.addRow(["Consignment Sales", consignment.gross]);
     ws.addRow(["Consignment 15%", consignment.fee15]);
-    ws.addRow(["Consignment Net", consignment.net]);
-    ws.addRow(["Cash Outs", cashOutsTotal]);
+    ws.addRow(["Cash Outs (Cash)", cashOutsCash]);
+    ws.addRow(["Cash Outs (GCash)", cashOutsGcash]);
     ws.addRow([]);
 
     ws.addRow(["CASH COUNT"]);
     ws.addRow(["Type", "Denomination", "Qty", "Amount"]);
 
-    for (const l of cashLines) {
-      ws.addRow(["CASH", l.denomination, l.qty, l.denomination * l.qty]);
-    }
-    for (const l of coinLines) {
-      ws.addRow(["COIN", l.denomination, l.qty, l.denomination * l.qty]);
-    }
+    for (const l of cashLines) ws.addRow(["CASH", l.denomination, l.qty, l.denomination * l.qty]);
+    for (const l of coinLines) ws.addRow(["COIN", l.denomination, l.qty, l.denomination * l.qty]);
 
-    ws.columns = [
-      { width: 22 },
-      { width: 16 },
-      { width: 10 },
-      { width: 16 },
-    ];
+    ws.columns = [{ width: 26 }, { width: 16 }, { width: 12 }, { width: 18 }];
 
     const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buf], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     saveAs(blob, `Daily_Sales_Report_${selectedDate}.xlsx`);
 
     setToast({ open: true, msg: "Excel exported.", color: "success" });
@@ -860,6 +867,7 @@ const AdminSalesReport: React.FC = () => {
 
   useEffect(() => {
     void loadReport(selectedDate);
+    void loadTotals(selectedDate);
     void loadConsignment(selectedDate);
     void loadAddonsPaid(selectedDate);
     void loadCashOutsTotal(selectedDate);
@@ -869,7 +877,6 @@ const AdminSalesReport: React.FC = () => {
   useEffect(() => {
     if (!report) return;
     void loadCashLines(report.id);
-    void loadTotals(selectedDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report?.id]);
 
@@ -885,7 +892,7 @@ const AdminSalesReport: React.FC = () => {
     return lines.filter((l) => l.money_kind === "coin").reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
-  const expenses = totals ? toNumber(totals.expenses_amount) : 0;
+  const inventoryLoss = totals ? toNumber(totals.expenses_amount) : 0;
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
@@ -906,20 +913,16 @@ const AdminSalesReport: React.FC = () => {
 
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 
-  // ✅ SAME AS STAFF:
-  // Sales System = (COH cash + COH gcash) + (PaidRes CASH + Advance CASH + DownPayment CASH) - (Starting Cash + Starting GCash)
-  // Do NOT include GCASH from PaidRes/Advance/DownPayment
-  const salesSystem =
-    cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
+  // ✅ Actual System (same as staff)
+  const actualSystem = cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
 
-  // ✅ Sales Collected = Sales System - Bilin (auto minus)
-  const salesCollectedDisplay = salesSystem - bilin;
-
-  const addons = addonsPaid;
+  // ✅ Sales System (computed like staff)
+  const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
   const discount = totals ? toNumber(totals.discount_total) : 0;
+  const salesSystemComputed = addonsPaid + totalTimeAmount + consignment.gross - discount;
 
-  const totalTimeAmount =
-    (totals ? toNumber(totals.walkin_cash) : 0) + (totals ? toNumber(totals.walkin_gcash) : 0);
+  // ✅ Sales Collected = Actual System - Bilin
+  const salesCollectedDisplay = actualSystem - bilin;
 
   if (loading) {
     return (
@@ -938,7 +941,7 @@ const AdminSalesReport: React.FC = () => {
 
   return (
     <IonPage>
-      <IonHeader>{/* optional: leave blank */}</IonHeader>
+      <IonHeader>{/* optional */}</IonHeader>
 
       <IonContent className="ion-padding ssr-page">
         <IonToast
@@ -1000,22 +1003,12 @@ const AdminSalesReport: React.FC = () => {
               </div>
 
               <div className="ssr-actions">
-                <IonButton
-                  className="ssr-btn ssr-btn--ghost"
-                  fill="outline"
-                  disabled={submitting || !report}
-                  onClick={() => void exportToExcel()}
-                >
+                <IonButton className="ssr-btn ssr-btn--ghost" fill="outline" disabled={submitting || !report} onClick={() => void exportToExcel()}>
                   <IonIcon slot="start" icon={downloadOutline} />
                   Export Excel
                 </IonButton>
 
-                <IonButton
-                  className="ssr-btn ssr-btn--ghost"
-                  fill="outline"
-                  disabled={submitting || !report}
-                  onClick={() => exportToPDF()}
-                >
+                <IonButton className="ssr-btn ssr-btn--ghost" fill="outline" disabled={submitting || !report} onClick={() => exportToPDF()}>
                   <IonIcon slot="start" icon={downloadOutline} />
                   Export PDF
                 </IonButton>
@@ -1111,18 +1104,21 @@ const AdminSalesReport: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* COH */}
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">COH / Total of the Day</div>
                     <div className="ssr-left-value ssr-left-value--cash">{peso(cohCash)}</div>
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(cohGcash)}</div>
                   </div>
 
+                  {/* CASH OUTS split */}
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">Expenses</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(expenses)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">—</div>
+                    <div className="ssr-left-label">Cash Outs</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(cashOutsCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(cashOutsGcash)}</div>
                   </div>
 
+                  {/* Paid reservations */}
                   <div className="ssr-left-row ssr-left-row--tint">
                     <div className="ssr-left-label">Paid reservations for today</div>
                     <div className="ssr-left-value ssr-left-value--cash">{peso(paidResCash)}</div>
@@ -1141,10 +1137,17 @@ const AdminSalesReport: React.FC = () => {
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(dpGcash)}</div>
                   </div>
 
-                  {/* ✅ FIXED: Sales System computed */}
-                  <div className="ssr-left-row ssr-left-row--system">
-                    <div className="ssr-left-label">Sales System</div>
-                    <div className="ssr-left-value ssr-left-value--system ssr-span-2">{peso(salesSystem)}</div>
+                  {/* BOTH SYSTEMS */}
+                  <div className="ssr-system-grid">
+                    <div className="ssr-system-box">
+                      <div className="ssr-system-label">Actual System</div>
+                      <div className="ssr-system-value">{peso(actualSystem)}</div>
+                    </div>
+
+                    <div className="ssr-system-box">
+                      <div className="ssr-system-label">Sales System</div>
+                      <div className="ssr-system-value">{peso(salesSystemComputed)}</div>
+                    </div>
                   </div>
 
                   <div className="ssr-sales-boxes">
@@ -1158,7 +1161,7 @@ const AdminSalesReport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* ✅ CONSIGNMENT + CASH OUTS */}
+                  {/* ✅ BOTTOM: Consignment + Inventory Loss (Inventory Loss beside Consignment Net) */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
@@ -1173,8 +1176,8 @@ const AdminSalesReport: React.FC = () => {
                       <span className="ssr-sales-box-value">{peso(consignment.net)}</span>
                     </div>
                     <div className="ssr-sales-box">
-                      <span className="ssr-sales-box-label">Cash Outs</span>
-                      <span className="ssr-sales-box-value">{peso(cashOutsTotal)}</span>
+                      <span className="ssr-sales-box-label">Inventory Loss</span>
+                      <span className="ssr-sales-box-value">{peso(inventoryLoss)}</span>
                     </div>
                   </div>
                 </IonCardContent>
@@ -1280,7 +1283,6 @@ const AdminSalesReport: React.FC = () => {
                       />
                     </div>
 
-                    {/* ✅ FIXED: Sales Collected = Sales System - Bilin */}
                     <div className="ssr-collected-box ssr-collected-box--net">
                       <div className="ssr-collected-label">Sales Collected</div>
                       <div className="ssr-collected-value">{peso(salesCollectedDisplay)}</div>
@@ -1296,7 +1298,7 @@ const AdminSalesReport: React.FC = () => {
                   <div className="ssr-mini">
                     <div className="ssr-mini-row">
                       <span>Add-ons (Paid)</span>
-                      <b>{peso(addons)}</b>
+                      <b>{peso(addonsPaid)}</b>
                     </div>
                     <div className="ssr-mini-row">
                       <span>Discount (amount)</span>
