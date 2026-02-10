@@ -3,6 +3,8 @@
 // ✅ Cash Outs TOTAL now split into CASH / GCASH (uses cash_outs.payment_method)
 // ✅ If your table still uses ONLY cashout_date + amount, it will fallback to ALL as CASH
 // ✅ Uses paid_at date window logic elsewhere unchanged
+// ✅ FIX: Add-ons (Paid) is now based on PAYMENT amounts (cash_amount + gcash_amount)
+//         grouped per order (same full_name+seat within 10s) to avoid double counting
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -103,6 +105,15 @@ type ConsignmentState = {
   net: number;
 };
 
+// ✅ for Add-ons payment grouping (avoid double counting)
+type AddOnPaymentRow = {
+  created_at: string;
+  full_name: string;
+  seat_number: string;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -194,6 +205,81 @@ const buildZeroLines = (reportId: string): CashLine[] => {
   return merged;
 };
 
+// ✅ Manila day range from YYYY-MM-DD (correct for timestamptz)
+const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } => {
+  const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+};
+
+const ms = (iso: string): number => {
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+
+const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+
+/* =========================
+   ADD-ONS PAYMENT GROUPING (avoid double count)
+   - same full_name + seat_number within 10 seconds = 1 order
+   - payment per order = MAX(gcash_amount) + MAX(cash_amount)
+========================= */
+
+const GROUP_WINDOW_MS = 10_000;
+
+const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
+  if (rows.length === 0) return 0;
+
+  const sorted = [...rows].sort((a, b) => ms(a.created_at) - ms(b.created_at));
+
+  let total = 0;
+
+  let curName = "";
+  let curSeat = "";
+  let curLast = 0;
+  let started = false;
+
+  let maxG = 0;
+  let maxC = 0;
+
+  const flush = (): void => {
+    total += Math.max(0, maxG) + Math.max(0, maxC);
+    maxG = 0;
+    maxC = 0;
+  };
+
+  for (const r of sorted) {
+    const t = ms(r.created_at);
+    const name = norm(r.full_name);
+    const seat = norm(r.seat_number);
+
+    const g = Math.max(0, toNumber(r.gcash_amount));
+    const c = Math.max(0, toNumber(r.cash_amount));
+
+    const startNew =
+      !started || name !== curName || seat !== curSeat || Math.abs(t - curLast) > GROUP_WINDOW_MS;
+
+    if (startNew) {
+      if (started) flush();
+      started = true;
+      curName = name;
+      curSeat = seat;
+      curLast = t;
+      maxG = g;
+      maxC = c;
+      continue;
+    }
+
+    curLast = t;
+    maxG = Math.max(maxG, g);
+    maxC = Math.max(maxC, c);
+  }
+
+  if (started) flush();
+
+  return total;
+};
+
 /* =========================
    PAGE
 ========================= */
@@ -211,7 +297,7 @@ const StaffSalesReport: React.FC = () => {
   // ✅ CONSIGNMENT (PAID ONLY)
   const [consignment, setConsignment] = useState<ConsignmentState>({ gross: 0, fee15: 0, net: 0 });
 
-  // ✅ ADD-ONS (PAID ONLY)
+  // ✅ ADD-ONS (PAYMENTS)
   const [addonsPaid, setAddonsPaid] = useState<number>(0);
 
   // ✅ CASH OUTS TOTAL (cashout_date) split cash/gcash
@@ -377,39 +463,39 @@ const StaffSalesReport: React.FC = () => {
     setConsignment({ gross, fee15, net });
   };
 
+  // ✅ FIXED: Add-ons (Paid) based on PAYMENT, not total
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setAddonsPaid(0);
       return;
     }
 
-    const startISO = `${dateYMD}T00:00:00.000`;
-    const endISO = `${dateYMD}T23:59:59.999`;
+    const { startIso, endIso } = manilaDayRange(dateYMD);
 
     const res = await supabase
       .from("customer_session_add_ons")
-      .select("total, paid_at")
-      .eq("is_paid", true)
-      .not("paid_at", "is", null)
-      .gte("paid_at", startISO)
-      .lte("paid_at", endISO);
+      .select("created_at, full_name, seat_number, gcash_amount, cash_amount")
+      .gte("created_at", startIso)
+      .lt("created_at", endIso);
 
     if (res.error) {
       // eslint-disable-next-line no-console
-      console.error("addonsPaid query error:", res.error.message);
+      console.error("addonsPaid(payment) query error:", res.error.message);
       setAddonsPaid(0);
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
-    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
-    setAddonsPaid(gross);
+    const rows = (res.data ?? []) as AddOnPaymentRow[];
+    const onlyWithPayment = rows.filter((r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0);
+
+    const totalPayments = computeAddonsPaidFromPayments(onlyWithPayment);
+    setAddonsPaid(totalPayments);
   };
 
   /**
    * ✅ CASH OUTS (FIX)
    * - Prefer: cash_outs.payment_method ('cash' | 'gcash')
-   * - If column doesn't exist, query still works (we don't select it) and we treat all as CASH
+   * - If column doesn't exist, fallback to old schema
    */
   const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -419,10 +505,7 @@ const StaffSalesReport: React.FC = () => {
     }
 
     // Try with payment_method first
-    const res = await supabase
-      .from("cash_outs")
-      .select("amount, cashout_date, payment_method")
-      .eq("cashout_date", dateYMD);
+    const res = await supabase.from("cash_outs").select("amount, cashout_date, payment_method").eq("cashout_date", dateYMD);
 
     if (res.error) {
       // If payment_method column doesn't exist, fallback to old schema
@@ -444,13 +527,9 @@ const StaffSalesReport: React.FC = () => {
     }
 
     const rows = (res.data ?? []) as Array<{ amount: number | string | null; payment_method?: CashOutMethod | null }>;
-    const cash = rows
-      .filter((r) => (r.payment_method ?? "cash") === "cash")
-      .reduce((sum, r) => sum + toNumber(r.amount), 0);
+    const cash = rows.filter((r) => (r.payment_method ?? "cash") === "cash").reduce((sum, r) => sum + toNumber(r.amount), 0);
 
-    const gcash = rows
-      .filter((r) => (r.payment_method ?? "cash") === "gcash")
-      .reduce((sum, r) => sum + toNumber(r.amount), 0);
+    const gcash = rows.filter((r) => (r.payment_method ?? "cash") === "gcash").reduce((sum, r) => sum + toNumber(r.amount), 0);
 
     setCashOutsCash(cash);
     setCashOutsGcash(gcash);
@@ -467,7 +546,10 @@ const StaffSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("daily_cash_count_lines")
-      .upsert({ report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty }, { onConflict: "report_id,money_kind,denomination" });
+      .upsert(
+        { report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty },
+        { onConflict: "report_id,money_kind,denomination" }
+      );
 
     if (res.error) {
       // eslint-disable-next-line no-console
@@ -605,7 +687,12 @@ const StaffSalesReport: React.FC = () => {
         return;
       }
 
-      const check = await supabase.from("daily_sales_reports").select("is_submitted").eq("report_date", selectedDate).single<{ is_submitted: boolean }>();
+      const check = await supabase
+        .from("daily_sales_reports")
+        .select("is_submitted")
+        .eq("report_date", selectedDate)
+        .single<{ is_submitted: boolean }>();
+
       const isSubmitted = Boolean(check.data?.is_submitted);
 
       if (isSubmitted) {
@@ -615,7 +702,7 @@ const StaffSalesReport: React.FC = () => {
         setCashOutsGcash(0);
       } else {
         void loadConsignment(selectedDate);
-        void loadAddonsPaid(selectedDate);
+        void loadAddonsPaid(selectedDate); // ✅ fixed
         void loadCashOutsTotal(selectedDate);
       }
     })();
@@ -680,7 +767,7 @@ const StaffSalesReport: React.FC = () => {
   const salesSystem = cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
 
   /**
-   * ✅ NEW: Sales System (computed)
+   * ✅ Sales System (computed)
    * add-ons + total time + consignment sales - discount
    */
   const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
