@@ -701,7 +701,7 @@ const Customer_Lists: React.FC = () => {
           {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
-              <h2 className="customer-lists-title">Customer Lists - Non Reservation</h2>
+              <h2 className="customer-lists-title">Customer Lists - Walk In</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
               </div>

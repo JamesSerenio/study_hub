@@ -20,11 +20,9 @@
 //    - Uses RPC cancel_customer_session (moves to customer_sessions_cancelled)
 //    - Stops View to Customer if active
 //    - Releases reserved seats
-// ✅ NEW (YOUR REQUEST):
+// ✅ NEW:
 //    ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
-//       - no clamping, no auto-balancing
-//       - Save stores exactly what you typed
-//       - Auto PAID/UNPAID based on totalPaid >= due
+// ✅ NEW: REFRESH button beside DATE FILTER (same className so same color)
 // ✅ No "any"
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -227,6 +225,9 @@ const Customer_Reservations: React.FC = () => {
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
 
+  // ✅ refresh busy
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+
   useEffect(() => {
     void fetchReservationSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -378,6 +379,16 @@ const Customer_Reservations: React.FC = () => {
     setLoading(false);
   };
 
+  // ✅ Refresh button action
+  const refreshAll = async (): Promise<void> => {
+    try {
+      setRefreshing(true);
+      await Promise.all([fetchReservationSessions(), hydrateViewState()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const phoneText = (s: CustomerSession): string => {
     const p = String(s.phone_number ?? "").trim();
     return p || "N/A";
@@ -503,10 +514,7 @@ const Customer_Reservations: React.FC = () => {
     }
 
     const ids = rows.map((r) => r.id);
-    const { error: upErr } = await supabase
-      .from("seat_blocked_times")
-      .update({ end_at: nowIso, note: "stopped/cancelled" })
-      .in("id", ids);
+    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped/cancelled" }).in("id", ids);
 
     if (upErr) {
       // eslint-disable-next-line no-console
@@ -602,7 +610,7 @@ const Customer_Reservations: React.FC = () => {
         }
       }
 
-      // ✅ RPC: inserts into public.customer_sessions_cancelled (your table) then deletes original
+      // ✅ RPC: inserts into public.customer_sessions_cancelled then deletes original
       const { error } = await supabase.rpc("cancel_customer_session", {
         p_session_id: cancelTarget.id,
         p_reason: reason,
@@ -745,13 +753,10 @@ const Customer_Reservations: React.FC = () => {
   const openPaymentModal = (s: CustomerSession): void => {
     const pi = getPaidInfo(s);
     setPaymentTarget(s);
-
-    // ✅ FREE INPUTS: show existing values, do NOT auto-adjust to due
     setGcashInput(String(pi.gcash));
     setCashInput(String(pi.cash));
   };
 
-  // ✅ FREE INPUTS: do not auto-balance other field
   const setGcashFree = (gcashStr: string): void => {
     const v = round2(Math.max(0, toMoney(gcashStr)));
     setGcashInput(String(v));
@@ -767,7 +772,6 @@ const Customer_Reservations: React.FC = () => {
 
     const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-    // ✅ store EXACT typed amounts (non-negative only)
     const gc = round2(Math.max(0, toMoney(gcashInput)));
     const ca = round2(Math.max(0, toMoney(cashInput)));
 
@@ -889,19 +893,30 @@ const Customer_Reservations: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE */}
-              <label className="date-pill">
-                <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
-                <span className="date-pill-icon" aria-hidden="true">
-                  📅
-                </span>
-              </label>
+              {/* DATE + REFRESH (katabi) */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="date-pill">
+                  <span className="date-pill-label">Date</span>
+                  <input
+                    className="date-pill-input"
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                  />
+                  <span className="date-pill-icon" aria-hidden="true">
+                    📅
+                  </span>
+                </label>
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void refreshAll()}
+                  disabled={loading || refreshing}
+                  title="Refresh list"
+                >
+                  {refreshing ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -945,7 +960,7 @@ const Customer_Reservations: React.FC = () => {
 
                     const systemCost = getSessionSystemCost(session);
                     const pi = getPaidInfo(session);
-                    const remainingPay = round2(Math.max(0, systemCost - pi.totalPaid)); // keep display as remaining only
+                    const remainingPay = round2(systemCost - pi.totalPaid); // ✅ can be negative (change)
 
                     const dp = getDownPayment(session);
 
@@ -994,7 +1009,11 @@ const Customer_Reservations: React.FC = () => {
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remainingPay.toFixed(2)}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              {remainingPay >= 0
+                                ? `Remaining ₱${remainingPay.toFixed(2)}`
+                                : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
+                            </span>
 
                             <button
                               className="receipt-btn"
@@ -1033,7 +1052,6 @@ const Customer_Reservations: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ✅ CANCEL -> opens reason modal (record goes to customer_sessions_cancelled) */}
                             <button className="receipt-btn admin-danger" onClick={() => openCancelModal(session)} title="Cancel requires description">
                               Cancel
                             </button>
@@ -1401,11 +1419,7 @@ const Customer_Reservations: React.FC = () => {
 
                 {isOpenTimeSession(selectedSession) && (
                   <div className="block-top">
-                    <button
-                      className="receipt-btn btn-full"
-                      disabled={stoppingId === selectedSession.id}
-                      onClick={() => void stopOpenTime(selectedSession)}
-                    >
+                    <button className="receipt-btn btn-full" disabled={stoppingId === selectedSession.id} onClick={() => void stopOpenTime(selectedSession)}>
                       {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
@@ -1514,7 +1528,6 @@ const Customer_Reservations: React.FC = () => {
                     {selectedSession && isCustomerViewOnFor(selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
                   </button>
 
-                  {/* ✅ CANCEL IN RECEIPT -> opens reason modal */}
                   <button className="receipt-btn admin-danger" onClick={() => openCancelModal(selectedSession)} disabled={cancellingBusy} title="Cancel requires description">
                     Cancel
                   </button>
