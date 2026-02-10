@@ -58,27 +58,27 @@ const minutesLeftCeil = (endIso: string): number => {
 };
 
 /* =========================
-   DATA TYPES
+   DB TYPES (MATCH YOUR DB)
 ========================= */
 
-// ✅ customer_sessions source
+// ✅ customer_sessions (walk-in / reservation / promo-link)
 type CustomerSessionRow = {
   id: string;
   created_at: string | null;
   full_name: string;
   seat_number: string | string[] | null;
 
-  // ✅ NEW countdown base
-  expected_end_at: string | null;
+  // ✅ YOUR DB COLUMN
+  time_ended: string | null;
 
   // ✅ yes/no
-  reservation: string;
+  reservation: string; // "yes" | "no"
 
   // ✅ promo link
   promo_booking_id: string | null;
 };
 
-// ✅ promo_bookings source (extra safety)
+// ✅ promo_bookings (extra safety)
 type PromoBookingRow = {
   id: string;
   created_at: string;
@@ -151,7 +151,7 @@ const App: React.FC = () => {
 
     // customer_sessions
     Array.from(sessionsRef.current.values()).forEach((s) => {
-      const endIso = s.expected_end_at;
+      const endIso = s.time_ended;
       if (!endIso) return;
 
       const endMs = new Date(endIso).getTime();
@@ -199,13 +199,17 @@ const App: React.FC = () => {
 
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select("id, created_at, full_name, seat_number, expected_end_at, reservation, promo_booking_id")
-      .not("expected_end_at", "is", null)
-      .gt("expected_end_at", nowIso)
-      .order("expected_end_at", { ascending: true })
+      .select("id, created_at, full_name, seat_number, time_ended, reservation, promo_booking_id")
+      .not("time_ended", "is", null)
+      .gt("time_ended", nowIso)
+      .order("time_ended", { ascending: true })
       .limit(400);
 
-    if (error || !data) return;
+    if (error || !data) {
+      // optional debug:
+      // console.log("loadActiveCustomerSessions error:", error?.message);
+      return;
+    }
 
     const rows = data as CustomerSessionRow[];
     const map = new Map<string, CustomerSessionRow>();
@@ -223,7 +227,11 @@ const App: React.FC = () => {
       .order("end_at", { ascending: true })
       .limit(400);
 
-    if (error || !data) return;
+    if (error || !data) {
+      // optional debug:
+      // console.log("loadActivePromos error:", error?.message);
+      return;
+    }
 
     const rows = data as PromoBookingRow[];
     const map = new Map<string, PromoBookingRow>();
