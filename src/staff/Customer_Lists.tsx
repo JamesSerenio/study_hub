@@ -15,6 +15,7 @@
 // ✅ NEW: Cancel now requires DESCRIPTION and moves record to customer_sessions_cancelled (RPC)
 // ✅ strict TS (NO "any")
 // ✅ FIXED: PAYMENT inputs no longer LIMIT/force total = due (Cash & GCash free input)
+// ✅ NEW: REFRESH button placed BESIDE DATE FILTER (same className so same color)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -24,17 +25,6 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 
-/**
- * ✅ CROSS-DEVICE CUSTOMER VIEW (Supabase) — SINGLE ROW
- * Table design:
- *   customer_view_state(
- *     id int primary key default 1,
- *     session_id uuid null,
- *     enabled boolean not null default false,
- *     updated_at timestamptz not null default now()
- *   )
- * Must have exactly 1 row with id=1
- */
 type CustomerViewRow = {
   id: number;
   session_id: string | null;
@@ -64,19 +54,15 @@ interface CustomerSession {
   reservation_date: string | null;
   seat_number: string;
 
-  // ✅ DOWN PAYMENT (DB)
   down_payment?: number | string | null;
 
-  // DISCOUNT
   discount_kind?: DiscountKind;
   discount_value?: number | string;
   discount_reason?: string | null;
 
-  // PAYMENT
   gcash_amount?: number | string;
   cash_amount?: number | string;
 
-  // PAID STATUS
   is_paid?: boolean | number | string | null;
   paid_at?: string | null;
 }
@@ -175,41 +161,35 @@ const Customer_Lists: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
 
-  // ✅ customer view status (from DB)
   const [activeView, setActiveView] = useState<CustomerViewRow | null>(null);
   const [viewBusy, setViewBusy] = useState<boolean>(false);
 
-  // ✅ Cancel modal (requires description)
   const [cancelTarget, setCancelTarget] = useState<CustomerSession | null>(null);
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
 
-  // Date filter
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
-
-  // ✅ Search (Full Name only)
   const [searchName, setSearchName] = useState<string>("");
 
-  // Discount modal
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
   const [discountKind, setDiscountKind] = useState<DiscountKind>("none");
   const [discountInput, setDiscountInput] = useState<string>("0");
   const [discountReason, setDiscountReason] = useState<string>("");
   const [savingDiscount, setSavingDiscount] = useState<boolean>(false);
 
-  // ✅ Down Payment modal
   const [dpTarget, setDpTarget] = useState<CustomerSession | null>(null);
   const [dpInput, setDpInput] = useState<string>("0");
   const [savingDp, setSavingDp] = useState<boolean>(false);
 
-  // ✅ Payment modal (FREE INPUTS, NO LIMIT)
   const [paymentTarget, setPaymentTarget] = useState<CustomerSession | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
-  // Paid toggle busy id
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
+
+  // ✅ refresh busy
+  const [refreshing, setRefreshing] = useState<boolean>(false);
 
   useEffect(() => {
     void fetchCustomerSessions();
@@ -260,9 +240,6 @@ const Customer_Lists: React.FC = () => {
     setLoading(false);
   };
 
-  /* =========================
-     CUSTOMER VIEW STATE (DB)
-  ========================= */
   const readActiveCustomerView = async (): Promise<void> => {
     const { data, error } = await supabase
       .from("customer_view_state")
@@ -292,6 +269,16 @@ const Customer_Lists: React.FC = () => {
     return () => {
       void supabase.removeChannel(channel);
     };
+  };
+
+  // ✅ refresh (list + view state)
+  const refreshAll = async (): Promise<void> => {
+    try {
+      setRefreshing(true);
+      await Promise.all([fetchCustomerSessions(), readActiveCustomerView()]);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const phoneText = (s: CustomerSession): string => {
@@ -350,14 +337,12 @@ const Customer_Lists: React.FC = () => {
     return getDiscountTextFrom(di.kind, di.value);
   };
 
-  // ✅ System cost AFTER discount (Payment basis)
   const getSessionSystemCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
     return applyDiscount(base, di.kind, di.value).discountedCost;
   };
 
-  // ✅ Balance/Change display uses DP (display only)
   const getSessionBalanceAfterDP = (s: CustomerSession): number => {
     const systemCost = getSessionSystemCost(s);
     const dp = getDownPayment(s);
@@ -464,7 +449,6 @@ const Customer_Lists: React.FC = () => {
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
     const dueForPayment = round2(Math.max(0, discounted));
 
-    // ✅ KEEP existing cash/gcash as-is (no limiting)
     const prevPay = getPaidInfo(discountTarget);
     const totalPaid = round2(prevPay.gcash + prevPay.cash);
     const autoPaid = dueForPayment <= 0 ? true : totalPaid >= dueForPayment;
@@ -478,11 +462,8 @@ const Customer_Lists: React.FC = () => {
           discount_kind: discountKind,
           discount_value: finalValue,
           discount_reason: discountReason.trim(),
-
-          // keep existing payments
           gcash_amount: prevPay.gcash,
           cash_amount: prevPay.cash,
-
           is_paid: autoPaid,
           paid_at: autoPaid ? new Date().toISOString() : null,
         })
@@ -508,7 +489,7 @@ const Customer_Lists: React.FC = () => {
   };
 
   // -----------------------
-  // ✅ DOWN PAYMENT MODAL (EDITABLE)
+  // DOWN PAYMENT MODAL
   // -----------------------
   const openDpModal = (s: CustomerSession): void => {
     setDpTarget(s);
@@ -549,13 +530,11 @@ const Customer_Lists: React.FC = () => {
   };
 
   // -----------------------
-  // ✅ PAYMENT MODAL (FREE INPUTS, NO LIMIT)
+  // PAYMENT MODAL (FREE INPUTS)
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
     const pi = getPaidInfo(s);
-
     setPaymentTarget(s);
-    // ✅ Prefill with existing values (no forcing to due)
     setGcashInput(String(pi.gcash));
     setCashInput(String(pi.cash));
   };
@@ -564,7 +543,6 @@ const Customer_Lists: React.FC = () => {
     if (!paymentTarget) return;
 
     const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
-
     const g = round2(Math.max(0, toMoney(gcashInput)));
     const c = round2(Math.max(0, toMoney(cashInput)));
     const totalPaid = round2(g + c);
@@ -636,13 +614,9 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  /* =========================
-     ✅ CANCEL FLOW (REQUIRES DESCRIPTION)
-     - opens modal
-     - submit -> RPC cancel_customer_session()
-     - moves row to customer_sessions_cancelled then deletes original
-  ========================= */
-
+  // -----------------------
+  // CANCEL FLOW
+  // -----------------------
   const openCancelModal = (s: CustomerSession): void => {
     setCancelTarget(s);
     setCancelReason("");
@@ -667,15 +641,9 @@ const Customer_Lists: React.FC = () => {
         return;
       }
 
-      // remove from UI list immediately
       setSessions((prev) => prev.filter((x) => x.id !== cancelTarget.id));
+      if (selectedSession?.id === cancelTarget.id) setSelectedSession(null);
 
-      // close receipt if same
-      if (selectedSession?.id === cancelTarget.id) {
-        setSelectedSession(null);
-      }
-
-      // refresh view state display
       await readActiveCustomerView();
 
       setCancelTarget(null);
@@ -697,11 +665,8 @@ const Customer_Lists: React.FC = () => {
     try {
       setViewBusy(true);
 
-      if (currentlyOn) {
-        await setCustomerViewState(false, null);
-      } else {
-        await setCustomerViewState(true, selectedSession.id);
-      }
+      if (currentlyOn) await setCustomerViewState(false, null);
+      else await setCustomerViewState(true, selectedSession.id);
 
       await readActiveCustomerView();
     } catch (e) {
@@ -771,19 +736,30 @@ const Customer_Lists: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE */}
-              <label className="date-pill">
-                <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
-                <span className="date-pill-icon" aria-hidden="true">
-                  📅
-                </span>
-              </label>
+              {/* DATE + REFRESH (katabi) */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="date-pill">
+                  <span className="date-pill-label">Date</span>
+                  <input
+                    className="date-pill-input"
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                  />
+                  <span className="date-pill-icon" aria-hidden="true">
+                    📅
+                  </span>
+                </label>
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void refreshAll()}
+                  disabled={loading || refreshing}
+                  title="Refresh list"
+                >
+                  {refreshing ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -826,7 +802,7 @@ const Customer_Lists: React.FC = () => {
 
                     const systemCost = round2(Math.max(0, getSessionSystemCost(session)));
                     const pi = getPaidInfo(session);
-                    const remainingPay = round2(systemCost - pi.totalPaid); // ✅ can be negative (change)
+                    const remainingPay = round2(systemCost - pi.totalPaid);
 
                     const dp = getDownPayment(session);
                     const viewOn = isCustomerViewOnForSession(activeView, session.id);
@@ -870,14 +846,15 @@ const Customer_Lists: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* PAYMENT */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              {remainingPay >= 0 ? `Remaining ₱${remainingPay.toFixed(2)}` : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
+                              {remainingPay >= 0
+                                ? `Remaining ₱${remainingPay.toFixed(2)}`
+                                : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
                             </span>
 
                             <button
@@ -900,7 +877,11 @@ const Customer_Lists: React.FC = () => {
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                           >
-                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                            {togglingPaidId === session.id
+                              ? "Updating..."
+                              : toBool(session.is_paid)
+                              ? "PAID"
+                              : "UNPAID"}
                           </button>
                         </td>
 
@@ -922,7 +903,6 @@ const Customer_Lists: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ✅ CANCEL -> opens reason modal */}
                             <button
                               className="receipt-btn admin-danger"
                               onClick={() => openCancelModal(session)}
@@ -946,7 +926,7 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ CANCEL MODAL (REQUIRES DESCRIPTION) */}
+          {/* ✅ CANCEL MODAL */}
           {cancelTarget && (
             <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1083,11 +1063,11 @@ const Customer_Lists: React.FC = () => {
                 {(() => {
                   const base = getBaseSystemCost(discountTarget);
                   const val = toMoney(discountInput);
-                  const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+                  const appliedVal =
+                    discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
                   const dueForPayment = round2(Math.max(0, discountedCost));
-
                   const prevPay = getPaidInfo(discountTarget);
 
                   return (
@@ -1146,7 +1126,7 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ PAYMENT MODAL (NO LIMIT) */}
+          {/* ✅ PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1162,7 +1142,7 @@ const Customer_Lists: React.FC = () => {
                   const c = round2(Math.max(0, toMoney(cashInput)));
                   const totalPaid = round2(g + c);
 
-                  const diff = round2(totalPaid - due); // + = change, - = remaining
+                  const diff = round2(totalPaid - due);
                   const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
                   return (
@@ -1313,7 +1293,6 @@ const Customer_Lists: React.FC = () => {
                   const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
                   const dueForPayment = round2(Math.max(0, discountCalc.discountedCost));
-
                   const pi = getPaidInfo(selectedSession);
 
                   const dpBalance = round2(Math.max(0, dueForPayment - dp));
@@ -1396,10 +1375,11 @@ const Customer_Lists: React.FC = () => {
 
                 <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button className="receipt-btn" onClick={() => void toggleCustomerViewForSelected()} disabled={viewBusy}>
-                    {isCustomerViewOnForSession(activeView, selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
+                    {isCustomerViewOnForSession(activeView, selectedSession.id)
+                      ? "Stop View to Customer"
+                      : "View to Customer"}
                   </button>
 
-                  {/* ✅ CANCEL IN RECEIPT -> opens reason modal */}
                   <button
                     className="receipt-btn admin-danger"
                     onClick={() => openCancelModal(selectedSession)}
