@@ -3,6 +3,7 @@
 // ✅ SAME SEAT LOGIC/UI (copied from Seat.tsx)
 // ✅ Leaves same as Login
 // ✅ HARD REMOVE the "dirty brown" overlay by disabling login-content::before/::after ONLY on this page
+// ✅ MOBILE FIX: smaller seat numbers/pins + smaller legend dots + better card width
 // ✅ STRICT TS, NO any
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -98,7 +99,7 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
       { id: "7A", label: "7A", x: 58, y: 39.7, kind: "seat" },
       { id: "7B", label: "7B", x: 58.2, y: 43, kind: "seat" },
 
-      { id: "13", label: "13", x: 42.5, y: 62.2, kind: "seat" },
+      { id: "13", label: "13", x: 40.7, y: 60.5, kind: "seat" },
 
       { id: "14", label: "14", x: 47.8, y: 52.3, kind: "seat" },
       { id: "15", label: "15", x: 54.5, y: 52.3, kind: "seat" },
@@ -261,7 +262,7 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
 
   return (
     <IonPage>
-      {/* ✅ STYLE OVERRIDE INSIDE PAGE (kills ::before/::after overlay) */}
+      {/* ✅ STYLE OVERRIDE INSIDE PAGE (kills ::before/::after overlay) + MOBILE SIZE FIX */}
       <style>
         {`
           .login-content.seatmap-clean::before,
@@ -270,6 +271,127 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
             display: none !important;
             background: transparent !important;
             opacity: 0 !important;
+          }
+
+          /* =========================
+             MOBILE FIXES
+             - smaller seat pins (numbers)
+             - smaller legend dots (bilog)
+             - tighter card width/padding
+          ========================= */
+
+          /* safe defaults if your global css is missing */
+          .seatmap-card{
+            border-radius: 18px;
+            overflow: hidden;
+          }
+          .seatmap-stage{
+            position: relative;
+            width: 100%;
+          }
+          .seatmap-img{
+            width: 100%;
+            height: auto;
+            display: block;
+            user-select: none;
+            -webkit-user-drag: none;
+          }
+
+          /* pins baseline (desktop/tablet) */
+          .seat-pin{
+            position: absolute;
+            transform: translate(-50%, -50%);
+            width: 15px;
+            height: 15px;
+            border-radius: 999px;
+            display: grid;
+            place-items: center;
+            font-weight: 800;
+            font-size: 8px;
+            line-height: 1;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.12);
+            letter-spacing: -0.2px;
+            pointer-events: none; /* readonly */
+          }
+          .seat-pin.room{
+            width: 70px;
+            height: 20px;
+            border-radius: 10px;
+            font-size: 6px;
+            padding: 0px;
+            text-align: center;
+          }
+
+          /* legend dot baseline */
+          .legend-dot{
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            display: inline-block;
+            margin-right: 8px;
+          }
+
+          /* ✅ SMALL PHONES */
+          @media (max-width: 420px){
+            /* make the outer box full width on mobile */
+            .login-wrapper{
+              padding-left: 10px !important;
+              padding-right: 10px !important;
+            }
+
+            .login-box{
+              width: 200% !important;
+              max-width: 400px !important;
+            }
+
+            .seatmap-card{
+              border-radius: 16px;
+            }
+
+            .seatmap-topbar{
+              padding: 10px 12px !important;
+            }
+
+            .seatmap-title{
+              font-size: 10px !important;
+            }
+            .seatmap-date{
+              font-size: 10px !important;
+            }
+
+            /* ✅ smaller pins & numbers */
+            .seat-pin{
+              width: 10px !important;
+              height: 10px !important;
+              font-size: 5px !important;
+              border-width: 0px !important;
+              box-shadow: 0 6px 12px rgba(0,0,0,0.10) !important;
+            }
+
+            /* conference room label smaller */
+            .seat-pin.room{
+              width: 40px !important;
+              height: 10px !important;
+
+              display: flex;
+              align-items: center;      /* ✅ vertical centering */
+              justify-content: center;  /* ✅ horizontal centering */
+
+              font-size: 3px !important;
+              line-height: 1 !important; /* important para di bumaba */
+              padding: 0 !important;
+            }
+
+            /* ✅ smaller bilog */
+            .legend-dot{
+              width: 8px !important;
+              height: 8px !important;
+              margin-right: 7px !important;
+            }
+
+            .legend-item{
+              font-size: 12px !important;
+            }
           }
         `}
       </style>
@@ -299,14 +421,12 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
           <img src={leaves} className="leaf-img" alt="" />
         </div>
 
-
         <div className="login-wrapper">
-          {/* remove beige card look here too */}
           <div
             className="login-box"
             style={{
               width: "60%",
-              maxWidth: 1100,
+              maxWidth: 800,
               background: "transparent",
               boxShadow: "none",
             }}

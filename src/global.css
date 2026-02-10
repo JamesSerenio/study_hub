@@ -7241,25 +7241,3 @@ ion-button.ao-success-btn {
   border-radius: 14px;
 }
 
-/* Make sure the native button also looks green */
-ion-button.ao-primary::part(native),
-ion-button.ao-secondary::part(native),
-ion-button.ao-success-btn::part(native) {
-  background: #45a049 !important;
-  color: #ffffff !important;
-  border-radius: 14px;
-}
-
-/* Optional: keep "Reset" (clear) readable */
-ion-button[fill="clear"] {
-  --color: #45a049 !important;
-  font-weight: 800;
-}
-
-/* Keep danger buttons red (Remove / x) */
-ion-button[color="danger"] {
-  --background: #d32f2f !important;
-  --background-hover: #c62828 !important;
-  --background-activated: #b71c1c !important;
-  --color: #ffffff !important;
-}

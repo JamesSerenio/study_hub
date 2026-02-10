@@ -666,8 +666,24 @@ const Add_Ons: React.FC = () => {
             <IonButton expand="block" className="ao-primary" disabled={isLoading} onClick={() => void handleSubmitAddOns()}>
               {isLoading ? "Saving..." : "Submit Order"}
             </IonButton>
-
-            <IonButton expand="block" fill="clear" onClick={resetAddOnsForm} style={{ marginTop: 6 }}>
+            <IonButton
+              expand="block"
+              fill="solid"
+              className="btn-green"
+              onClick={resetAddOnsForm}
+              style={{
+                marginTop: 8,
+                height: 46,
+                "--background": "#39a84b",
+                "--background-hover": "#2f8f3f",
+                "--background-activated": "#2f8f3f",
+                "--color": "#ffffff",
+                "--border-radius": "12px",
+                fontWeight: 900,
+                textTransform: "uppercase",
+                boxShadow: "0 10px 18px rgba(57,168,75,0.25)",
+              }}
+            >
               Reset
             </IonButton>
           </div>
