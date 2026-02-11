@@ -3,13 +3,15 @@
 // ✅ Restocked is NOT edited in Edit modal anymore
 // ✅ No "any"
 // ✅ SAME UI/CLASSNAMES as Product_Item_Lists (PIL theme)
-// ✅ Search bar (name/category)
+// ✅ Search bar (name/category/size)
 // ✅ Sort by Category OR Stock (asc/desc)
 // ✅ Actions kept (Add Stocks / Edit / Delete) — only wrapped with classnames
 // ✅ Export to Excel (.xlsx) with nice layout
 // ✅ Excel NO ID column
 // ✅ Excel embeds actual images (not URL) using ExcelJS
 // ✅ NEW: SIZE column (DB add_ons.size) shown in table + edit modal + Excel
+// ✅ NEW: Expired + Inventory Loss columns (DB: expired, staff_consumed)
+// ✅ NEW: Bilin column (DB: bilin)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -63,7 +65,8 @@ interface AddOn {
   id: string;
   category: string;
   name: string;
-  size: string | null; // ✅ NEW
+  size: string | null;
+
   price: number;
   restocked: number;
   sold: number;
@@ -72,6 +75,10 @@ interface AddOn {
   overall_sales: number;
   expected_sales: number;
   image_url: string | null;
+
+  expired: number;
+  staff_consumed: number; // label: Inventory Loss
+  bilin: number; // ✅ NEW
 }
 
 const BUCKET = "add-ons";
@@ -88,6 +95,15 @@ const ymd = (d: Date): string => {
 const normSize = (s: string | null | undefined): string | null => {
   const v = String(s ?? "").trim();
   return v.length ? v : null;
+};
+
+const toNum = (v: unknown): number => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
 };
 
 const Admin_Item_Lists: React.FC = () => {
@@ -121,10 +137,35 @@ const Admin_Item_Lists: React.FC = () => {
   const fetchAddOns = async (): Promise<void> => {
     setLoading(true);
     try {
-      // ✅ include size in select (using "*", it will be included if column exists)
+      // ✅ select "*" so new columns (expired/staff_consumed/bilin/size) are included if they exist
       const { data, error } = await supabase.from("add_ons").select("*").order("created_at", { ascending: false });
       if (error) throw error;
-      setAddOns((data as AddOn[]) || []);
+
+      const rows = (data ?? []) as unknown as AddOn[];
+
+      // ✅ normalize numeric-like just in case (but keep type strict)
+      const normalized: AddOn[] = rows.map((r) => ({
+        ...r,
+        price: toNum(r.price),
+        restocked: toNum(r.restocked),
+        sold: toNum(r.sold),
+        expenses: toNum(r.expenses),
+        stocks: toNum(r.stocks),
+        overall_sales: toNum(r.overall_sales),
+        expected_sales: toNum(r.expected_sales),
+
+        expired: toNum((r as unknown as { expired?: unknown }).expired),
+        staff_consumed: toNum((r as unknown as { staff_consumed?: unknown }).staff_consumed),
+        bilin: toNum((r as unknown as { bilin?: unknown }).bilin), // ✅ NEW
+
+        size: normSize((r as unknown as { size?: string | null }).size),
+        image_url: (r as unknown as { image_url?: string | null }).image_url ?? null,
+        category: String((r as unknown as { category?: unknown }).category ?? ""),
+        name: String((r as unknown as { name?: unknown }).name ?? ""),
+        id: String((r as unknown as { id?: unknown }).id ?? ""),
+      }));
+
+      setAddOns(normalized);
     } catch (error: unknown) {
       // eslint-disable-next-line no-console
       console.error("Error fetching add-ons:", error);
@@ -153,8 +194,8 @@ const Admin_Item_Lists: React.FC = () => {
         return sortOrder === "asc" ? aCat.localeCompare(bCat) : bCat.localeCompare(aCat);
       }
 
-      const aStock = Number.isFinite(a.stocks) ? a.stocks : 0;
-      const bStock = Number.isFinite(b.stocks) ? b.stocks : 0;
+      const aStock = toNum(a.stocks);
+      const bStock = toNum(b.stocks);
       return sortOrder === "asc" ? aStock - bStock : bStock - aStock;
     });
 
@@ -169,7 +210,7 @@ const Admin_Item_Lists: React.FC = () => {
       const name = (a.name ?? "").toString().toLowerCase();
       const cat = (a.category ?? "").toString().toLowerCase();
       const size = (a.size ?? "").toString().toLowerCase();
-      return name.includes(q) || cat.includes(q) || size.includes(q); // ✅ include size in search
+      return name.includes(q) || cat.includes(q) || size.includes(q);
     });
   }, [sortedAddOns, search]);
 
@@ -252,11 +293,11 @@ const Admin_Item_Lists: React.FC = () => {
 
     const fixedSize = normSize(editingAddOn.size);
 
-    if (Number.isNaN(editingAddOn.price) || editingAddOn.price < 0)
+    if (!Number.isFinite(editingAddOn.price) || editingAddOn.price < 0)
       return void (setToastMessage("Price must be a valid positive number."), setShowToast(true));
-    if (Number.isNaN(editingAddOn.sold) || editingAddOn.sold < 0)
+    if (!Number.isFinite(editingAddOn.sold) || editingAddOn.sold < 0)
       return void (setToastMessage("Sold must be a valid non-negative number."), setShowToast(true));
-    if (Number.isNaN(editingAddOn.expenses) || editingAddOn.expenses < 0)
+    if (!Number.isFinite(editingAddOn.expenses) || editingAddOn.expenses < 0)
       return void (setToastMessage("Expenses must be a valid non-negative number."), setShowToast(true));
 
     const oldImageUrl: string | null = editingAddOn.image_url ?? null;
@@ -276,7 +317,7 @@ const Admin_Item_Lists: React.FC = () => {
         .update({
           category: editingAddOn.category,
           name: editingAddOn.name,
-          size: fixedSize, // ✅ NEW
+          size: fixedSize,
           price: editingAddOn.price,
           sold: editingAddOn.sold,
           expenses: editingAddOn.expenses,
@@ -374,7 +415,7 @@ const Admin_Item_Lists: React.FC = () => {
   };
 
   // =========================
-  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED) + SIZE
+  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED) + SIZE + Expired + Inventory Loss + Bilin
   // =========================
 
   const blobToBase64 = (blob: Blob): Promise<string> =>
@@ -415,15 +456,18 @@ const Admin_Item_Lists: React.FC = () => {
         views: [{ state: "frozen", ySplit: 5 }],
       });
 
-      // ✅ Added SIZE column
+      // ✅ Columns (added Expired + Inventory Loss + Bilin)
       ws.columns = [
         { header: "Image", key: "image", width: 14 },
         { header: "Name", key: "name", width: 28 },
         { header: "Category", key: "category", width: 18 },
-        { header: "Size", key: "size", width: 10 }, // ✅ NEW
+        { header: "Size", key: "size", width: 10 },
         { header: "Price", key: "price", width: 12 },
         { header: "Restocked", key: "restocked", width: 12 },
         { header: "Sold", key: "sold", width: 10 },
+        { header: "Expired", key: "expired", width: 10 },
+        { header: "Inventory Loss", key: "inv_loss", width: 14 },
+        { header: "Bilin", key: "bilin", width: 10 }, // ✅ NEW
         { header: "Stocks", key: "stocks", width: 10 },
         { header: "Expenses", key: "expenses", width: 12 },
         { header: "Overall Sales", key: "overall", width: 14 },
@@ -431,9 +475,9 @@ const Admin_Item_Lists: React.FC = () => {
       ];
 
       // Title rows
-      ws.mergeCells(1, 1, 1, 11);
-      ws.mergeCells(2, 1, 2, 11);
-      ws.mergeCells(3, 1, 3, 11);
+      ws.mergeCells(1, 1, 1, 14);
+      ws.mergeCells(2, 1, 2, 14);
+      ws.mergeCells(3, 1, 3, 14);
 
       ws.getCell("A1").value = title;
       ws.getCell("A2").value = generated;
@@ -455,6 +499,9 @@ const Admin_Item_Lists: React.FC = () => {
         "Price",
         "Restocked",
         "Sold",
+        "Expired",
+        "Inventory Loss",
+        "Bilin",
         "Stocks",
         "Expenses",
         "Overall Sales",
@@ -483,19 +530,21 @@ const Admin_Item_Lists: React.FC = () => {
         // A column (Image) left blank; image will be placed over it
         r.getCell(2).value = a.name ?? "";
         r.getCell(3).value = a.category ?? "";
-        r.getCell(4).value = normSize(a.size) ?? "—"; // ✅ SIZE
-        r.getCell(5).value = Number(a.price ?? 0);
-        r.getCell(6).value = Number(a.restocked ?? 0);
-        r.getCell(7).value = Number(a.sold ?? 0);
-        r.getCell(8).value = Number(a.stocks ?? 0);
-        r.getCell(9).value = Number(a.expenses ?? 0);
-        r.getCell(10).value = Number(a.overall_sales ?? 0);
-        r.getCell(11).value = Number(a.expected_sales ?? 0);
+        r.getCell(4).value = normSize(a.size) ?? "—";
+        r.getCell(5).value = toNum(a.price);
+        r.getCell(6).value = toNum(a.restocked);
+        r.getCell(7).value = toNum(a.sold);
+        r.getCell(8).value = toNum(a.expired);
+        r.getCell(9).value = toNum(a.staff_consumed);
+        r.getCell(10).value = toNum(a.bilin); // ✅ NEW
+        r.getCell(11).value = toNum(a.stocks);
+        r.getCell(12).value = toNum(a.expenses);
+        r.getCell(13).value = toNum(a.overall_sales);
+        r.getCell(14).value = toNum(a.expected_sales);
 
         r.height = 52;
 
-        // Borders + alignment
-        for (let c = 1; c <= 11; c++) {
+        for (let c = 1; c <= 14; c++) {
           const cell = r.getCell(c);
           cell.alignment =
             c === 2
@@ -509,13 +558,10 @@ const Admin_Item_Lists: React.FC = () => {
           };
         }
 
-        // Currency formats
-        r.getCell(5).numFmt = '₱#,##0.00'; // Price
-        r.getCell(9).numFmt = '₱#,##0.00'; // Expenses
-        r.getCell(10).numFmt = '₱#,##0.00'; // Overall
-        r.getCell(11).numFmt = '₱#,##0.00'; // Expected
+        r.getCell(5).numFmt = "₱#,##0.00";
+        r.getCell(13).numFmt = "₱#,##0.00";
+        r.getCell(14).numFmt = "₱#,##0.00";
 
-        // ✅ Embed image in column A if available
         if (a.image_url) {
           try {
             const { base64, ext } = await fetchImageBase64(a.image_url);
@@ -557,7 +603,9 @@ const Admin_Item_Lists: React.FC = () => {
   return (
     <IonPage className="pil-page">
       <IonHeader className="pil-header">
-
+        <IonToolbar className="pil-toolbar">
+          <IonTitle className="pil-title">Item Lists (Admin)</IonTitle>
+        </IonToolbar>
       </IonHeader>
 
       <IonContent className="pil-content">
@@ -572,7 +620,6 @@ const Admin_Item_Lists: React.FC = () => {
             Refresh
           </IonButton>
 
-          {/* ✅ EXPORT EXCEL */}
           <IonButton
             className="pil-btn pil-btn--ghost"
             fill="outline"
@@ -601,7 +648,7 @@ const Admin_Item_Lists: React.FC = () => {
             <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
           </IonButton>
 
-          {/* ✅ SAME SEARCH BAR AS BOOKING / CUSTOMER LISTS */}
+          {/* SEARCH (same placeholder as PIL) */}
           <div className="customer-searchbar-inline">
             <div className="customer-searchbar-inner">
               <span className="customer-search-icon" aria-hidden="true">
@@ -655,6 +702,9 @@ const Admin_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col">Price</IonCol>
                   <IonCol className="pil-col">Restocked</IonCol>
                   <IonCol className="pil-col">Sold</IonCol>
+                  <IonCol className="pil-col">Expired</IonCol>
+                  <IonCol className="pil-col">Inventory Loss</IonCol>
+                  <IonCol className="pil-col">Bilin</IonCol>
                   <IonCol className="pil-col">Stocks</IonCol>
                   <IonCol className="pil-col">Expenses</IonCol>
                   <IonCol className="pil-col">Overall</IonCol>
@@ -675,13 +725,16 @@ const Admin_Item_Lists: React.FC = () => {
                     <IonCol className="pil-col pil-col--strong">{addOn.name}</IonCol>
                     <IonCol className="pil-col">{addOn.category}</IonCol>
                     <IonCol className="pil-col">{normSize(addOn.size) ?? "—"}</IonCol>
-                    <IonCol className="pil-col">{money2(Number(addOn.price))}</IonCol>
-                    <IonCol className="pil-col">{addOn.restocked}</IonCol>
-                    <IonCol className="pil-col">{addOn.sold}</IonCol>
-                    <IonCol className="pil-col">{addOn.stocks}</IonCol>
-                    <IonCol className="pil-col">{addOn.expenses}</IonCol>
-                    <IonCol className="pil-col">{money2(Number(addOn.overall_sales))}</IonCol>
-                    <IonCol className="pil-col">{money2(Number(addOn.expected_sales))}</IonCol>
+                    <IonCol className="pil-col">{money2(toNum(addOn.price))}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.restocked)}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.sold)}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.expired)}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.staff_consumed)}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.bilin)}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.stocks)}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.expenses)}</IonCol>
+                    <IonCol className="pil-col">{money2(toNum(addOn.overall_sales))}</IonCol>
+                    <IonCol className="pil-col">{money2(toNum(addOn.expected_sales))}</IonCol>
 
                     <IonCol className="pil-col">
                       <div className="pil-actions-cell">
@@ -844,7 +897,7 @@ const Admin_Item_Lists: React.FC = () => {
                     />
                   </IonItem>
 
-                  {/* ✅ NEW: SIZE */}
+                  {/* ✅ SIZE */}
                   <IonItem className="pil-item">
                     <IonLabel position="stacked" className="pil-label">
                       Size (optional)

@@ -10,6 +10,8 @@
 // ✅ Uses SAME pil-* classnames for styling
 // ✅ FIX: Cash outs now checks Supabase Auth session + shows real error
 // ✅ NEW: SIZE column (DB add_ons.size) shown in table + search + dropdown label
+// ✅ NEW: expense_type now includes 'bilin' (Utang / Bought)
+// ✅ NEW: Table shows Bilin column (add_ons.bilin)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -58,7 +60,7 @@ import type {
   IonTextareaCustomEvent,
 } from "@ionic/core";
 
-type ExpenseType = "expired" | "staff_consumed";
+type ExpenseType = "expired" | "staff_consumed" | "bilin";
 type SortKey = "category" | "stocks";
 type CashOutMethod = "cash" | "gcash";
 
@@ -82,6 +84,7 @@ interface AddOn {
 
   expired: number | string;
   staff_consumed: number | string;
+  bilin: number | string; // ✅ NEW
 }
 
 interface AddOnExpenseInsert {
@@ -222,7 +225,7 @@ const Product_Item_Lists: React.FC = () => {
       const { data, error } = await supabase
         .from("add_ons")
         .select(
-          "id, created_at, category, name, size, price, restocked, sold, expenses_cost, expenses, stocks, overall_sales, expected_sales, image_url, expired, staff_consumed"
+          "id, created_at, category, name, size, price, restocked, sold, expenses_cost, expenses, stocks, overall_sales, expected_sales, image_url, expired, staff_consumed, bilin"
         )
         .order("created_at", { ascending: false });
 
@@ -374,7 +377,7 @@ const Product_Item_Lists: React.FC = () => {
         return;
       }
 
-      setToastMessage("Expense recorded.");
+      setToastMessage("Stock adjustment recorded.");
       setShowToast(true);
 
       setIsExpenseOpen(false);
@@ -409,7 +412,6 @@ const Product_Item_Lists: React.FC = () => {
     if (amt < 0) return "Amount must be 0 or higher.";
     if (amt === 0) return "Amount must be greater than 0.";
 
-    // cashOutMethod is always set ("cash" | "gcash") so no need extra validate
     return null;
   };
 
@@ -433,7 +435,7 @@ const Product_Item_Lists: React.FC = () => {
       type: cashOutType.trim(),
       description: cashOutDesc.trim() ? cashOutDesc.trim() : null,
       amount: clampMoney(cashOutAmount, 0),
-      payment_method: cashOutMethod, // ✅ NEW
+      payment_method: cashOutMethod,
     };
 
     setSavingCashOut(true);
@@ -484,7 +486,7 @@ const Product_Item_Lists: React.FC = () => {
         <div className="pil-actions">
           <IonButton className="pil-btn pil-btn--primary" onClick={openExpenseModal}>
             <IonIcon slot="start" icon={addCircleOutline} />
-            INVENTORY LOSS
+            Stock Adjustment
           </IonButton>
 
           <IonButton className="pil-btn pil-btn--primary" onClick={openCashOutModal}>
@@ -565,6 +567,7 @@ const Product_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col">Sold</IonCol>
                   <IonCol className="pil-col">Expired</IonCol>
                   <IonCol className="pil-col">Inventory loss</IonCol>
+                  <IonCol className="pil-col">Bilin</IonCol>
                   <IonCol className="pil-col">Stocks</IonCol>
                   <IonCol className="pil-col">Expenses (qty)</IonCol>
                   <IonCol className="pil-col">Unit Cost</IonCol>
@@ -590,6 +593,7 @@ const Product_Item_Lists: React.FC = () => {
                     <IonCol className="pil-col">{toNumber(a.sold)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.expired)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.staff_consumed)}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.bilin)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.stocks)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.expenses)}</IonCol>
                     <IonCol className="pil-col">{money2(toNumber(a.expenses_cost))}</IonCol>
@@ -606,7 +610,7 @@ const Product_Item_Lists: React.FC = () => {
         <IonModal isOpen={isExpenseOpen} onDidDismiss={closeExpenseModal} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
-              <IonTitle className="pil-modal-title">INVENTORY LOSS</IonTitle>
+              <IonTitle className="pil-modal-title">STOCK ADJUSTMENT</IonTitle>
               <IonButtons slot="end">
                 <IonButton className="pil-btn" onClick={closeExpenseModal} disabled={savingExpense}>
                   <IonIcon icon={closeOutline} />
@@ -620,7 +624,7 @@ const Product_Item_Lists: React.FC = () => {
               <IonList className="pil-form">
                 <IonItem className="pil-item">
                   <IonLabel position="stacked" className="pil-label">
-                    Full Name (staff)
+                    Full Name
                   </IonLabel>
                   <IonInput
                     className="pil-input"
@@ -638,7 +642,9 @@ const Product_Item_Lists: React.FC = () => {
                     className="pil-select"
                     value={selectedAddOnId}
                     placeholder="Select product"
-                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setSelectedAddOnId(String(e.detail.value ?? ""))}
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
+                      setSelectedAddOnId(String(e.detail.value ?? ""))
+                    }
                   >
                     {addOns.map((a) => (
                       <IonSelectOption key={a.id} value={a.id}>
@@ -656,10 +662,13 @@ const Product_Item_Lists: React.FC = () => {
                   <IonSelect
                     className="pil-select"
                     value={expenseType}
-                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setExpenseType(e.detail.value as ExpenseType)}
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
+                      setExpenseType(String(e.detail.value) as ExpenseType)
+                    }
                   >
                     <IonSelectOption value="expired">Expired / Damaged</IonSelectOption>
-                    <IonSelectOption value="staff_consumed">Invetory Loss</IonSelectOption>
+                    <IonSelectOption value="staff_consumed">Inventory Loss</IonSelectOption>
+                    <IonSelectOption value="bilin">Bilin (Utang / Bought)</IonSelectOption>
                   </IonSelect>
                 </IonItem>
 
@@ -690,9 +699,11 @@ const Product_Item_Lists: React.FC = () => {
                   <IonTextarea
                     className="pil-textarea"
                     value={description}
-                    placeholder="Example: expired date reached / staff snack / damaged packaging"
+                    placeholder="Example: expired date reached / damaged packaging / utang product"
                     autoGrow
-                    onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) => setDescription(String(e.detail.value ?? ""))}
+                    onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) =>
+                      setDescription(String(e.detail.value ?? ""))
+                    }
                   />
                 </IonItem>
               </IonList>
@@ -745,8 +756,13 @@ const Product_Item_Lists: React.FC = () => {
               )}
 
               <div className="pil-modal-actions">
-                <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={submitExpense} disabled={savingExpense}>
-                  {savingExpense ? "Saving..." : "Save Expense"}
+                <IonButton
+                  className="pil-btn pil-btn--primary"
+                  expand="block"
+                  onClick={submitExpense}
+                  disabled={savingExpense}
+                >
+                  {savingExpense ? "Saving..." : "Save Adjustment"}
                 </IonButton>
 
                 <IonButton className="pil-btn" expand="block" fill="outline" onClick={closeExpenseModal} disabled={savingExpense}>
@@ -798,7 +814,7 @@ const Product_Item_Lists: React.FC = () => {
                   />
                 </IonItem>
 
-                {/* ✅ NEW: Cash / GCash selector */}
+                {/* ✅ Cash / GCash selector */}
                 <IonItem className="pil-item">
                   <IonLabel position="stacked" className="pil-label">
                     Payment (Cash / GCash)
@@ -833,7 +849,12 @@ const Product_Item_Lists: React.FC = () => {
               </IonList>
 
               <div className="pil-modal-actions">
-                <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={submitCashOut} disabled={savingCashOut}>
+                <IonButton
+                  className="pil-btn pil-btn--primary"
+                  expand="block"
+                  onClick={submitCashOut}
+                  disabled={savingCashOut}
+                >
                   {savingCashOut ? "Saving..." : "Save Cash Outs"}
                 </IonButton>
 
