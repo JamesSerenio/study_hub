@@ -1,12 +1,12 @@
 // src/pages/Product_Item_Lists.tsx
 // ✅ STRICT TS, NO any
-// ✅ Stock Adjustment uses RPC: record_addon_adjustment (fixes "stocks can only be updated to DEFAULT")
+// ✅ Stock Adjustment uses RPC: record_addon_adjustment
 // ✅ Types: Expired/Damaged, Inventory Loss, Bilin
-// ✅ ALL: -stock
-// ✅ Bilin + Inventory Loss: +overall (handled by DB generated overall_sales)
-// ✅ Expired/Damaged: -stock only (not included in overall_sales)
+// ✅ Stocks is DB-generated (should subtract sold+expired+inventory_loss+bilin)
+// ✅ Overall is DB-generated (SOLD only)
 // ✅ Inventory Loss label replaces staff consume
 // ✅ Keeps SAME pil-* classnames
+// ✅ REMOVED: Unit Cost column in table (per request)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -69,8 +69,8 @@ interface AddOn {
   restocked: number | string;
   sold: number | string;
 
-  expenses_cost: number | string; // unit cost
-  expenses: number | string; // qty tracker (expired+inventory_loss)
+  expenses_cost: number | string; // kept for modal computation
+  expenses: number | string;
 
   stocks: number | string;
   overall_sales: number | string;
@@ -138,13 +138,13 @@ const getAuthedUserId = async (): Promise<string | null> => {
 };
 
 /* =========================
-   UNIT COST RULES
+   UNIT COST RULES (Modal only)
 ========================= */
 
 type UnitSource = "cost" | "price" | "none";
 
 // expired => use expenses_cost fallback price
-// inventory_loss + bilin => use price (because affects overall)
+// inventory_loss + bilin => use price (for amount display only)
 const getUnitForType = (addOn: AddOn | null, t: ExpenseType): { unit: number; source: UnitSource } => {
   if (!addOn) return { unit: 0, source: "none" };
 
@@ -538,7 +538,6 @@ const Product_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col">Bilin</IonCol>
                   <IonCol className="pil-col">Stocks</IonCol>
                   <IonCol className="pil-col">Expenses (qty)</IonCol>
-                  <IonCol className="pil-col">Unit Cost</IonCol>
                   <IonCol className="pil-col">Overall</IonCol>
                   <IonCol className="pil-col">Expected</IonCol>
                 </IonRow>
@@ -560,7 +559,6 @@ const Product_Item_Lists: React.FC = () => {
                     <IonCol className="pil-col">{toNumber(a.bilin)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.stocks)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.expenses)}</IonCol>
-                    <IonCol className="pil-col">{money2(toNumber(a.expenses_cost))}</IonCol>
                     <IonCol className="pil-col">{money2(toNumber(a.overall_sales))}</IonCol>
                     <IonCol className="pil-col">{money2(toNumber(a.expected_sales))}</IonCol>
                   </IonRow>
@@ -712,18 +710,6 @@ const Product_Item_Lists: React.FC = () => {
                     <span>Total</span>
                     <b>{money2(computeAmount(selectedAddOn, expenseType, qty))}</b>
                   </div>
-
-                  {expenseType === "expired" && unitInfo.source === "price" && (
-                    <div className="pil-summary-warn">
-                      Note: expenses_cost is 0, so we used price as fallback. Set expenses_cost to match your real unit cost.
-                    </div>
-                  )}
-
-                  {(expenseType === "bilin" || expenseType === "inventory_loss") && (
-                    <div className="pil-summary-warn">
-                      Note: This type affects <b>Overall</b> (handled by DB: overall_sales includes sold + bilin + inventory_loss).
-                    </div>
-                  )}
                 </div>
               )}
 

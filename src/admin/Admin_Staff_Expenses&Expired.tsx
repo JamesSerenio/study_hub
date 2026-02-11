@@ -8,6 +8,7 @@
 // ✅ VOID uses RPC void_addon_expense (restores counters)
 // ✅ DELETE deletes log only (no revert)
 // ✅ STRICT TS, NO any, NO unknown
+// ✅ FIX (YOUR REQUEST): Damage/Expired section shows ONLY "expired" rows (Inventory Loss hidden there)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -203,7 +204,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
   const fetchExpenses = async (): Promise<ExpenseRow[]> => {
     const { data, error } = await supabase
       .from("add_on_expenses")
-      .select("id, created_at, add_on_id, full_name, category, product_name, quantity, expense_type, expense_amount, description, voided, voided_at")
+      .select(
+        "id, created_at, add_on_id, full_name, category, product_name, quantity, expense_type, expense_amount, description, voided, voided_at"
+      )
       .order("created_at", { ascending: false })
       .returns<ExpenseRowDB[]>();
 
@@ -262,6 +265,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       setRows(exp);
       setCashOuts(co);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Failed to load logs.");
       setToastOpen(true);
@@ -289,20 +293,23 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
     });
   }, [rows, selectedDate]);
 
-  // ✅ These 2 sections share same table, just different expense_type filter
+  // ✅ FIXED: Damage/Expired shows ONLY expired
   const expenseRowsForSection = useMemo(() => {
     if (section === "inventory_loss") {
       return rowsBySelectedDate.filter((r) => r.expense_type === "inventory_loss");
     }
     // damage_expired
-    return rowsBySelectedDate.filter((r) => r.expense_type === "expired" || r.expense_type === "inventory_loss");
+    return rowsBySelectedDate.filter((r) => r.expense_type === "expired");
   }, [rowsBySelectedDate, section]);
 
   const totalDamageExpiredQty = useMemo(
     () => expenseRowsForSection.reduce((sum, r) => sum + (Number.isFinite(r.quantity) ? r.quantity : 0), 0),
     [expenseRowsForSection]
   );
-  const totalDamageExpiredVoided = useMemo(() => expenseRowsForSection.filter((r) => r.voided).length, [expenseRowsForSection]);
+  const totalDamageExpiredVoided = useMemo(
+    () => expenseRowsForSection.filter((r) => r.voided).length,
+    [expenseRowsForSection]
+  );
 
   // ✅ Week range for bilin
   const bilinWeek = useMemo(() => getWeekRangeMonSun(selectedDate), [selectedDate]);
@@ -556,7 +563,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
           applyCellBorders(row, 1, 8);
 
           if (r.voided) {
-            for (let c = 1; c <= 8; c++) row.getCell(c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF6F6F6" } };
+            for (let c = 1; c <= 8; c++) {
+              row.getCell(c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF6F6F6" } };
+            }
           }
 
           row.commit();
@@ -587,7 +596,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
           applyCellBorders(row, 1, 8);
 
           if (r.voided) {
-            for (let c = 1; c <= 8; c++) row.getCell(c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF6F6F6" } };
+            for (let c = 1; c <= 8; c++) {
+              row.getCell(c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF6F6F6" } };
+            }
           }
 
           row.commit();
@@ -626,6 +637,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       setToastMsg("Exported Excel successfully.");
       setToastOpen(true);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Export failed.");
       setToastOpen(true);
@@ -645,6 +657,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       setToastOpen(true);
       await fetchAll();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Failed to void record.");
       setToastOpen(true);
@@ -664,6 +677,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       setToastOpen(true);
       await fetchAll();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Failed to delete record.");
       setToastOpen(true);
@@ -683,6 +697,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       setToastOpen(true);
       await fetchAll();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToastMsg("Failed to delete cash out.");
       setToastOpen(true);
@@ -1042,9 +1057,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
             isOpen={!!confirmVoid}
             onDidDismiss={() => setConfirmVoid(null)}
             header="Void this record?"
-            message={
-              confirmVoid ? `This will restore counts by reverting ${typeLabel(confirmVoid.expense_type)} (qty: ${confirmVoid.quantity}).` : ""
-            }
+            message={confirmVoid ? `This will restore counts by reverting ${typeLabel(confirmVoid.expense_type)} (qty: ${confirmVoid.quantity}).` : ""}
             buttons={[
               { text: "Cancel", role: "cancel" },
               {
