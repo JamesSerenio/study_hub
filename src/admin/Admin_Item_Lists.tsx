@@ -1,17 +1,18 @@
 // src/pages/Admin_Item_Lists.tsx
 // ✅ Add Stocks button + Restock history via RPC
-// ✅ Restocked is NOT edited in Edit modal anymore
 // ✅ No "any"
 // ✅ SAME UI/CLASSNAMES as Product_Item_Lists (PIL theme)
 // ✅ Search bar (name/category/size)
 // ✅ Sort by Category OR Stock (asc/desc)
-// ✅ Actions kept (Add Stocks / Edit / Delete) — only wrapped with classnames
-// ✅ Export to Excel (.xlsx) with nice layout
-// ✅ Excel NO ID column
-// ✅ Excel embeds actual images (not URL) using ExcelJS
-// ✅ NEW: SIZE column (DB add_ons.size) shown in table + edit modal + Excel
-// ✅ NEW: Expired + Inventory Loss columns (DB: expired, staff_consumed)
-// ✅ NEW: Bilin column (DB: bilin)
+// ✅ Actions kept (Add Stocks / Edit / Delete)
+// ✅ Export to Excel (.xlsx) with images using ExcelJS
+// ✅ NEW: SIZE column
+// ✅ NEW: Expired + Inventory Loss + Bilin columns (DB: expired, inventory_loss, bilin)
+// ✅ NEW: Adjustment History + VOID (reverts counters via RPC void_addon_expense)
+// ✅ FIX: VOID updates header stock/overall immediately (syncHistoryHeaderFromLatest)
+// ✅ FIX: history refresh does NOT re-open/re-init modal (no flicker)
+// ✅ FIX: silent fetch for header sync (no global loading flicker)
+// ✅ FIX: DELETE really deletes DB row (+ optional storage image delete)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -51,15 +52,17 @@ import {
   swapVerticalOutline,
   closeOutline,
   downloadOutline,
+  timeOutline,
+  closeCircleOutline,
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 import type { IonSelectCustomEvent, SelectChangeEventDetail } from "@ionic/core";
 
-// ✅ Excel with images
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
 type SortKey = "category" | "stocks";
+type ExpenseType = "expired" | "inventory_loss" | "bilin";
 
 interface AddOn {
   id: string;
@@ -77,8 +80,26 @@ interface AddOn {
   image_url: string | null;
 
   expired: number;
-  staff_consumed: number; // label: Inventory Loss
-  bilin: number; // ✅ NEW
+  inventory_loss: number;
+  bilin: number;
+}
+
+interface AddOnExpenseRow {
+  id: string;
+  created_at: string;
+  add_on_id: string;
+
+  full_name: string;
+  category: string;
+  product_name: string;
+
+  quantity: number;
+  expense_type: ExpenseType;
+  expense_amount: number | string;
+  description: string;
+
+  voided: boolean;
+  voided_at: string | null;
 }
 
 const BUCKET = "add-ons";
@@ -106,6 +127,30 @@ const toNum = (v: unknown): number => {
   return 0;
 };
 
+// PH date display (force numeric date, no words)
+const formatPH = (iso: string): string => {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-CA", {
+      timeZone: "Asia/Manila",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return iso;
+  }
+};
+
+const typeLabel = (t: ExpenseType): string => {
+  if (t === "expired") return "Expired / Damaged";
+  if (t === "inventory_loss") return "Inventory Loss";
+  return "Bilin";
+};
+
 const Admin_Item_Lists: React.FC = () => {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -113,50 +158,64 @@ const Admin_Item_Lists: React.FC = () => {
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
 
-  // ✅ sort controls (same as PIL)
+  // sort/search
   const [sortKey, setSortKey] = useState<SortKey>("category");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-
-  // ✅ search (same as PIL)
   const [search, setSearch] = useState<string>("");
 
+  // delete
   const [showDeleteAlert, setShowDeleteAlert] = useState<boolean>(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  // edit
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
   const [editingAddOn, setEditingAddOn] = useState<AddOn | null>(null);
-
   const [newImageFile, setNewImageFile] = useState<File | null>(null);
 
-  // ✅ Restock modal state
+  // restock
   const [showRestockModal, setShowRestockModal] = useState<boolean>(false);
   const [restockingAddOn, setRestockingAddOn] = useState<AddOn | null>(null);
   const [restockQty, setRestockQty] = useState<string>("");
   const [restockNote, setRestockNote] = useState<string>("");
 
-  const fetchAddOns = async (): Promise<void> => {
-    setLoading(true);
+  // history + void
+  const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
+  const [historyAddOn, setHistoryAddOn] = useState<AddOn | null>(null);
+  const [historyLoading, setHistoryLoading] = useState<boolean>(false);
+  const [historyRows, setHistoryRows] = useState<AddOnExpenseRow[]>([]);
+  const [voidTarget, setVoidTarget] = useState<AddOnExpenseRow | null>(null);
+  const [showVoidAlert, setShowVoidAlert] = useState<boolean>(false);
+
+  // ✅ keep history header in sync
+  const syncHistoryHeaderFromLatest = (latest: AddOn[]): void => {
+    if (!historyAddOn) return;
+    const fresh = latest.find((x) => x.id === historyAddOn.id);
+    if (fresh) setHistoryAddOn(fresh);
+  };
+
+  const fetchAddOns = async (opts?: { silent?: boolean }): Promise<void> => {
+    const silent = Boolean(opts?.silent);
+    if (!silent) setLoading(true);
+
     try {
-      // ✅ select "*" so new columns (expired/staff_consumed/bilin/size) are included if they exist
       const { data, error } = await supabase.from("add_ons").select("*").order("created_at", { ascending: false });
       if (error) throw error;
 
       const rows = (data ?? []) as unknown as AddOn[];
 
-      // ✅ normalize numeric-like just in case (but keep type strict)
       const normalized: AddOn[] = rows.map((r) => ({
         ...r,
-        price: toNum(r.price),
-        restocked: toNum(r.restocked),
-        sold: toNum(r.sold),
-        expenses: toNum(r.expenses),
-        stocks: toNum(r.stocks),
-        overall_sales: toNum(r.overall_sales),
-        expected_sales: toNum(r.expected_sales),
+        price: toNum((r as unknown as { price?: unknown }).price),
+        restocked: toNum((r as unknown as { restocked?: unknown }).restocked),
+        sold: toNum((r as unknown as { sold?: unknown }).sold),
+        expenses: toNum((r as unknown as { expenses?: unknown }).expenses),
+        stocks: toNum((r as unknown as { stocks?: unknown }).stocks),
+        overall_sales: toNum((r as unknown as { overall_sales?: unknown }).overall_sales),
+        expected_sales: toNum((r as unknown as { expected_sales?: unknown }).expected_sales),
 
         expired: toNum((r as unknown as { expired?: unknown }).expired),
-        staff_consumed: toNum((r as unknown as { staff_consumed?: unknown }).staff_consumed),
-        bilin: toNum((r as unknown as { bilin?: unknown }).bilin), // ✅ NEW
+        inventory_loss: toNum((r as unknown as { inventory_loss?: unknown }).inventory_loss),
+        bilin: toNum((r as unknown as { bilin?: unknown }).bilin),
 
         size: normSize((r as unknown as { size?: string | null }).size),
         image_url: (r as unknown as { image_url?: string | null }).image_url ?? null,
@@ -166,18 +225,20 @@ const Admin_Item_Lists: React.FC = () => {
       }));
 
       setAddOns(normalized);
+      syncHistoryHeaderFromLatest(normalized);
     } catch (error: unknown) {
       // eslint-disable-next-line no-console
       console.error("Error fetching add-ons:", error);
       setToastMessage("Error loading add-ons. Please try again.");
       setShowToast(true);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     void fetchAddOns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleRefresh = (event: CustomEvent<RefresherEventDetail>): void => {
@@ -186,19 +247,16 @@ const Admin_Item_Lists: React.FC = () => {
 
   const sortedAddOns = useMemo(() => {
     const list = [...addOns];
-
     list.sort((a, b) => {
       if (sortKey === "category") {
         const aCat = (a.category ?? "").toString();
         const bCat = (b.category ?? "").toString();
         return sortOrder === "asc" ? aCat.localeCompare(bCat) : bCat.localeCompare(aCat);
       }
-
       const aStock = toNum(a.stocks);
       const bStock = toNum(b.stocks);
       return sortOrder === "asc" ? aStock - bStock : bStock - aStock;
     });
-
     return list;
   }, [addOns, sortKey, sortOrder]);
 
@@ -214,9 +272,7 @@ const Admin_Item_Lists: React.FC = () => {
     });
   }, [sortedAddOns, search]);
 
-  const toggleSortOrder = (): void => {
-    setSortOrder((p) => (p === "asc" ? "desc" : "asc"));
-  };
+  const toggleSortOrder = (): void => setSortOrder((p) => (p === "asc" ? "desc" : "asc"));
 
   const handleEdit = (id: string): void => {
     const addOnToEdit = addOns.find((a) => a.id === id);
@@ -226,7 +282,6 @@ const Admin_Item_Lists: React.FC = () => {
     setShowEditModal(true);
   };
 
-  // ✅ open restock modal
   const openRestock = (id: string): void => {
     const a = addOns.find((x) => x.id === id);
     if (!a) return;
@@ -236,7 +291,61 @@ const Admin_Item_Lists: React.FC = () => {
     setShowRestockModal(true);
   };
 
-  // ✅ Extract bucket path from public URL
+  // ✅ dedicated history loader (no modal reset)
+  const fetchHistoryRowsFor = async (addOnId: string): Promise<void> => {
+    setHistoryLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("add_on_expenses")
+        .select("id, created_at, add_on_id, full_name, category, product_name, quantity, expense_type, expense_amount, description, voided, voided_at")
+        .eq("add_on_id", addOnId)
+        .order("created_at", { ascending: false })
+        .limit(150);
+
+      if (error) throw error;
+
+      const rows = (data ?? []) as unknown as AddOnExpenseRow[];
+      setHistoryRows(
+        rows.map((r) => ({
+          ...r,
+          quantity: toNum(r.quantity),
+          expense_amount: toNum(r.expense_amount),
+          expense_type: String(r.expense_type) as ExpenseType,
+          voided: Boolean(r.voided),
+          voided_at: r.voided_at ?? null,
+        }))
+      );
+
+      // ✅ silent header sync (no global loading)
+      void fetchAddOns({ silent: true });
+    } catch (e: unknown) {
+      // eslint-disable-next-line no-console
+      console.error("history fetch error:", e);
+      setToastMessage(`History load failed: ${e instanceof Error ? e.message : "Try again."}`);
+      setShowToast(true);
+      setShowHistoryModal(false);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openHistory = async (id: string): Promise<void> => {
+    const a = addOns.find((x) => x.id === id);
+    if (!a) return;
+
+    setHistoryAddOn(a);
+    setHistoryRows([]);
+    setShowHistoryModal(true);
+
+    await fetchHistoryRowsFor(a.id);
+  };
+
+  const refreshHistory = async (): Promise<void> => {
+    if (!historyAddOn) return;
+    await fetchHistoryRowsFor(historyAddOn.id);
+  };
+
+  // ✅ Extract storage path from public URL
   const getStoragePathFromPublicUrl = (publicUrl: string, bucket: string): string | null => {
     try {
       const marker = `/storage/v1/object/public/${bucket}/`;
@@ -310,8 +419,6 @@ const Admin_Item_Lists: React.FC = () => {
         finalImageUrl = uploaded.publicUrl;
       }
 
-      // ✅ restocked REMOVED from edit update
-      // ✅ size added
       const { error } = await supabase
         .from("add_ons")
         .update({
@@ -340,6 +447,8 @@ const Admin_Item_Lists: React.FC = () => {
       setShowEditModal(false);
       setEditingAddOn(null);
       setNewImageFile(null);
+
+      void fetchAddOns();
     } catch (error: unknown) {
       // eslint-disable-next-line no-console
       console.error("Error updating add-on:", error);
@@ -385,22 +494,70 @@ const Admin_Item_Lists: React.FC = () => {
     }
   };
 
+  // ✅ VOID adjustment (RPC)
+  const confirmVoid = (row: AddOnExpenseRow): void => {
+    setVoidTarget(row);
+    setShowVoidAlert(true);
+  };
+
+  const doVoid = async (): Promise<void> => {
+    if (!voidTarget) return;
+
+    try {
+      const { error } = await supabase.rpc("void_addon_expense", {
+        p_expense_id: voidTarget.id,
+      });
+
+      if (error) throw error;
+
+      setToastMessage("Voided successfully. Counters restored.");
+      setShowToast(true);
+
+      setShowVoidAlert(false);
+      setVoidTarget(null);
+
+      // ✅ refresh list + history WITHOUT modal reset/flicker
+      await fetchAddOns();
+      await refreshHistory();
+    } catch (e: unknown) {
+      // eslint-disable-next-line no-console
+      console.error("void error:", e);
+      setToastMessage(`Void failed: ${e instanceof Error ? e.message : "Try again."}`);
+      setShowToast(true);
+    }
+  };
+
+  // ✅ DELETE (DB + optional image delete)
   const handleDelete = (id: string): void => {
     setDeleteId(id);
     setShowDeleteAlert(true);
   };
 
-  const confirmDelete = async (): Promise<void> => {
+  const confirmDeleteRow = async (): Promise<void> => {
     if (!deleteId) {
       setShowDeleteAlert(false);
       return;
     }
 
+    const target = addOns.find((a) => a.id === deleteId) ?? null;
+    const oldImageUrl = target?.image_url ?? null;
+
     try {
       const { error } = await supabase.from("add_ons").delete().eq("id", deleteId);
       if (error) throw error;
 
+      if (oldImageUrl) {
+        await deleteOldImageIfAny(oldImageUrl);
+      }
+
       setAddOns((prev) => prev.filter((a) => a.id !== deleteId));
+
+      if (historyAddOn?.id === deleteId) {
+        setShowHistoryModal(false);
+        setHistoryAddOn(null);
+        setHistoryRows([]);
+      }
+
       setToastMessage("Add-on deleted successfully.");
       setShowToast(true);
     } catch (error: unknown) {
@@ -415,7 +572,7 @@ const Admin_Item_Lists: React.FC = () => {
   };
 
   // =========================
-  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED) + SIZE + Expired + Inventory Loss + Bilin
+  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED)
   // =========================
 
   const blobToBase64 = (blob: Blob): Promise<string> =>
@@ -452,11 +609,8 @@ const Admin_Item_Lists: React.FC = () => {
       const sortInfo = `Sort: ${sortKey} (${sortOrder})   Search: ${search.trim() ? search.trim() : "—"}`;
 
       const workbook = new ExcelJS.Workbook();
-      const ws = workbook.addWorksheet("Add-ons", {
-        views: [{ state: "frozen", ySplit: 5 }],
-      });
+      const ws = workbook.addWorksheet("Add-ons", { views: [{ state: "frozen", ySplit: 5 }] });
 
-      // ✅ Columns (added Expired + Inventory Loss + Bilin)
       ws.columns = [
         { header: "Image", key: "image", width: 14 },
         { header: "Name", key: "name", width: 28 },
@@ -467,14 +621,13 @@ const Admin_Item_Lists: React.FC = () => {
         { header: "Sold", key: "sold", width: 10 },
         { header: "Expired", key: "expired", width: 10 },
         { header: "Inventory Loss", key: "inv_loss", width: 14 },
-        { header: "Bilin", key: "bilin", width: 10 }, // ✅ NEW
+        { header: "Bilin", key: "bilin", width: 10 },
         { header: "Stocks", key: "stocks", width: 10 },
         { header: "Expenses", key: "expenses", width: 12 },
         { header: "Overall Sales", key: "overall", width: 14 },
         { header: "Expected Sales", key: "expected", width: 14 },
       ];
 
-      // Title rows
       ws.mergeCells(1, 1, 1, 14);
       ws.mergeCells(2, 1, 2, 14);
       ws.mergeCells(3, 1, 3, 14);
@@ -487,9 +640,8 @@ const Admin_Item_Lists: React.FC = () => {
       ws.getCell("A2").font = { size: 11 };
       ws.getCell("A3").font = { size: 11 };
 
-      ws.addRow([]); // row 4 blank
+      ws.addRow([]);
 
-      // Header row at row 5
       const headerRow = ws.getRow(5);
       headerRow.values = [
         "Image",
@@ -512,22 +664,15 @@ const Admin_Item_Lists: React.FC = () => {
       headerRow.height = 20;
 
       headerRow.eachCell((cell) => {
-        cell.border = {
-          top: { style: "thin" },
-          left: { style: "thin" },
-          bottom: { style: "thin" },
-          right: { style: "thin" },
-        };
+        cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEFEF" } };
       });
 
-      // Data starts at row 6
       let rowIndex = 6;
 
       for (const a of filteredAddOns) {
         const r = ws.getRow(rowIndex);
 
-        // A column (Image) left blank; image will be placed over it
         r.getCell(2).value = a.name ?? "";
         r.getCell(3).value = a.category ?? "";
         r.getCell(4).value = normSize(a.size) ?? "—";
@@ -535,8 +680,8 @@ const Admin_Item_Lists: React.FC = () => {
         r.getCell(6).value = toNum(a.restocked);
         r.getCell(7).value = toNum(a.sold);
         r.getCell(8).value = toNum(a.expired);
-        r.getCell(9).value = toNum(a.staff_consumed);
-        r.getCell(10).value = toNum(a.bilin); // ✅ NEW
+        r.getCell(9).value = toNum(a.inventory_loss);
+        r.getCell(10).value = toNum(a.bilin);
         r.getCell(11).value = toNum(a.stocks);
         r.getCell(12).value = toNum(a.expenses);
         r.getCell(13).value = toNum(a.overall_sales);
@@ -550,12 +695,7 @@ const Admin_Item_Lists: React.FC = () => {
             c === 2
               ? { vertical: "middle", horizontal: "left", wrapText: true }
               : { vertical: "middle", horizontal: c === 1 ? "center" : "center", wrapText: true };
-          cell.border = {
-            top: { style: "thin" },
-            left: { style: "thin" },
-            bottom: { style: "thin" },
-            right: { style: "thin" },
-          };
+          cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
         }
 
         r.getCell(5).numFmt = "₱#,##0.00";
@@ -582,10 +722,7 @@ const Admin_Item_Lists: React.FC = () => {
       }
 
       const buf = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buf], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       saveAs(blob, `Item_List_${ymd(now)}.xlsx`);
 
       setToastMessage("Exported to Excel successfully.");
@@ -613,7 +750,6 @@ const Admin_Item_Lists: React.FC = () => {
           <IonRefresherContent />
         </IonRefresher>
 
-        {/* TOP ACTIONS */}
         <div className="pil-actions">
           <IonButton className="pil-btn pil-btn--primary" fill="solid" onClick={() => void fetchAddOns()}>
             <IonIcon slot="start" icon={addCircleOutline} />
@@ -648,7 +784,7 @@ const Admin_Item_Lists: React.FC = () => {
             <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
           </IonButton>
 
-          {/* SEARCH (same placeholder as PIL) */}
+          {/* SEARCH */}
           <div className="customer-searchbar-inline">
             <div className="customer-searchbar-inner">
               <span className="customer-search-icon" aria-hidden="true">
@@ -715,11 +851,7 @@ const Admin_Item_Lists: React.FC = () => {
                 {filteredAddOns.map((addOn) => (
                   <IonRow className="pil-row" key={addOn.id}>
                     <IonCol className="pil-col pil-col--img">
-                      {addOn.image_url ? (
-                        <IonImg className="pil-img" src={addOn.image_url} alt={addOn.name} />
-                      ) : (
-                        <span className="pil-muted">No image</span>
-                      )}
+                      {addOn.image_url ? <IonImg className="pil-img" src={addOn.image_url} alt={addOn.name} /> : <span className="pil-muted">No image</span>}
                     </IonCol>
 
                     <IonCol className="pil-col pil-col--strong">{addOn.name}</IonCol>
@@ -729,7 +861,7 @@ const Admin_Item_Lists: React.FC = () => {
                     <IonCol className="pil-col">{toNum(addOn.restocked)}</IonCol>
                     <IonCol className="pil-col">{toNum(addOn.sold)}</IonCol>
                     <IonCol className="pil-col">{toNum(addOn.expired)}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.staff_consumed)}</IonCol>
+                    <IonCol className="pil-col">{toNum(addOn.inventory_loss)}</IonCol>
                     <IonCol className="pil-col">{toNum(addOn.bilin)}</IonCol>
                     <IonCol className="pil-col">{toNum(addOn.stocks)}</IonCol>
                     <IonCol className="pil-col">{toNum(addOn.expenses)}</IonCol>
@@ -742,16 +874,15 @@ const Admin_Item_Lists: React.FC = () => {
                           <IonIcon icon={addCircle} />
                         </IonButton>
 
+                        <IonButton className="pil-act-btn" fill="clear" onClick={() => void openHistory(addOn.id)}>
+                          <IonIcon icon={timeOutline} />
+                        </IonButton>
+
                         <IonButton className="pil-act-btn pil-act-btn--edit" fill="clear" onClick={() => handleEdit(addOn.id)}>
                           <IonIcon icon={create} />
                         </IonButton>
 
-                        <IonButton
-                          className="pil-act-btn pil-act-btn--del"
-                          fill="clear"
-                          color="danger"
-                          onClick={() => handleDelete(addOn.id)}
-                        >
+                        <IonButton className="pil-act-btn pil-act-btn--del" fill="clear" color="danger" onClick={() => handleDelete(addOn.id)}>
                           <IonIcon icon={trash} />
                         </IonButton>
                       </div>
@@ -765,14 +896,27 @@ const Admin_Item_Lists: React.FC = () => {
 
         <IonToast isOpen={showToast} message={toastMessage} duration={3000} onDidDismiss={() => setShowToast(false)} />
 
+        {/* DELETE ALERT */}
         <IonAlert
           isOpen={showDeleteAlert}
           onDidDismiss={() => setShowDeleteAlert(false)}
           header="Confirm Delete"
-          message="Are you sure you want to delete this add-on?"
+          message="Are you sure you want to delete this add-on? This will remove it from the database."
           buttons={[
             { text: "Cancel", role: "cancel", handler: () => setShowDeleteAlert(false) },
-            { text: "Delete", role: "destructive", handler: () => void confirmDelete() },
+            { text: "Delete", role: "destructive", handler: () => void confirmDeleteRow() },
+          ]}
+        />
+
+        {/* VOID ALERT */}
+        <IonAlert
+          isOpen={showVoidAlert}
+          onDidDismiss={() => setShowVoidAlert(false)}
+          header="Void Adjustment"
+          message="Are you sure you want to void this adjustment? This will restore counters and mark the record as VOIDED."
+          buttons={[
+            { text: "Cancel", role: "cancel", handler: () => setShowVoidAlert(false) },
+            { text: "Void", role: "destructive", handler: () => void doVoid() },
           ]}
         />
 
@@ -848,6 +992,89 @@ const Admin_Item_Lists: React.FC = () => {
           </IonContent>
         </IonModal>
 
+        {/* HISTORY MODAL */}
+        <IonModal isOpen={showHistoryModal} onDidDismiss={() => setShowHistoryModal(false)} className="pil-modal">
+          <IonHeader className="pil-modal-header">
+            <IonToolbar className="pil-modal-toolbar">
+              <IonTitle className="pil-modal-title">Adjustment History</IonTitle>
+              <IonButtons slot="end">
+                <IonButton className="pil-btn" onClick={() => setShowHistoryModal(false)}>
+                  <IonIcon icon={closeOutline} />
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+
+          <IonContent className="pil-modal-content">
+            <div className="pil-modal-card">
+              {historyAddOn && (
+                <IonText>
+                  <h2 style={{ marginTop: 0, marginBottom: 8 }}>{historyAddOn.name}</h2>
+                  <div style={{ opacity: 0.8, marginBottom: 10 }}>
+                    Current Stock: <b>{historyAddOn.stocks}</b> • Overall: <b>{money2(historyAddOn.overall_sales)}</b>
+                  </div>
+                </IonText>
+              )}
+
+              {historyLoading ? (
+                <div className="pil-loading">
+                  <IonSpinner />
+                  <IonLabel>Loading history...</IonLabel>
+                </div>
+              ) : historyRows.length === 0 ? (
+                <div className="pil-empty">
+                  <IonLabel>No adjustment records.</IonLabel>
+                </div>
+              ) : (
+                <div className="pil-table-wrap">
+                  <IonGrid className="pil-grid">
+                    <IonRow className="pil-row pil-row--head">
+                      <IonCol className="pil-col">Date</IonCol>
+                      <IonCol className="pil-col">Type</IonCol>
+                      <IonCol className="pil-col">Qty</IonCol>
+                      <IonCol className="pil-col">Amount</IonCol>
+                      <IonCol className="pil-col">By</IonCol>
+                      <IonCol className="pil-col">Reason</IonCol>
+                      <IonCol className="pil-col">Status</IonCol>
+                      <IonCol className="pil-col">Action</IonCol>
+                    </IonRow>
+
+                    {historyRows.map((r) => (
+                      <IonRow className="pil-row" key={r.id}>
+                        <IonCol className="pil-col">{formatPH(r.created_at)}</IonCol>
+                        <IonCol className="pil-col">{typeLabel(r.expense_type)}</IonCol>
+                        <IonCol className="pil-col">{toNum(r.quantity)}</IonCol>
+                        <IonCol className="pil-col">{money2(toNum(r.expense_amount))}</IonCol>
+                        <IonCol className="pil-col">{r.full_name}</IonCol>
+                        <IonCol className="pil-col">{r.description}</IonCol>
+                        <IonCol className="pil-col">{r.voided ? "VOIDED" : "ACTIVE"}</IonCol>
+                        <IonCol className="pil-col">
+                          {!r.voided ? (
+                            <IonButton className="pil-act-btn pil-act-btn--del" fill="clear" color="danger" onClick={() => confirmVoid(r)}>
+                              <IonIcon icon={closeCircleOutline} />
+                            </IonButton>
+                          ) : (
+                            <span className="pil-muted">—</span>
+                          )}
+                        </IonCol>
+                      </IonRow>
+                    ))}
+                  </IonGrid>
+                </div>
+              )}
+
+              <div className="pil-modal-actions">
+                <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={() => void refreshHistory()} disabled={historyLoading}>
+                  Refresh History
+                </IonButton>
+                <IonButton className="pil-btn" expand="block" fill="outline" onClick={() => setShowHistoryModal(false)}>
+                  Close
+                </IonButton>
+              </div>
+            </div>
+          </IonContent>
+        </IonModal>
+
         {/* EDIT MODAL */}
         <IonModal isOpen={showEditModal} onDidDismiss={() => setShowEditModal(false)} className="pil-modal">
           <IonHeader className="pil-modal-header">
@@ -872,12 +1099,7 @@ const Admin_Item_Lists: React.FC = () => {
                     <IonInput
                       className="pil-input"
                       value={editingAddOn.name}
-                      onIonChange={(e) =>
-                        setEditingAddOn({
-                          ...editingAddOn,
-                          name: (e.detail.value ?? "").toString(),
-                        })
-                      }
+                      onIonChange={(e) => setEditingAddOn({ ...editingAddOn, name: (e.detail.value ?? "").toString() })}
                     />
                   </IonItem>
 
@@ -888,16 +1110,10 @@ const Admin_Item_Lists: React.FC = () => {
                     <IonInput
                       className="pil-input"
                       value={editingAddOn.category}
-                      onIonChange={(e) =>
-                        setEditingAddOn({
-                          ...editingAddOn,
-                          category: (e.detail.value ?? "").toString(),
-                        })
-                      }
+                      onIonChange={(e) => setEditingAddOn({ ...editingAddOn, category: (e.detail.value ?? "").toString() })}
                     />
                   </IonItem>
 
-                  {/* ✅ SIZE */}
                   <IonItem className="pil-item">
                     <IonLabel position="stacked" className="pil-label">
                       Size (optional)
@@ -906,16 +1122,10 @@ const Admin_Item_Lists: React.FC = () => {
                       className="pil-input"
                       value={editingAddOn.size ?? ""}
                       placeholder='e.g. "Small", "Medium", "Large", "16oz"'
-                      onIonChange={(e) =>
-                        setEditingAddOn({
-                          ...editingAddOn,
-                          size: (e.detail.value ?? "").toString(),
-                        })
-                      }
+                      onIonChange={(e) => setEditingAddOn({ ...editingAddOn, size: (e.detail.value ?? "").toString() })}
                     />
                   </IonItem>
 
-                  {/* REPLACE IMAGE */}
                   <IonItem className="pil-item">
                     <IonLabel position="stacked" className="pil-label">
                       Replace Image (optional)
