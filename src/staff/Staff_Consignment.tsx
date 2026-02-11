@@ -26,16 +26,12 @@ type AddOnSize = "None" | "XS" | "S" | "M" | "L" | "XL" | "2XL" | "3XL" | "4XL" 
 const SIZE_OPTIONS: AddOnSize[] = ["None", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
 
 const normalizeSize = (v: string): string => v.trim();
-const normalizeItemName = (v: string): string => v.trim().replace(/\s+/g, " ");
+const normalizeText = (v: string): string => v.trim().replace(/\s+/g, " ");
 
 type CategoryRow = { id: string };
 
 const Staff_Consignment: React.FC = () => {
-  // ✅ UI NOTE:
-  // "Category" field in Admin_Add_Ons becomes "Full Name" here (per your request).
-  // Still uses same classnames so CSS stays consistent.
-
-  const [fullName, setFullName] = useState<string>(""); // replaces category UI
+  const [fullName, setFullName] = useState<string>("");
   const [itemName, setItemName] = useState<string>("");
   const [size, setSize] = useState<AddOnSize>("None");
 
@@ -46,41 +42,38 @@ const Staff_Consignment: React.FC = () => {
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
 
-  // ✅ Popover suggestions (same UX as Admin_Add_Ons)
+  // ✅ Popover suggestions for FULL NAME
   const [allFullNames, setAllFullNames] = useState<string[]>([]);
   const [catOpen, setCatOpen] = useState<boolean>(false);
   const [catEvent, setCatEvent] = useState<MouseEvent | undefined>(undefined);
   const iconBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // category_id source:
-  // if addon_categories has rows, we will use the first one.
-  // If none exists, we will show error to create at least 1 category.
-  const [categoryId, setCategoryId] = useState<string | null>(null);
+  // ✅ category_id must be the addon_categories row where name='Consignment'
+  const [consignmentCategoryId, setConsignmentCategoryId] = useState<string | null>(null);
 
   useEffect(() => {
     const loadPrereqs = async (): Promise<void> => {
-      // 1) pick a category_id (first available)
-      const { data: cats, error: catErr } = await supabase.from("addon_categories").select("id").limit(1);
+      // 1) Find category_id of addon_categories where name='Consignment'
+      const { data: catRow, error: catErr } = await supabase
+        .from("addon_categories")
+        .select("id")
+        .ilike("name", "Consignment")
+        .limit(1);
 
       if (catErr) {
         console.error("Load addon_categories error:", catErr);
-        setToastMessage("Failed to load categories (addon_categories).");
+        setToastMessage("Failed to load addon_categories.");
         setShowToast(true);
-        return;
+      } else {
+        const id: string | null = (catRow?.[0] as CategoryRow | undefined)?.id ?? null;
+        setConsignmentCategoryId(id);
       }
 
-      const firstId: string | null = (cats?.[0] as CategoryRow | undefined)?.id ?? null;
-      setCategoryId(firstId);
-
       // 2) load full name suggestions from existing consignment rows
-      const { data, error } = await supabase
-        .from("consignment")
-        .select("full_name")
-        .not("full_name", "is", null);
+      const { data, error } = await supabase.from("consignment").select("full_name").not("full_name", "is", null);
 
       if (error) {
         console.error("Load full names error:", error);
-        // not fatal
         return;
       }
 
@@ -124,8 +117,8 @@ const Staff_Consignment: React.FC = () => {
       return;
     }
 
-    if (!categoryId) {
-      setToastMessage("No category found. Please add at least 1 row in addon_categories.");
+    if (!consignmentCategoryId) {
+      setToastMessage("Consignment category not found. Run: insert into addon_categories(name) values ('Consignment');");
       setShowToast(true);
       return;
     }
@@ -138,12 +131,7 @@ const Staff_Consignment: React.FC = () => {
       const userId: string = userRes.user.id;
 
       // ✅ allow BOTH admin & staff
-      const { data: profile, error: profErr } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", userId)
-        .single<Profile>();
-
+      const { data: profile, error: profErr } = await supabase.from("profiles").select("role").eq("id", userId).single<Profile>();
       if (profErr) throw profErr;
 
       const role = (profile?.role ?? "").toLowerCase();
@@ -151,36 +139,34 @@ const Staff_Consignment: React.FC = () => {
 
       let imageUrl: string | null = null;
 
+      // ✅ upload to bucket: consignment
       if (imageFile) {
         const extRaw: string | undefined = imageFile.name.split(".").pop();
         const fileExt: string = (extRaw ? extRaw.toLowerCase() : "jpg").trim();
         const fileName: string = `${Date.now()}.${fileExt}`;
         const filePath: string = `${userId}/${fileName}`;
 
-        // ✅ bucket name: consignment (as you created)
         const { error: uploadError } = await supabase.storage.from("consignment").upload(filePath, imageFile, {
           contentType: imageFile.type,
           upsert: false,
         });
-
         if (uploadError) throw uploadError;
 
-        // Public bucket => public URL works for anon/customer
         const { data: urlData } = supabase.storage.from("consignment").getPublicUrl(filePath);
         imageUrl = urlData.publicUrl;
       }
 
-      const fullNameFinal = normalizeItemName(fullName);
-      const itemNameFinal = normalizeItemName(itemName);
+      const fullNameFinal = normalizeText(fullName);
+      const itemNameFinal = normalizeText(itemName);
 
       const sizeFinal = normalizeSize(size);
       const sizeDb: string | null = sizeFinal === "None" ? null : sizeFinal;
 
-      const { error: insertErr } = await supabase.from("consignment").insert([
+      // ✅ 1) insert to consignment
+      const { error: insertConsErr } = await supabase.from("consignment").insert([
         {
-          // created_by has default auth.uid() in table, but ok to include too
           created_by: userId,
-          category_id: categoryId,
+          category_id: consignmentCategoryId,
           full_name: fullNameFinal,
           item_name: itemNameFinal,
           size: sizeDb,
@@ -190,7 +176,23 @@ const Staff_Consignment: React.FC = () => {
         },
       ]);
 
-      if (insertErr) throw insertErr;
+      if (insertConsErr) throw insertConsErr;
+
+      // ✅ 2) ALSO insert to add_ons so it appears under category = "Consignment"
+      const { error: insertAddOnErr } = await supabase.from("add_ons").insert([
+        {
+          admin_id: userId, // staff/admin id (ok)
+          category: "Consignment",
+          category_id: consignmentCategoryId,
+          name: itemNameFinal,
+          size: sizeDb,
+          restocked,
+          price,
+          image_url: imageUrl,
+        },
+      ]);
+
+      if (insertAddOnErr) throw insertAddOnErr;
 
       // update suggestions list
       setAllFullNames((prev) => {
@@ -206,7 +208,7 @@ const Staff_Consignment: React.FC = () => {
       setImageFile(null);
       closePopover();
 
-      setToastMessage("Consignment item added successfully!");
+      setToastMessage("Consignment item added (also added to Add-Ons > Consignment)!");
       setShowToast(true);
     } catch (err: unknown) {
       console.error(err);
@@ -234,7 +236,7 @@ const Staff_Consignment: React.FC = () => {
             <div className="aao-grid">
               {/* LEFT */}
               <div className="aao-col aao-col-left">
-                {/* FULL NAME (replaces Category field UI) */}
+                {/* FULL NAME */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Full Name <span className="aao-req">*</span>
@@ -267,7 +269,7 @@ const Staff_Consignment: React.FC = () => {
                   </div>
                 </IonItem>
 
-                {/* ✅ POPOVER (full name suggestions) */}
+                {/* POPOVER */}
                 <IonPopover
                   isOpen={catOpen}
                   event={catEvent}
@@ -292,7 +294,7 @@ const Staff_Consignment: React.FC = () => {
                   </IonContent>
                 </IonPopover>
 
-                {/* SIZE (optional) */}
+                {/* SIZE */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Size <span className="aao-opt">(optional)</span>

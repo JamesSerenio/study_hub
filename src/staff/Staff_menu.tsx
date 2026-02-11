@@ -38,6 +38,7 @@ import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
 import Customer_Cancelled from "./Customer_Cancelled";
 import Staff_Consignment from "./Staff_Consignment"; // ✅ NEW
+import Staff_Consignment_Record from "./Staff_Consignment_Record"; // ✅ NEW
 
 /* assets */
 import dashboardIcon from "../assets/add_user.png";
@@ -53,6 +54,7 @@ import flowerImg from "../assets/flower.png";
 import cancelledIcon from "../assets/cancelled.png";
 import bellIcon from "../assets/bell.png";
 import consignmentIcon from "../assets/consignment.png"; // ✅ NEW
+import consignmentRecordIcon from "../assets/consignment_record.png"; // ✅ NEW
 
 type FlowerStatic = {
   id: string;
@@ -387,9 +389,8 @@ const Staff_menu: React.FC = () => {
       { name: "Memberships", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
-
-      // ✅ NEW MENU ITEM
-      { name: "Consignment", key: "staff_consignment", icon: consignmentIcon },
+      { name: "Add Consignment", key: "staff_consignment", icon: consignmentIcon }, // ✅ NEW
+      { name: "Consignment Record", key: "staff_consignment_record", icon: consignmentRecordIcon }, // ✅ NEW
     ],
     []
   );
@@ -429,6 +430,8 @@ const Staff_menu: React.FC = () => {
         return <Product_Item_Lists />;
       case "staff_consignment":
         return <Staff_Consignment />; // ✅ NEW
+      case "staff_consignment_record":
+        return <Staff_Consignment_Record />; // ✅ NEW
       default:
         return <Staff_Dashboard />;
     }
