@@ -1,17 +1,12 @@
 // src/pages/Product_Item_Lists.tsx
 // ✅ STRICT TS, NO any
-// ✅ Add Expenses modal (logs to add_on_expenses)
-// ✅ Expense Amount AUTO = qty * add_ons.expenses_cost (UNIT COST)
-// ✅ If expenses_cost is 0 => fallback to price
-// ✅ Sort by Category OR Stock (asc/desc)
-// ✅ SEARCH (name/category/size) + classnames for CSS
-// ✅ Add Cash Outs modal (logs to cash_outs)
-// ✅ Cash Outs fields: type, description, amount + ✅ payment_method (cash/gcash)
-// ✅ Uses SAME pil-* classnames for styling
-// ✅ FIX: Cash outs now checks Supabase Auth session + shows real error
-// ✅ NEW: SIZE column (DB add_ons.size) shown in table + search + dropdown label
-// ✅ NEW: expense_type now includes 'bilin' (Utang / Bought)
-// ✅ NEW: Table shows Bilin column (add_ons.bilin)
+// ✅ Stock Adjustment uses RPC: record_addon_adjustment (fixes "stocks can only be updated to DEFAULT")
+// ✅ Types: Expired/Damaged, Inventory Loss, Bilin
+// ✅ ALL: -stock
+// ✅ Bilin + Inventory Loss: +overall (handled by DB generated overall_sales)
+// ✅ Expired/Damaged: -stock only (not included in overall_sales)
+// ✅ Inventory Loss label replaces staff consume
+// ✅ Keeps SAME pil-* classnames
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -60,7 +55,7 @@ import type {
   IonTextareaCustomEvent,
 } from "@ionic/core";
 
-type ExpenseType = "expired" | "staff_consumed" | "bilin";
+type ExpenseType = "expired" | "inventory_loss" | "bilin";
 type SortKey = "category" | "stocks";
 type CashOutMethod = "cash" | "gcash";
 
@@ -74,8 +69,8 @@ interface AddOn {
   restocked: number | string;
   sold: number | string;
 
-  expenses_cost: number | string; // UNIT COST (money)
-  expenses: number | string; // qty only
+  expenses_cost: number | string; // unit cost
+  expenses: number | string; // qty tracker (expired+inventory_loss)
 
   stocks: number | string;
   overall_sales: number | string;
@@ -83,26 +78,15 @@ interface AddOn {
   image_url: string | null;
 
   expired: number | string;
-  staff_consumed: number | string;
-  bilin: number | string; // ✅ NEW
-}
-
-interface AddOnExpenseInsert {
-  add_on_id: string;
-  full_name: string;
-  category: string;
-  product_name: string;
-  quantity: number;
-  expense_type: ExpenseType;
-  expense_amount: number;
-  description: string;
+  inventory_loss: number | string;
+  bilin: number | string;
 }
 
 interface CashOutInsert {
   type: string;
   description: string | null;
   amount: number;
-  payment_method: CashOutMethod; // ✅ NEW
+  payment_method: CashOutMethod;
 }
 
 /* =========================
@@ -154,27 +138,33 @@ const getAuthedUserId = async (): Promise<string | null> => {
 };
 
 /* =========================
-   AUTO COMPUTE (expenses)
+   UNIT COST RULES
 ========================= */
 
 type UnitSource = "cost" | "price" | "none";
 
-const getUnitCost = (addOn: AddOn | null): { unit: number; source: UnitSource } => {
+// expired => use expenses_cost fallback price
+// inventory_loss + bilin => use price (because affects overall)
+const getUnitForType = (addOn: AddOn | null, t: ExpenseType): { unit: number; source: UnitSource } => {
   if (!addOn) return { unit: 0, source: "none" };
 
-  const cost = toNumber(addOn.expenses_cost);
-  if (cost > 0) return { unit: cost, source: "cost" };
-
   const price = toNumber(addOn.price);
-  if (price > 0) return { unit: price, source: "price" };
+  const cost = toNumber(addOn.expenses_cost);
 
+  if (t === "bilin" || t === "inventory_loss") {
+    return price > 0 ? { unit: price, source: "price" } : { unit: 0, source: "none" };
+  }
+
+  // expired
+  if (cost > 0) return { unit: cost, source: "cost" };
+  if (price > 0) return { unit: price, source: "price" };
   return { unit: 0, source: "none" };
 };
 
-const computeExpenseAmount = (addOn: AddOn | null, qtyStr: string): number => {
+const computeAmount = (addOn: AddOn | null, t: ExpenseType, qtyStr: string): number => {
   if (!addOn) return 0;
   const q = clampInt(qtyStr, 0);
-  const { unit } = getUnitCost(addOn);
+  const { unit } = getUnitForType(addOn, t);
   const total = q * unit;
   return Number.isFinite(total) ? total : 0;
 };
@@ -190,23 +180,21 @@ const Product_Item_Lists: React.FC = () => {
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
 
-  // sort controls
   const [sortKey, setSortKey] = useState<SortKey>("category");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
-  // search
   const [search, setSearch] = useState<string>("");
 
-  // EXPENSES modal
+  // STOCK ADJUST modal
   const [isExpenseOpen, setIsExpenseOpen] = useState<boolean>(false);
   const [savingExpense, setSavingExpense] = useState<boolean>(false);
 
-  // EXPENSES form
+  // form
   const [fullName, setFullName] = useState<string>("");
   const [selectedAddOnId, setSelectedAddOnId] = useState<string>("");
   const [expenseType, setExpenseType] = useState<ExpenseType>("expired");
   const [qty, setQty] = useState<string>("1");
-  const [expenseAmount, setExpenseAmount] = useState<string>("0"); // auto
+  const [expenseAmount, setExpenseAmount] = useState<string>("0");
   const [description, setDescription] = useState<string>("");
 
   // CASH OUTS modal
@@ -217,7 +205,7 @@ const Product_Item_Lists: React.FC = () => {
   const [cashOutType, setCashOutType] = useState<string>("");
   const [cashOutDesc, setCashOutDesc] = useState<string>("");
   const [cashOutAmount, setCashOutAmount] = useState<string>("");
-  const [cashOutMethod, setCashOutMethod] = useState<CashOutMethod>("cash"); // ✅ NEW
+  const [cashOutMethod, setCashOutMethod] = useState<CashOutMethod>("cash");
 
   const fetchAddOns = async (): Promise<void> => {
     setLoading(true);
@@ -225,7 +213,7 @@ const Product_Item_Lists: React.FC = () => {
       const { data, error } = await supabase
         .from("add_ons")
         .select(
-          "id, created_at, category, name, size, price, restocked, sold, expenses_cost, expenses, stocks, overall_sales, expected_sales, image_url, expired, staff_consumed, bilin"
+          "id, created_at, category, name, size, price, restocked, sold, expenses_cost, expenses, stocks, overall_sales, expected_sales, image_url, expired, inventory_loss, bilin"
         )
         .order("created_at", { ascending: false });
 
@@ -243,12 +231,6 @@ const Product_Item_Lists: React.FC = () => {
 
   useEffect(() => {
     void fetchAddOns();
-
-    // optional debug: check session
-    void supabase.auth.getSession().then(({ data }) => {
-      // eslint-disable-next-line no-console
-      console.log("SESSION:", data.session);
-    });
   }, []);
 
   const handleRefresh = (event: CustomEvent<RefresherEventDetail>): void => {
@@ -288,17 +270,15 @@ const Product_Item_Lists: React.FC = () => {
     setSortOrder((p) => (p === "asc" ? "desc" : "asc"));
   };
 
-  const selectedAddOn = useMemo(() => {
-    return addOns.find((a) => a.id === selectedAddOnId) ?? null;
-  }, [addOns, selectedAddOnId]);
+  const selectedAddOn = useMemo(() => addOns.find((a) => a.id === selectedAddOnId) ?? null, [addOns, selectedAddOnId]);
 
   useEffect(() => {
-    const total = computeExpenseAmount(selectedAddOn, qty);
+    const total = computeAmount(selectedAddOn, expenseType, qty);
     setExpenseAmount(String(total));
-  }, [selectedAddOn?.id, qty]);
+  }, [selectedAddOn?.id, expenseType, qty]);
 
   /* =========================
-     EXPENSES MODAL CONTROLS
+     STOCK ADJUSTMENT MODAL
   ========================= */
 
   const openExpenseModal = (): void => {
@@ -327,15 +307,13 @@ const Product_Item_Lists: React.FC = () => {
     const desc = description.trim();
     if (!desc) return "Description / reason is required.";
 
-    if (selectedAddOn) {
-      const stock = toNumber(selectedAddOn.stocks);
-      if (q > stock) return `Not enough stock. Available: ${stock}`;
-    }
+    if (!selectedAddOn) return "Product not found.";
 
-    if (selectedAddOn) {
-      const { unit, source } = getUnitCost(selectedAddOn);
-      if (unit <= 0 || source === "none") return "Set expenses_cost (unit cost) or price first (cannot compute).";
-    }
+    const stock = toNumber(selectedAddOn.stocks);
+    if (q > stock) return `Not enough stock. Available: ${stock}`;
+
+    const { unit, source } = getUnitForType(selectedAddOn, expenseType);
+    if (unit <= 0 || source === "none") return "Set price (and/or expenses_cost) first.";
 
     return null;
   };
@@ -355,23 +333,20 @@ const Product_Item_Lists: React.FC = () => {
 
     const q = clampInt(qty, 1);
 
-    const payload: AddOnExpenseInsert = {
-      add_on_id: selectedAddOn.id,
-      full_name: fullName.trim(),
-      category: selectedAddOn.category,
-      product_name: selectedAddOn.name,
-      quantity: q,
-      expense_type: expenseType,
-      expense_amount: computeExpenseAmount(selectedAddOn, String(q)),
-      description: description.trim(),
-    };
-
     setSavingExpense(true);
     try {
-      const { error } = await supabase.from("add_on_expenses").insert(payload);
+      // ✅ IMPORTANT: Use RPC so we never update generated columns directly.
+      const { error } = await supabase.rpc("record_addon_adjustment", {
+        p_add_on_id: selectedAddOn.id,
+        p_full_name: fullName.trim(),
+        p_quantity: q,
+        p_expense_type: expenseType,
+        p_description: description.trim(),
+      });
+
       if (error) {
         // eslint-disable-next-line no-console
-        console.error("add_on_expenses insert error:", error);
+        console.error("record_addon_adjustment error:", error);
         setToastMessage(error.message);
         setShowToast(true);
         return;
@@ -388,14 +363,14 @@ const Product_Item_Lists: React.FC = () => {
   };
 
   /* =========================
-     CASH OUTS MODAL CONTROLS
+     CASH OUTS
   ========================= */
 
   const openCashOutModal = (): void => {
     setCashOutType("");
     setCashOutDesc("");
     setCashOutAmount("");
-    setCashOutMethod("cash"); // ✅ reset
+    setCashOutMethod("cash");
     setIsCashOutOpen(true);
   };
 
@@ -415,7 +390,6 @@ const Product_Item_Lists: React.FC = () => {
     return null;
   };
 
-  // ✅ FIXED: checks auth session + shows real supabase error
   const submitCashOut = async (): Promise<void> => {
     const err = validateCashOut();
     if (err) {
@@ -440,8 +414,7 @@ const Product_Item_Lists: React.FC = () => {
 
     setSavingCashOut(true);
     try {
-      const { data, error } = await supabase.from("cash_outs").insert(payload).select("id, created_at").single();
-
+      const { error } = await supabase.from("cash_outs").insert(payload);
       if (error) {
         // eslint-disable-next-line no-console
         console.error("cash_outs insert error:", error);
@@ -449,9 +422,6 @@ const Product_Item_Lists: React.FC = () => {
         setShowToast(true);
         return;
       }
-
-      // eslint-disable-next-line no-console
-      console.log("cash_out saved:", data);
 
       setToastMessage("Cash out saved.");
       setShowToast(true);
@@ -466,7 +436,7 @@ const Product_Item_Lists: React.FC = () => {
     }
   };
 
-  const unitInfo = useMemo(() => getUnitCost(selectedAddOn), [selectedAddOn?.id]);
+  const unitInfo = useMemo(() => getUnitForType(selectedAddOn, expenseType), [selectedAddOn?.id, expenseType]);
   const sortLabel = `${sortKey === "category" ? "category" : "stocks"} (${sortOrder})`;
 
   return (
@@ -499,9 +469,7 @@ const Product_Item_Lists: React.FC = () => {
             <IonSelect
               className="pil-sort-select"
               value={sortKey}
-              onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
-                setSortKey(String(e.detail.value) as SortKey)
-              }
+              onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setSortKey(String(e.detail.value) as SortKey)}
             >
               <IonSelectOption value="category">Category</IonSelectOption>
               <IonSelectOption value="stocks">Stocks</IonSelectOption>
@@ -566,7 +534,7 @@ const Product_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col">Restocked</IonCol>
                   <IonCol className="pil-col">Sold</IonCol>
                   <IonCol className="pil-col">Expired</IonCol>
-                  <IonCol className="pil-col">Inventory loss</IonCol>
+                  <IonCol className="pil-col">Inventory Loss</IonCol>
                   <IonCol className="pil-col">Bilin</IonCol>
                   <IonCol className="pil-col">Stocks</IonCol>
                   <IonCol className="pil-col">Expenses (qty)</IonCol>
@@ -578,11 +546,7 @@ const Product_Item_Lists: React.FC = () => {
                 {filteredAddOns.map((a) => (
                   <IonRow className="pil-row" key={a.id}>
                     <IonCol className="pil-col pil-col--img">
-                      {a.image_url ? (
-                        <IonImg className="pil-img" src={a.image_url} alt={a.name} />
-                      ) : (
-                        <span className="pil-muted">No image</span>
-                      )}
+                      {a.image_url ? <IonImg className="pil-img" src={a.image_url} alt={a.name} /> : <span className="pil-muted">No image</span>}
                     </IonCol>
 
                     <IonCol className="pil-col pil-col--strong">{a.name}</IonCol>
@@ -592,7 +556,7 @@ const Product_Item_Lists: React.FC = () => {
                     <IonCol className="pil-col">{toNumber(a.restocked)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.sold)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.expired)}</IonCol>
-                    <IonCol className="pil-col">{toNumber(a.staff_consumed)}</IonCol>
+                    <IonCol className="pil-col">{toNumber(a.inventory_loss)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.bilin)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.stocks)}</IonCol>
                     <IonCol className="pil-col">{toNumber(a.expenses)}</IonCol>
@@ -606,7 +570,7 @@ const Product_Item_Lists: React.FC = () => {
           )}
         </div>
 
-        {/* ADD EXPENSES MODAL */}
+        {/* STOCK ADJUSTMENT MODAL */}
         <IonModal isOpen={isExpenseOpen} onDidDismiss={closeExpenseModal} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
@@ -642,9 +606,7 @@ const Product_Item_Lists: React.FC = () => {
                     className="pil-select"
                     value={selectedAddOnId}
                     placeholder="Select product"
-                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
-                      setSelectedAddOnId(String(e.detail.value ?? ""))
-                    }
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setSelectedAddOnId(String(e.detail.value ?? ""))}
                   >
                     {addOns.map((a) => (
                       <IonSelectOption key={a.id} value={a.id}>
@@ -662,12 +624,10 @@ const Product_Item_Lists: React.FC = () => {
                   <IonSelect
                     className="pil-select"
                     value={expenseType}
-                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
-                      setExpenseType(String(e.detail.value) as ExpenseType)
-                    }
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setExpenseType(String(e.detail.value) as ExpenseType)}
                   >
                     <IonSelectOption value="expired">Expired / Damaged</IonSelectOption>
-                    <IonSelectOption value="staff_consumed">Inventory Loss</IonSelectOption>
+                    <IonSelectOption value="inventory_loss">Inventory Loss</IonSelectOption>
                     <IonSelectOption value="bilin">Bilin (Utang / Bought)</IonSelectOption>
                   </IonSelect>
                 </IonItem>
@@ -687,7 +647,7 @@ const Product_Item_Lists: React.FC = () => {
 
                 <IonItem className="pil-item">
                   <IonLabel position="stacked" className="pil-label">
-                    Expense Amount (auto)
+                    Amount (auto)
                   </IonLabel>
                   <IonInput className="pil-input" inputMode="decimal" value={expenseAmount} readonly />
                 </IonItem>
@@ -699,11 +659,9 @@ const Product_Item_Lists: React.FC = () => {
                   <IonTextarea
                     className="pil-textarea"
                     value={description}
-                    placeholder="Example: expired date reached / damaged packaging / utang product"
+                    placeholder="Example: expired date reached / damaged packaging / inventory loss / utang product"
                     autoGrow
-                    onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) =>
-                      setDescription(String(e.detail.value ?? ""))
-                    }
+                    onIonInput={(e: IonTextareaCustomEvent<TextareaInputEventDetail>) => setDescription(String(e.detail.value ?? ""))}
                   />
                 </IonItem>
               </IonList>
@@ -734,7 +692,15 @@ const Product_Item_Lists: React.FC = () => {
 
                   <div className="pil-summary-note">
                     Unit Source:{" "}
-                    <b>{unitInfo.source === "cost" ? "expenses_cost" : unitInfo.source === "price" ? "price (fallback)" : "none"}</b>
+                    <b>
+                      {expenseType === "bilin" || expenseType === "inventory_loss"
+                        ? "price"
+                        : unitInfo.source === "cost"
+                          ? "expenses_cost"
+                          : unitInfo.source === "price"
+                            ? "price (fallback)"
+                            : "none"}
+                    </b>
                   </div>
 
                   <div className="pil-summary-row">
@@ -744,24 +710,25 @@ const Product_Item_Lists: React.FC = () => {
 
                   <div className="pil-summary-row">
                     <span>Total</span>
-                    <b>{money2(computeExpenseAmount(selectedAddOn, qty))}</b>
+                    <b>{money2(computeAmount(selectedAddOn, expenseType, qty))}</b>
                   </div>
 
-                  {unitInfo.source === "price" && (
+                  {expenseType === "expired" && unitInfo.source === "price" && (
                     <div className="pil-summary-warn">
                       Note: expenses_cost is 0, so we used price as fallback. Set expenses_cost to match your real unit cost.
+                    </div>
+                  )}
+
+                  {(expenseType === "bilin" || expenseType === "inventory_loss") && (
+                    <div className="pil-summary-warn">
+                      Note: This type affects <b>Overall</b> (handled by DB: overall_sales includes sold + bilin + inventory_loss).
                     </div>
                   )}
                 </div>
               )}
 
               <div className="pil-modal-actions">
-                <IonButton
-                  className="pil-btn pil-btn--primary"
-                  expand="block"
-                  onClick={submitExpense}
-                  disabled={savingExpense}
-                >
+                <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={submitExpense} disabled={savingExpense}>
                   {savingExpense ? "Saving..." : "Save Adjustment"}
                 </IonButton>
 
@@ -773,7 +740,7 @@ const Product_Item_Lists: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* ADD CASH OUTS MODAL */}
+        {/* CASH OUTS MODAL */}
         <IonModal isOpen={isCashOutOpen} onDidDismiss={closeCashOutModal} className="pil-modal">
           <IonHeader className="pil-modal-header">
             <IonToolbar className="pil-modal-toolbar">
@@ -814,7 +781,6 @@ const Product_Item_Lists: React.FC = () => {
                   />
                 </IonItem>
 
-                {/* ✅ Cash / GCash selector */}
                 <IonItem className="pil-item">
                   <IonLabel position="stacked" className="pil-label">
                     Payment (Cash / GCash)
@@ -822,9 +788,7 @@ const Product_Item_Lists: React.FC = () => {
                   <IonSelect
                     className="pil-select"
                     value={cashOutMethod}
-                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) =>
-                      setCashOutMethod(String(e.detail.value) as CashOutMethod)
-                    }
+                    onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setCashOutMethod(String(e.detail.value) as CashOutMethod)}
                   >
                     <IonSelectOption value="cash">Cash</IonSelectOption>
                     <IonSelectOption value="gcash">GCash</IonSelectOption>
@@ -849,12 +813,7 @@ const Product_Item_Lists: React.FC = () => {
               </IonList>
 
               <div className="pil-modal-actions">
-                <IonButton
-                  className="pil-btn pil-btn--primary"
-                  expand="block"
-                  onClick={submitCashOut}
-                  disabled={savingCashOut}
-                >
+                <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={submitCashOut} disabled={savingCashOut}>
                   {savingCashOut ? "Saving..." : "Save Cash Outs"}
                 </IonButton>
 
