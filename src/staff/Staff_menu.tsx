@@ -1,3 +1,4 @@
+// src/pages/Staff_menu.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   IonButtons,
@@ -36,6 +37,7 @@ import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
 import Customer_Cancelled from "./Customer_Cancelled";
+import Staff_Consignment from "./Staff_Consignment"; // ✅ NEW
 
 /* assets */
 import dashboardIcon from "../assets/add_user.png";
@@ -50,6 +52,7 @@ import salesIcon from "../assets/sales.png";
 import flowerImg from "../assets/flower.png";
 import cancelledIcon from "../assets/cancelled.png";
 import bellIcon from "../assets/bell.png";
+import consignmentIcon from "../assets/consignment.png"; // ✅ NEW
 
 type FlowerStatic = {
   id: string;
@@ -85,8 +88,7 @@ const toMoney = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => window.setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
@@ -205,10 +207,7 @@ const Staff_menu: React.FC = () => {
     const nowIso = new Date().toISOString();
 
     // ✅ update only unread
-    const { error } = await supabase
-      .from(NOTIF_TABLE)
-      .update({ is_read: true, read_at: nowIso })
-      .eq("is_read", false);
+    const { error } = await supabase.from(NOTIF_TABLE).update({ is_read: true, read_at: nowIso }).eq("is_read", false);
 
     if (error) {
       // eslint-disable-next-line no-console
@@ -276,7 +275,7 @@ const Staff_menu: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ✅ PRODUCTION REALTIME SUBSCRIBE ONCE (INSTANT BADGE) */
+  /* ✅ REALTIME SUBSCRIBE ONCE (INSTANT BADGE) */
   useEffect(() => {
     void fetchUnreadCount();
     void fetchNotifications();
@@ -289,22 +288,17 @@ const Staff_menu: React.FC = () => {
         (payload: RealtimePostgresInsertPayload<AddOnNotifRow>) => {
           const newRow = payload.new;
 
-          // ✅ prepend row
           setNotifItems((prev) => {
             if (prev.some((x) => x.id === newRow.id)) return prev;
             return [newRow, ...prev].slice(0, 30);
           });
 
-          // ✅ INSTANT badge update
           if (notifOpenRef.current) {
-            // open = considered seen
             void markAllAsReadSilent();
           } else {
-            // closed = count increases immediately if unread
             if (!newRow.is_read) setUnreadCount((c) => c + 1);
           }
 
-          // safety recount (optional)
           scheduleRecount(600);
         }
       )
@@ -323,7 +317,6 @@ const Staff_menu: React.FC = () => {
             return copy;
           });
 
-          // ✅ adjust badge when is_read flips
           if (!notifOpenRef.current) {
             const wasUnread = oldRow ? !(oldRow as Partial<AddOnNotifRow>).is_read : null;
             const isUnreadNow = !newRow.is_read;
@@ -333,7 +326,6 @@ const Staff_menu: React.FC = () => {
             } else if (wasUnread === false && isUnreadNow === true) {
               setUnreadCount((c) => c + 1);
             } else {
-              // fallback recount for weird cases
               scheduleRecount(350);
             }
           }
@@ -344,7 +336,6 @@ const Staff_menu: React.FC = () => {
         { event: "DELETE", schema: "public", table: NOTIF_TABLE },
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         (_payload: RealtimePostgresDeletePayload<AddOnNotifRow>) => {
-          // safest: recount
           scheduleRecount(250);
         }
       )
@@ -396,6 +387,9 @@ const Staff_menu: React.FC = () => {
       { name: "Memberships", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
+
+      // ✅ NEW MENU ITEM
+      { name: "Consignment", key: "staff_consignment", icon: consignmentIcon },
     ],
     []
   );
@@ -433,6 +427,8 @@ const Staff_menu: React.FC = () => {
         return <Staff_Sales_Report />;
       case "product_item_lists":
         return <Product_Item_Lists />;
+      case "staff_consignment":
+        return <Staff_Consignment />; // ✅ NEW
       default:
         return <Staff_Dashboard />;
     }
