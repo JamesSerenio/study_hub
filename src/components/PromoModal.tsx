@@ -6,14 +6,10 @@
 // ✅ Friendly overlap modal when seat_blocked_times_no_overlap hit
 // ✅ After success OK: closes THIS promo modal only
 // ✅ THEMED: className="booking-modal" + bookadd-card + form-item
-// ✅ NEW: Phone Number required + 09 + exactly 11 digits
-// ✅ NEW: If promo duration >= 7 days => auto-generate PROMO CODE
-// ✅ NEW: Save promo_code + created_by_staff_id (if staff/admin logged in)
-// ✅ NEW: Attendance IN/OUT by input code (same modal) => insert to promo_attendance
-// ✅ NEW (YOUR REQUEST): Attendance UI moved to a BEAUTIFUL overlay modal (same as Staff_Consignment_Record)
-//     - Click button "Enter Code (Attendance)"
-//     - Choose IN/OUT first, then input code
-//     - Uses receipt-* classnames (receipt-overlay / receipt-container / receipt-btn / money-input)
+// ✅ Phone Number required + 09 + exactly 11 digits
+// ✅ If promo duration >= 7 days => auto-generate PROMO CODE
+// ✅ Save promo_code + created_by_staff_id (if staff/admin logged in)
+// ✅ Attendance IN/OUT by input code via BUTTON -> MODAL (same receipt-overlay style)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -90,6 +86,8 @@ type PromoBookingCodeLookupRow = {
   promo_code: string | null;
   full_name: string;
   phone_number: string | null;
+  attempts?: number | null; // optional if column exists
+  validity_end_at?: string | null; // optional if column exists
 };
 
 type PromoAttendanceRow = {
@@ -170,7 +168,10 @@ const computeEndIso = (startIso: string, opt: PackageOptionRow): string => {
   return d.toISOString();
 };
 
-const computeStatus = (startIso: string, endIso: string): "upcoming" | "ongoing" | "finished" => {
+const computeStatus = (
+  startIso: string,
+  endIso: string
+): "upcoming" | "ongoing" | "finished" => {
   const now = Date.now();
   const start = new Date(startIso).getTime();
   const end = new Date(endIso).getTime();
@@ -185,10 +186,14 @@ const normalizePhone = (raw: string): string => String(raw).replace(/\D/g, "");
 const isValidPHPhone09 = (digits: string): boolean => /^09\d{9}$/.test(digits);
 const phoneErrorMessage = (digits: string): string | null => {
   if (!digits) return "Phone number is required.";
-  if (!digits.startsWith("09")) return "Phone number must start with 09.\n\nExample: 09123456789";
-  if (digits.length < 11) return "Phone number is too short. It must be exactly 11 digits.\n\nExample: 09123456789";
-  if (digits.length > 11) return "Phone number is too long. It must be exactly 11 digits.\n\nExample: 09123456789";
-  if (!isValidPHPhone09(digits)) return "Invalid phone number.\n\nExample: 09123456789";
+  if (!digits.startsWith("09"))
+    return "Phone number must start with 09.\n\nExample: 09123456789";
+  if (digits.length < 11)
+    return "Phone number is too short. It must be exactly 11 digits.\n\nExample: 09123456789";
+  if (digits.length > 11)
+    return "Phone number is too long. It must be exactly 11 digits.\n\nExample: 09123456789";
+  if (!isValidPHPhone09(digits))
+    return "Invalid phone number.\n\nExample: 09123456789";
   return null;
 };
 
@@ -284,6 +289,14 @@ const normalizeCode = (v: string): string =>
     .replace(/[^A-Z0-9]/g, "")
     .trim();
 
+const isExpired = (validityEndAtIso: string | null | undefined): boolean => {
+  const iso = String(validityEndAtIso ?? "").trim();
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return false;
+  return Date.now() > t;
+};
+
 /* ================= COMPONENT ================= */
 
 const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatGroups }) => {
@@ -324,32 +337,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
   const [promoCode, setPromoCode] = useState<string>("");
   const [codeBusy, setCodeBusy] = useState<boolean>(false);
 
-  /* =========================
-     ✅ NEW: ATTENDANCE MODAL (receipt style)
-  ========================= */
+  // ✅ Attendance modal state
   const [attModalOpen, setAttModalOpen] = useState<boolean>(false);
-  const [attStep, setAttStep] = useState<1 | 2>(1); // 1 choose action, 2 enter code
-  const [attAction, setAttAction] = useState<"in" | "out">("in");
   const [codeInput, setCodeInput] = useState<string>("");
+  const [attAction, setAttAction] = useState<"in" | "out">("in");
   const [attNote, setAttNote] = useState<string>("");
   const [attBusy, setAttBusy] = useState<boolean>(false);
-  const [attLookupBusy, setAttLookupBusy] = useState<boolean>(false);
   const [attHistory, setAttHistory] = useState<PromoAttendanceRow[]>([]);
-
-  const openAttendanceModal = (): void => {
-    setAttModalOpen(true);
-    setAttStep(1);
-    setAttAction("in");
-    setCodeInput("");
-    setAttNote("");
-    setAttHistory([]);
-  };
-
-  const closeAttendanceModal = (): void => {
-    if (attBusy) return;
-    setAttModalOpen(false);
-    setAttStep(1);
-  };
+  const [attLookupBusy, setAttLookupBusy] = useState<boolean>(false);
 
   const allSeats = useMemo<{ label: string; value: string }[]>(() => {
     const list: { label: string; value: string }[] = [];
@@ -429,7 +424,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     setConferenceBlocked(blockedSeats.includes("CONFERENCE_ROOM"));
   };
 
-  // ================= generate unique promo code =================
+  // generate unique promo code
   const ensureUniquePromoCode = async (): Promise<string> => {
     for (let i = 0; i < 10; i += 1) {
       const candidate = randomCode(8);
@@ -482,12 +477,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setConferenceBlocked(false);
 
       setPromoCode("");
+
+      // attendance reset
+      setAttModalOpen(false);
       setCodeInput("");
       setAttAction("in");
       setAttNote("");
       setAttHistory([]);
-      setAttModalOpen(false);
-      setAttStep(1);
 
       const pkRes = await supabase
         .from("packages")
@@ -567,7 +563,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, area, startIso, endIso, conferenceBlocked]);
 
-  // when option changes, if >=7 days generate code
+  // option changes => if >=7 days generate code
   useEffect(() => {
     if (!isOpen) return;
     void maybeGenerateCode();
@@ -583,6 +579,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     endIso: string;
   }): Promise<{ ok: boolean; message?: string }> => {
     const { userId, area, seatNumber, startIso, endIso } = params;
+
     const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
 
     const payload: SeatBlockedInsert = {
@@ -707,7 +704,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         return showAlert("Error", ins.error.message);
       }
 
-      const blockRes = await createSeatBlock({ userId, area, seatNumber, startIso, endIso });
+      const blockRes = await createSeatBlock({
+        userId,
+        area,
+        seatNumber,
+        startIso,
+        endIso,
+      });
+
       if (!blockRes.ok) {
         setLoading(false);
         return showAlert("Not Available", blockRes.message ?? "Not available.");
@@ -735,9 +739,19 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     }
   };
 
-  /* =========================
-     ATTENDANCE: history + submit (by code)
-  ========================= */
+  /* ================= ATTENDANCE (modal) ================= */
+
+  const openAttendanceModal = (): void => {
+    setAttModalOpen(true);
+    // if may generated code, auto set para easy
+    if (promoCode) setCodeInput(promoCode);
+    if (promoCode) void loadAttendanceHistory(promoCode);
+  };
+
+  const closeAttendanceModal = (): void => {
+    if (attBusy) return;
+    setAttModalOpen(false);
+  };
 
   const loadAttendanceHistory = async (code: string): Promise<void> => {
     const c = normalizeCode(code);
@@ -752,7 +766,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         .select("id, created_at, promo_code, action, staff_id, note")
         .eq("promo_code", c)
         .order("created_at", { ascending: false })
-        .limit(12);
+        .limit(10);
 
       if (error) {
         setAttHistory([]);
@@ -766,14 +780,15 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
   const submitAttendance = async (): Promise<void> => {
     const c = normalizeCode(codeInput);
-    if (!c) return showAlert("Required", "Please input promo code.");
+    if (!c) return showAlert("Required", "Input promo code first.");
 
     try {
       setAttBusy(true);
 
+      // find booking by code
       const { data: booking, error: bErr } = await supabase
         .from("promo_bookings")
-        .select("id, promo_code, full_name, phone_number")
+        .select("id, promo_code, full_name, phone_number, attempts, validity_end_at")
         .eq("promo_code", c)
         .maybeSingle();
 
@@ -786,11 +801,26 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         return showAlert("Not Found", "No promo booking found for that code.");
       }
 
+      const bk = booking as PromoBookingCodeLookupRow;
+
+      // validity check (if column exists)
+      if (bk.validity_end_at && isExpired(bk.validity_end_at)) {
+        setAttBusy(false);
+        return showAlert("Expired", "This promo code is already expired.");
+      }
+
+      // attempts check (if column exists)
+      const attempts = Number(bk.attempts ?? 0);
+      if (Number.isFinite(attempts) && attempts > 0) {
+        // attempts is treated as remaining attempts
+        // allow save, then decrement
+      }
+
       const userRes = await supabase.auth.getUser();
       const staffId = userRes.data.user?.id ?? null;
 
       const payload = {
-        promo_booking_id: (booking as PromoBookingCodeLookupRow).id,
+        promo_booking_id: bk.id,
         promo_code: c,
         action: attAction,
         staff_id: staffId,
@@ -803,15 +833,18 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         return showAlert("Error", insErr.message);
       }
 
+      // decrement attempts if attempts > 0
+      if (Number.isFinite(attempts) && attempts > 0) {
+        const nextAttempts = Math.max(0, attempts - 1);
+        await supabase.from("promo_bookings").update({ attempts: nextAttempts }).eq("id", bk.id);
+      }
+
       setAttBusy(false);
       setAttNote("");
 
-      showAlert(
-        "Saved",
-        `Attendance "${attAction.toUpperCase()}" saved.\n\nCustomer: ${(booking as PromoBookingCodeLookupRow).full_name}`
-      );
+      showAlert("Saved", `Attendance "${attAction.toUpperCase()}" saved.\n\nCustomer: ${bk.full_name}`);
 
-      await loadAttendanceHistory(c);
+      void loadAttendanceHistory(c);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Attendance save failed.";
       setAttBusy(false);
@@ -939,14 +972,16 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             </IonSelect>
           </IonItem>
 
-          {/* GENERATED CODE */}
+          {/* SHOW GENERATED CODE if >= 7 days */}
           {approxDaysFromOption(selectedOption) >= 7 ? (
             <IonCard className="promo-card" style={{ marginTop: 10 }}>
               <IonCardContent>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
                   <div>
                     <div style={{ fontWeight: 900, letterSpacing: 0.5 }}>PROMO CODE</div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>Use this code for Attendance IN/OUT.</div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      Use this code for Attendance IN/OUT.
+                    </div>
                   </div>
 
                   <button
@@ -961,7 +996,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
                 <div style={{ marginTop: 10 }}>
                   <input
-                    className="money-input"
+                    className="reason-input"
                     value={promoCode}
                     readOnly
                     placeholder={codeBusy ? "Generating..." : "Code will appear here"}
@@ -1069,174 +1104,139 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             Save Promo Booking
           </IonButton>
 
-          {/* ✅ NEW BUTTON: open Attendance modal (receipt style) */}
-          <div style={{ marginTop: 10 }}>
-            <button className="receipt-btn" onClick={openAttendanceModal} disabled={attBusy}>
-              Enter Code (Attendance)
-            </button>
-          </div>
+          {/* ✅ ATTENDANCE: BUTTON ONLY (opens modal like consignment edit) */}
+          <IonCard className="promo-card" style={{ marginTop: 14 }}>
+            <IonCardContent>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>ATTENDANCE (IN / OUT)</div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10 }}>
+                Tap the button then enter code + select IN/OUT inside the modal.
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="receipt-btn" onClick={openAttendanceModal} disabled={attBusy}>
+                  Enter Code
+                </button>
+
+                {promoCode ? (
+                  <button
+                    className="receipt-btn"
+                    onClick={() => {
+                      setCodeInput(promoCode);
+                      setAttModalOpen(true);
+                      void loadAttendanceHistory(promoCode);
+                    }}
+                  >
+                    Use Generated Code
+                  </button>
+                ) : null}
+              </div>
+            </IonCardContent>
+          </IonCard>
         </div>
 
-        {/* =========================
-            ✅ ATTENDANCE OVERLAY MODAL
-            same style as Staff_Consignment_Record
-        ========================= */}
+        {/* ✅ ATTENDANCE MODAL OVERLAY (same style as consignment edit modal) */}
         {attModalOpen && (
           <div className="receipt-overlay" onClick={closeAttendanceModal}>
             <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
               <h3 className="receipt-title">ATTENDANCE</h3>
-              <p className="receipt-subtitle">Choose IN/OUT then enter promo code.</p>
+              <p className="receipt-subtitle">Enter Promo Code • Select IN/OUT</p>
 
               <hr />
 
-              {/* STEP 1: choose action */}
-              {attStep === 1 ? (
-                <>
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>Select Action</div>
+              <div className="receipt-row">
+                <span>Promo Code</span>
+                <input
+                  className="money-input"
+                  value={codeInput}
+                  placeholder="e.g. AB23CD45"
+                  onChange={(e) => setCodeInput(normalizeCode(e.currentTarget.value))}
+                  onBlur={() => void loadAttendanceHistory(codeInput)}
+                  disabled={attBusy}
+                />
+              </div>
 
-                  <div className="receipt-row">
-                    <span>Action</span>
-                    <select
-                      className="money-input"
-                      value={attAction}
-                      onChange={(e) => setAttAction(e.currentTarget.value === "out" ? "out" : "in")}
-                      disabled={attBusy}
-                      style={{ width: 180 }}
-                    >
-                      <option value="in">IN</option>
-                      <option value="out">OUT</option>
-                    </select>
-                  </div>
+              <div className="receipt-row">
+                <span>Action</span>
+                <select
+                  value={attAction}
+                  onChange={(e) => setAttAction(String(e.currentTarget.value) === "out" ? "out" : "in")}
+                  disabled={attBusy}
+                >
+                  <option value="in">IN</option>
+                  <option value="out">OUT</option>
+                </select>
+              </div>
 
-                  <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>
-                    After selecting action, click <b>Next</b>.
-                  </div>
+              <div className="receipt-row" style={{ alignItems: "flex-start" }}>
+                <span style={{ paddingTop: 6 }}>Note</span>
+                <textarea
+                  className="reason-input"
+                  style={{ width: "100%", minHeight: 90, resize: "vertical" }}
+                  value={attNote}
+                  onChange={(e) => setAttNote(e.currentTarget.value)}
+                  placeholder="Optional note..."
+                  disabled={attBusy}
+                />
+              </div>
 
-                  <div className="modal-actions" style={{ marginTop: 16 }}>
-                    <button className="receipt-btn" onClick={closeAttendanceModal} disabled={attBusy}>
-                      Close
-                    </button>
-                    <button
-                      className="receipt-btn"
-                      onClick={() => setAttStep(2)}
-                      disabled={attBusy}
-                    >
-                      Next
-                    </button>
-                  </div>
-                </>
+              <div className="modal-actions">
+                <button className="receipt-btn" onClick={closeAttendanceModal} disabled={attBusy}>
+                  Close
+                </button>
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void loadAttendanceHistory(codeInput)}
+                  disabled={attLookupBusy || attBusy}
+                >
+                  {attLookupBusy ? "Loading..." : "Load History"}
+                </button>
+
+                <button className="receipt-btn" onClick={() => void submitAttendance()} disabled={attBusy}>
+                  {attBusy ? "Saving..." : "Save"}
+                </button>
+              </div>
+
+              <hr />
+
+              <div style={{ fontWeight: 900, marginBottom: 8 }}>Recent Logs</div>
+
+              {attLookupBusy ? (
+                <div style={{ fontSize: 12, opacity: 0.8 }}>Loading...</div>
+              ) : attHistory.length === 0 ? (
+                <div style={{ fontSize: 12, opacity: 0.8 }}>No logs found.</div>
               ) : (
-                <>
-                  {/* STEP 2: input code + note */}
-                  <div style={{ fontWeight: 900, marginBottom: 10 }}>
-                    Action: <span style={{ opacity: 0.9 }}>{attAction.toUpperCase()}</span>
-                  </div>
-
-                  <div className="receipt-row">
-                    <span>Promo Code</span>
-                    <input
-                      className="money-input"
-                      value={codeInput}
-                      placeholder="e.g. AB23CD45"
-                      onChange={(e) => setCodeInput(normalizeCode(e.currentTarget.value))}
-                      disabled={attBusy}
-                    />
-                  </div>
-
-                  <div className="receipt-row" style={{ marginTop: 8 }}>
-                    <span>Note</span>
-                    <input
-                      className="money-input"
-                      value={attNote}
-                      placeholder="optional"
-                      onChange={(e) => setAttNote(e.currentTarget.value)}
-                      disabled={attBusy}
-                    />
-                  </div>
-
-                  {/* quick use generated code */}
-                  {promoCode ? (
-                    <div style={{ marginTop: 10 }}>
-                      <button
-                        className="receipt-btn"
-                        onClick={() => {
-                          const c = promoCode;
-                          setCodeInput(c);
-                          void loadAttendanceHistory(c);
-                        }}
-                        disabled={attBusy}
-                      >
-                        Use Generated Code
-                      </button>
-                    </div>
-                  ) : null}
-
-                  <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button
-                      className="receipt-btn"
-                      onClick={() => void loadAttendanceHistory(codeInput)}
-                      disabled={attLookupBusy || attBusy}
+                <div style={{ display: "grid", gap: 8 }}>
+                  {attHistory.map((h) => (
+                    <div
+                      key={h.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        padding: 10,
+                        border: "1px solid rgba(0,0,0,0.10)",
+                        borderRadius: 12,
+                        alignItems: "flex-start",
+                      }}
                     >
-                      {attLookupBusy ? "Loading..." : "Load History"}
-                    </button>
-
-                    <button className="receipt-btn" onClick={() => void submitAttendance()} disabled={attBusy}>
-                      {attBusy ? "Saving..." : "Save Attendance"}
-                    </button>
-                  </div>
-
-                  {/* history */}
-                  <div style={{ marginTop: 14 }}>
-                    <div style={{ fontWeight: 900, marginBottom: 8 }}>Recent Logs</div>
-
-                    {attLookupBusy ? (
-                      <div style={{ fontSize: 13, opacity: 0.8 }}>Loading...</div>
-                    ) : attHistory.length === 0 ? (
-                      <div style={{ fontSize: 13, opacity: 0.8 }}>No logs found.</div>
-                    ) : (
-                      <div style={{ display: "grid", gap: 8 }}>
-                        {attHistory.map((h) => (
-                          <div
-                            key={h.id}
-                            style={{
-                              border: "1px solid rgba(0,0,0,0.10)",
-                              borderRadius: 12,
-                              padding: 10,
-                              display: "flex",
-                              justifyContent: "space-between",
-                              gap: 10,
-                              alignItems: "flex-start",
-                            }}
-                          >
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 1000 }}>
-                                {String(h.action).toUpperCase()} •{" "}
-                                {new Date(h.created_at).toLocaleString("en-PH")}
-                              </div>
-                              <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-                                Code: <b>{h.promo_code}</b>
-                              </div>
-                              {h.note ? (
-                                <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-                                  Note: {h.note}
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        ))}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 1000 }}>
+                          {String(h.action).toUpperCase()} • {new Date(h.created_at).toLocaleString("en-PH")}
+                        </div>
+                        <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+                          Code: <b>{h.promo_code}</b>
+                        </div>
+                        {h.note ? (
+                          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>{h.note}</div>
+                        ) : null}
                       </div>
-                    )}
-                  </div>
-
-                  <div className="modal-actions" style={{ marginTop: 16 }}>
-                    <button className="receipt-btn" onClick={() => setAttStep(1)} disabled={attBusy}>
-                      Back
-                    </button>
-                    <button className="receipt-btn" onClick={closeAttendanceModal} disabled={attBusy}>
-                      Close
-                    </button>
-                  </div>
-                </>
+                      <div style={{ fontWeight: 900, opacity: 0.8, whiteSpace: "nowrap" }}>
+                        {h.staff_id ? "STAFF" : "—"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>

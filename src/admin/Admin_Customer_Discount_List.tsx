@@ -3,12 +3,12 @@
 // ✅ Full code + Export to Excel (.xlsx) by selected date
 // ✅ strict TS (NO "any")
 // ✅ ADD Phone # in table + receipt + excel
-// ✅ NEW: Refresh button (reload list)
-// ✅ UPDATED: Payment modal is FREE INPUTS (same as Customer_Discount_List.tsx) — Cash & GCash can exceed due ✅
-// ✅ UPDATED: Action "Delete" replaced with "Cancel" (same cancel flow as Customer_Discount_List.tsx):
-//    - requires DESCRIPTION
-//    - copy to promo_bookings_cancelled
-//    - delete from promo_bookings
+// ✅ Refresh button (reload list)
+// ✅ Payment modal is FREE INPUTS (Cash & GCash can exceed due)
+// ✅ Action "Delete" replaced with "Cancel"
+// ✅ NEW: Show Attendance records (promo_attendance) per booking
+// ✅ NEW: Admin can edit attempts + validity_end_at per booking
+// ✅ FIX: removed `void tick` hack; totals/status auto-refresh every 10s using tick properly
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -21,6 +21,18 @@ import { saveAs } from "file-saver";
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
 type DiscountKind = "none" | "percent" | "amount";
+
+type AttendanceAction = "in" | "out";
+
+type PromoAttendanceRow = {
+  id: string;
+  created_at: string;
+  promo_booking_id: string;
+  promo_code: string;
+  action: AttendanceAction;
+  staff_id: string | null;
+  note: string | null;
+};
 
 interface PromoBookingRow {
   id: string;
@@ -42,6 +54,11 @@ interface PromoBookingRow {
   discount_kind: DiscountKind;
   discount_value: number;
   discount_reason: string | null;
+
+  // ✅ NEW
+  promo_code: string | null;
+  attempts: number; // remaining attempts (admin controlled)
+  validity_end_at: string | null;
 
   packages: { title: string | null } | null;
   package_options: {
@@ -71,6 +88,11 @@ interface PromoBookingDBRow {
   discount_kind: DiscountKind | string | null;
   discount_value: number | string | null;
   discount_reason: string | null;
+
+  // ✅ NEW
+  promo_code?: string | null;
+  attempts?: number | string | null;
+  validity_end_at?: string | null;
 
   packages: { title: string | null } | null;
   package_options: {
@@ -145,14 +167,18 @@ const seatLabel = (r: PromoBookingRow): string =>
 
 const safePhone = (v: string | null | undefined): string => (String(v ?? "").trim() ? String(v ?? "").trim() : "—");
 
-const getStatus = (startIso: string, endIso: string): "UPCOMING" | "ONGOING" | "FINISHED" => {
-  const now = Date.now();
+// ✅ FIXED: accepts nowMs (we'll pass tick)
+const getStatus = (
+  startIso: string,
+  endIso: string,
+  nowMs: number = Date.now()
+): "UPCOMING" | "ONGOING" | "FINISHED" => {
   const s = new Date(startIso).getTime();
   const e = new Date(endIso).getTime();
 
   if (!Number.isFinite(s) || !Number.isFinite(e)) return "FINISHED";
-  if (now < s) return "UPCOMING";
-  if (now >= s && now <= e) return "ONGOING";
+  if (nowMs < s) return "UPCOMING";
+  if (nowMs >= s && nowMs <= e) return "ONGOING";
   return "FINISHED";
 };
 
@@ -216,9 +242,34 @@ const applyDiscount = (
 
 const moneyFromStr = (s: string): number => round2(Math.max(0, toNumber(s)));
 
+const isoToLocalDateTimeInput = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+};
+
+const localDateTimeInputToIso = (v: string): string => new Date(v).toISOString();
+
+const isExpired = (validityEndAtIso: string | null): boolean => {
+  const iso = String(validityEndAtIso ?? "").trim();
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return false;
+  return Date.now() > t;
+};
+
 const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
   const kind = normalizeDiscountKind(row.discount_kind);
   const value = round2(toNumber(row.discount_value));
+
+  const attempts = Math.max(0, Math.floor(toNumber(row.attempts ?? 0)));
+  const validity_end_at = row.validity_end_at ?? null;
 
   return {
     id: row.id,
@@ -241,6 +292,10 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
     discount_value: value,
     discount_reason: row.discount_reason ?? null,
 
+    promo_code: (row.promo_code ?? null) ? String(row.promo_code ?? "").trim() : null,
+    attempts,
+    validity_end_at,
+
     packages: row.packages ?? null,
     package_options: row.package_options ?? null,
   };
@@ -260,28 +315,23 @@ const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
   }
 };
 
-/* ================= COMPONENT ================= */
-
 const Admin_Customer_Discount_List: React.FC = () => {
   const [rows, setRows] = useState<PromoBookingRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [selected, setSelected] = useState<PromoBookingRow | null>(null);
 
-  // ✅ NEW: refresh busy
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
-  // refresh status/time
   const [tick, setTick] = useState<number>(Date.now());
   useEffect(() => {
     const t = window.setInterval(() => setTick(Date.now()), 10000);
     return () => window.clearInterval(t);
   }, []);
 
-  // ✅ date filter + delete by date (kept)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
   const [deletingDate, setDeletingDate] = useState<string | null>(null);
 
-  // payment modal (FREE INPUTS like Customer)
+  // payment modal
   const [paymentTarget, setPaymentTarget] = useState<PromoBookingRow | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
@@ -297,12 +347,22 @@ const Admin_Customer_Discount_List: React.FC = () => {
   // paid toggle
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
-  // CANCEL modal (same as Customer_Discount_List)
+  // CANCEL modal
   const [cancelTarget, setCancelTarget] = useState<PromoBookingRow | null>(null);
   const [cancelDesc, setCancelDesc] = useState<string>("");
   const [cancelError, setCancelError] = useState<string>("");
   const [cancelling, setCancelling] = useState<boolean>(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  // ✅ Attendance map + modals
+  const [attMap, setAttMap] = useState<Record<string, PromoAttendanceRow[]>>({});
+  const [attModalTarget, setAttModalTarget] = useState<PromoBookingRow | null>(null);
+
+  // ✅ Admin edit attempts/validity modal
+  const [ruleTarget, setRuleTarget] = useState<PromoBookingRow | null>(null);
+  const [ruleAttemptsInput, setRuleAttemptsInput] = useState<string>("0");
+  const [ruleValidityInput, setRuleValidityInput] = useState<string>(""); // datetime-local
+  const [savingRule, setSavingRule] = useState<boolean>(false);
 
   const selectPromoBookings = `
     id,
@@ -321,6 +381,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
     discount_kind,
     discount_value,
     discount_reason,
+
+    promo_code,
+    attempts,
+    validity_end_at,
+
     packages:package_id ( title ),
     package_options:package_option_id (
       option_name,
@@ -328,6 +393,41 @@ const Admin_Customer_Discount_List: React.FC = () => {
       duration_unit
     )
   `;
+
+  const fetchAttendanceForBookings = async (bookingIds: string[]): Promise<void> => {
+    if (bookingIds.length === 0) {
+      setAttMap({});
+      return;
+    }
+
+    const safeIds = bookingIds.slice(0, 500);
+
+    const { data, error } = await supabase
+      .from("promo_attendance")
+      .select("id, created_at, promo_booking_id, promo_code, action, staff_id, note")
+      .in("promo_booking_id", safeIds)
+      .order("created_at", { ascending: false })
+      .limit(2000);
+
+    if (error) {
+      setAttMap({});
+      return;
+    }
+
+    const aRows = (data ?? []) as PromoAttendanceRow[];
+    const map: Record<string, PromoAttendanceRow[]> = {};
+    for (const r of aRows) {
+      const k = String(r.promo_booking_id);
+      if (!map[k]) map[k] = [];
+      map[k].push(r);
+    }
+
+    Object.keys(map).forEach((k) => {
+      map[k] = map[k].slice(0, 20);
+    });
+
+    setAttMap(map);
+  };
 
   const fetchPromoBookings = async (): Promise<void> => {
     setLoading(true);
@@ -341,16 +441,21 @@ const Admin_Customer_Discount_List: React.FC = () => {
       console.error(error);
       alert(`Load error: ${error.message}`);
       setRows([]);
+      setAttMap({});
       setLoading(false);
       return;
     }
 
     const dbRows = (data ?? []) as unknown as PromoBookingDBRow[];
-    setRows(dbRows.map(normalizeRow));
+    const normalized = dbRows.map(normalizeRow);
+
+    setRows(normalized);
     setLoading(false);
+
+    const ids = normalized.map((r) => r.id);
+    void fetchAttendanceForBookings(ids);
   };
 
-  // ✅ NEW: refresh function
   const refreshAll = async (): Promise<void> => {
     try {
       setRefreshing(true);
@@ -364,18 +469,27 @@ const Admin_Customer_Discount_List: React.FC = () => {
     void fetchPromoBookings();
   }, []);
 
+  // ✅ FIX: no `void tick` here
   const filteredRows = useMemo(() => {
-    void tick;
     return rows.filter((r) => getCreatedDateLocal(r.created_at) === selectedDate);
-  }, [rows, tick, selectedDate]);
+  }, [rows, selectedDate]);
 
+  // ✅ FIX: totals uses tick properly (recompute every 10s)
   const totals = useMemo(() => {
-    void tick;
+    const nowMs = tick;
 
     const total = filteredRows.reduce((sum, r) => sum + toNumber(r.price), 0);
-    const upcoming = filteredRows.filter((r) => getStatus(r.start_at, r.end_at) === "UPCOMING").length;
-    const ongoing = filteredRows.filter((r) => getStatus(r.start_at, r.end_at) === "ONGOING").length;
-    const finished = filteredRows.filter((r) => getStatus(r.start_at, r.end_at) === "FINISHED").length;
+
+    let upcoming = 0;
+    let ongoing = 0;
+    let finished = 0;
+
+    for (const r of filteredRows) {
+      const st = getStatus(r.start_at, r.end_at, nowMs);
+      if (st === "UPCOMING") upcoming += 1;
+      else if (st === "ONGOING") ongoing += 1;
+      else finished += 1;
+    }
 
     return { total, upcoming, ongoing, finished };
   }, [filteredRows, tick]);
@@ -394,8 +508,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
   };
 
   /* =========================
-     ✅ Export Excel (.xlsx) - NICE LAYOUT (by selected date)
-     ✅ Added Phone #
+     Export Excel
   ========================= */
   const exportToExcelByDate = async (): Promise<void> => {
     if (!selectedDate) {
@@ -426,10 +539,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
       { header: "Option", key: "opt", width: 28 },
       { header: "Start", key: "start", width: 20 },
       { header: "End", key: "end", width: 20 },
-      { header: "System Cost (Before)", key: "base", width: 18 },
-      { header: "Discount Type", key: "dkind", width: 14 },
-      { header: "Discount Value", key: "dval", width: 14 },
-      { header: "Discount Amount", key: "damt", width: 16 },
       { header: "Final Cost", key: "final", width: 12 },
       { header: "GCash", key: "gcash", width: 12 },
       { header: "Cash", key: "cash", width: 12 },
@@ -437,49 +546,21 @@ const Admin_Customer_Discount_List: React.FC = () => {
       { header: "Remaining", key: "remain", width: 12 },
       { header: "Paid?", key: "paid_status", width: 10 },
       { header: "Status", key: "status", width: 12 },
-      { header: "Reason", key: "reason", width: 24 },
+      { header: "Promo Code", key: "code", width: 14 },
+      { header: "Attempts", key: "attempts", width: 10 },
+      { header: "Validity End", key: "validity", width: 20 },
     ];
 
-    ws.mergeCells("A1", "U1");
+    ws.mergeCells("A1", "S1");
     ws.getCell("A1").value = "ME TYME LOUNGE — DISCOUNT / PROMO REPORT";
     ws.getCell("A1").font = { bold: true, size: 16 };
     ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(1).height = 26;
 
-    ws.mergeCells("A2", "U2");
+    ws.mergeCells("A2", "S2");
     ws.getCell("A2").value = `Date: ${selectedDate}`;
     ws.getCell("A2").font = { size: 11 };
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(2).height = 18;
-
-    ws.mergeCells("A3", "U3");
-    ws.getCell("A3").value = `Generated: ${new Date().toLocaleString()}`;
-    ws.getCell("A3").font = { size: 11 };
-    ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(3).height = 18;
-
-    const sumFinal = filteredRows.reduce((sum, r) => sum + getDueAfterDiscount(r).due, 0);
-    const sumDiscount = filteredRows.reduce((sum, r) => sum + getDueAfterDiscount(r).discountAmount, 0);
-    const sumPaid = filteredRows.reduce((sum, r) => sum + getPaidInfo(r).totalPaid, 0);
-    const sumRemaining = filteredRows.reduce((sum, r) => {
-      const { due } = getDueAfterDiscount(r);
-      const pi = getPaidInfo(r);
-      return sum + Math.max(0, due - pi.totalPaid);
-    }, 0);
-
-    ws.mergeCells("A4", "U4");
-    ws.getCell("A4").value =
-      `Rows: ${filteredRows.length}` +
-      `   •   Upcoming: ${totals.upcoming}` +
-      `   •   Ongoing: ${totals.ongoing}` +
-      `   •   Finished: ${totals.finished}` +
-      `   •   Total Discount: ₱${round2(sumDiscount).toFixed(2)}` +
-      `   •   Total Final: ₱${round2(sumFinal).toFixed(2)}` +
-      `   •   Total Paid: ₱${round2(sumPaid).toFixed(2)}` +
-      `   •   Total Remaining: ₱${round2(sumRemaining).toFixed(2)}`;
-    ws.getCell("A4").font = { size: 11, bold: true };
-    ws.getCell("A4").alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(4).height = 18;
 
     ws.getRow(5).height = 6;
 
@@ -488,10 +569,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       if (ab) {
         const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
         const imgId = wb.addImage({ buffer: ab, extension: ext });
-        ws.addImage(imgId, {
-          tl: { col: 16.3, row: 0.2 },
-          ext: { width: 170, height: 60 },
-        });
+        ws.addImage(imgId, { tl: { col: 14.8, row: 0.2 }, ext: { width: 170, height: 60 } });
       }
     }
 
@@ -519,10 +597,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
           ? `${opt.option_name} • ${formatDuration(Number(opt.duration_value), opt.duration_unit)}`
           : opt?.option_name || "—";
 
-      const base = round2(Math.max(0, toNumber(r.price)));
-      const { discountedCost, discountAmount } = applyDiscount(base, r.discount_kind, r.discount_value);
-      const due = round2(discountedCost);
-
+      const { due } = getDueAfterDiscount(r);
       const pi = getPaidInfo(r);
       const remaining = round2(Math.max(0, due - pi.totalPaid));
 
@@ -536,18 +611,16 @@ const Admin_Customer_Discount_List: React.FC = () => {
         opt: optionText,
         start: new Date(r.start_at).toLocaleString("en-PH"),
         end: new Date(r.end_at).toLocaleString("en-PH"),
-        base,
-        dkind: r.discount_kind,
-        dval: round2(r.discount_value),
-        damt: round2(discountAmount),
         final: due,
         gcash: pi.gcash,
         cash: pi.cash,
         paid: pi.totalPaid,
         remain: remaining,
         paid_status: toBool(r.is_paid) ? "PAID" : "UNPAID",
-        status: getStatus(r.start_at, r.end_at),
-        reason: (r.discount_reason ?? "").trim() || "—",
+        status: getStatus(r.start_at, r.end_at, tick),
+        code: r.promo_code || "—",
+        attempts: r.attempts,
+        validity: r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—",
       });
 
       const rowIndex = row.number;
@@ -564,34 +637,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
         cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
       });
-
-      [2, 3, 7, 21].forEach((c) => {
-        const cell = ws.getCell(rowIndex, c);
-        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
-      });
-
-      [1, 8, 9].forEach((c) => {
-        const cell = ws.getCell(rowIndex, c);
-        cell.numFmt = "@";
-        if (cell.value != null) cell.value = String(cell.value);
-        cell.alignment = { vertical: "middle", horizontal: "center" };
-      });
-
-      const moneyCols = [10, 13, 14, 15, 16, 17, 18];
-      moneyCols.forEach((c) => {
-        const cell = ws.getCell(rowIndex, c);
-        cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
-        cell.alignment = { vertical: "middle", horizontal: "right" };
-      });
-
-      const paidCell = ws.getCell(rowIndex, 19);
-      if (String(paidCell.value) === "PAID") {
-        paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
-        paidCell.font = { bold: true, color: { argb: "FF166534" } };
-      } else {
-        paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
-        paidCell.font = { bold: true, color: { argb: "FF991B1B" } };
-      }
     });
 
     ws.autoFilter = {
@@ -604,7 +649,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
     saveAs(blob, `admin_promo_records_${selectedDate}.xlsx`);
   };
 
-  /* ================= PAYMENT (FREE INPUTS like Customer_Discount_List) ================= */
+  /* ================= PAYMENT ================= */
 
   const openPaymentModal = (r: PromoBookingRow): void => {
     setPaymentTarget(r);
@@ -657,15 +702,13 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  /* ================= DISCOUNT (keep payments as-is; no clamping) ================= */
+  /* ================= DISCOUNT ================= */
 
   const openDiscountModal = (r: PromoBookingRow): void => {
     setDiscountTarget(r);
     setDiscountKind(r.discount_kind ?? "none");
     setDiscountValueInput(String(round2(toNumber(r.discount_value))));
     setDiscountReasonInput(String(r.discount_reason ?? ""));
-
-    // keep current payments as-is (no clamping)
     setGcashInput(String(round2(Math.max(0, toNumber(r.gcash_amount)))));
     setCashInput(String(round2(Math.max(0, toNumber(r.cash_amount)))));
   };
@@ -782,11 +825,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  /* ================= CANCEL FLOW (same as Customer_Discount_List) =================
-     ✅ Requires description
-     ✅ Copy row -> promo_bookings_cancelled
-     ✅ Delete from promo_bookings
-  */
+  /* ================= CANCEL ================= */
 
   const openCancelModal = (r: PromoBookingRow): void => {
     setCancelTarget(r);
@@ -831,7 +870,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
           paid_at,
           discount_reason,
           discount_kind,
-          discount_value
+          discount_value,
+          promo_code,
+          attempts,
+          validity_end_at
         `
         )
         .eq("id", cancelTarget.id)
@@ -870,6 +912,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
         discount_reason: fullRow.discount_reason ?? null,
         discount_kind: String(fullRow.discount_kind ?? "none"),
         discount_value: fullRow.discount_value ?? 0,
+
+        promo_code: fullRow.promo_code ?? null,
+        attempts: Number(fullRow.attempts ?? 0) || 0,
+        validity_end_at: fullRow.validity_end_at ?? null,
       });
 
       if (insErr) {
@@ -888,6 +934,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
       setRows((prev) => prev.filter((x) => x.id !== cancelTarget.id));
       setSelected((prev) => (prev?.id === cancelTarget.id ? null : prev));
       setCancelTarget(null);
+
+      setAttMap((prev) => {
+        const next = { ...prev };
+        delete next[cancelTarget.id];
+        return next;
+      });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -926,12 +978,67 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
       setRows((prev) => prev.filter((r) => getCreatedDateLocal(r.created_at) !== selectedDate));
       setSelected((prev) => (prev && getCreatedDateLocal(prev.created_at) === selectedDate ? null : prev));
+      setAttMap({});
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
       alert("Delete by date failed.");
     } finally {
       setDeletingDate(null);
+    }
+  };
+
+  /* ================= Attendance UI helpers ================= */
+
+  const logsFor = (bookingId: string): PromoAttendanceRow[] => attMap[bookingId] ?? [];
+
+  const lastLogFor = (bookingId: string): PromoAttendanceRow | null => {
+    const logs = logsFor(bookingId);
+    return logs.length ? logs[0] : null;
+  };
+
+  /* ================= Admin edit attempts/validity ================= */
+
+  const openRuleModal = (r: PromoBookingRow): void => {
+    setRuleTarget(r);
+    setRuleAttemptsInput(String(Math.max(0, Math.floor(toNumber(r.attempts)))));
+    setRuleValidityInput(r.validity_end_at ? isoToLocalDateTimeInput(r.validity_end_at) : "");
+  };
+
+  const saveRule = async (): Promise<void> => {
+    if (!ruleTarget) return;
+
+    const attempts = Math.max(0, Math.floor(toNumber(ruleAttemptsInput)));
+    const validityIso = ruleValidityInput.trim() ? localDateTimeInputToIso(ruleValidityInput.trim()) : null;
+
+    try {
+      setSavingRule(true);
+
+      const { data, error } = await supabase
+        .from("promo_bookings")
+        .update({
+          attempts,
+          validity_end_at: validityIso,
+        })
+        .eq("id", ruleTarget.id)
+        .select(selectPromoBookings)
+        .single();
+
+      if (error || !data) {
+        alert(`Save rule error: ${error?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      const updated = normalizeRow(data as unknown as PromoBookingDBRow);
+      setRows((prev) => prev.map((x) => (x.id === ruleTarget.id ? updated : x)));
+      setSelected((prev) => (prev?.id === ruleTarget.id ? updated : prev));
+      setRuleTarget(null);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Save rule failed.");
+    } finally {
+      setSavingRule(false);
     }
   };
 
@@ -944,6 +1051,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
               <h2 className="customer-lists-title">Admin Discount / Promo Records</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
+              </div>
+
+              {/* OPTIONAL: show totals (if you want to display) */}
+              <div className="customer-subtext" style={{ marginTop: 6 }}>
+                Total: <strong>₱{round2(totals.total).toFixed(2)}</strong> • Upcoming: <strong>{totals.upcoming}</strong> •
+                Ongoing: <strong>{totals.ongoing}</strong> • Finished: <strong>{totals.finished}</strong>
               </div>
             </div>
 
@@ -1000,6 +1113,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
                     <th>Status</th>
                     <th>Paid?</th>
                     <th>Payment</th>
+                    <th>Code / Rules</th>
+                    <th>Attendance</th>
                     <th>Reason</th>
                     <th>Action</th>
                   </tr>
@@ -1020,6 +1135,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                     const pi = getPaidInfo(r);
                     const remaining = round2(Math.max(0, due - pi.totalPaid));
+
+                    const last = lastLogFor(r.id);
 
                     return (
                       <tr key={r.id}>
@@ -1046,7 +1163,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                         </td>
 
                         <td>
-                          <strong>{getStatus(r.start_at, r.end_at)}</strong>
+                          <strong>{getStatus(r.start_at, r.end_at, tick)}</strong>
                         </td>
 
                         <td>
@@ -1072,6 +1189,39 @@ const Admin_Customer_Discount_List: React.FC = () => {
                           </div>
                         </td>
 
+                        {/* ✅ Code/attempts/validity */}
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">{r.promo_code || "—"}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              Attempts: <b>{r.attempts}</b>
+                            </span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              Validity:{" "}
+                              <b>{r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—"}</b>{" "}
+                              {r.validity_end_at && isExpired(r.validity_end_at) ? (
+                                <span style={{ marginLeft: 6, color: "#b00020", fontWeight: 900 }}>EXPIRED</span>
+                              ) : null}
+                            </span>
+                            <button className="receipt-btn" onClick={() => openRuleModal(r)}>
+                              Edit
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* ✅ Attendance */}
+                        <td>
+                          <div className="cell-stack cell-center">
+                            <span className="cell-strong">{last ? `${String(last.action).toUpperCase()}` : "—"}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              {last ? new Date(last.created_at).toLocaleString("en-PH") : "No logs"}
+                            </span>
+                            <button className="receipt-btn" onClick={() => setAttModalTarget(r)}>
+                              Attendance
+                            </button>
+                          </div>
+                        </td>
+
                         <td>{(r.discount_reason ?? "").trim() || "—"}</td>
 
                         <td>
@@ -1080,7 +1230,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ✅ REPLACED DELETE with CANCEL */}
                             <button
                               className="receipt-btn"
                               disabled={cancelling || cancellingId === r.id}
@@ -1098,7 +1247,114 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* CANCEL MODAL (requires description) */}
+          {/* ✅ ATTENDANCE MODAL (read-only) */}
+          {attModalTarget && (
+            <div className="receipt-overlay" onClick={() => setAttModalTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">ATTENDANCE LOGS</h3>
+                <p className="receipt-subtitle">
+                  {attModalTarget.full_name} • Code: <b>{attModalTarget.promo_code || "—"}</b>
+                </p>
+
+                <hr />
+
+                <div style={{ fontWeight: 900, marginBottom: 10 }}>Recent Logs</div>
+
+                {logsFor(attModalTarget.id).length === 0 ? (
+                  <div style={{ opacity: 0.8, fontSize: 13 }}>No attendance logs.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {logsFor(attModalTarget.id).map((h) => (
+                      <div
+                        key={h.id}
+                        style={{
+                          border: "1px solid rgba(0,0,0,0.10)",
+                          borderRadius: 12,
+                          padding: 10,
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 10,
+                          alignItems: "flex-start",
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 1000 }}>
+                            {String(h.action).toUpperCase()} • {new Date(h.created_at).toLocaleString("en-PH")}
+                          </div>
+                          <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+                            Code: <b>{h.promo_code}</b>
+                          </div>
+                          {h.note ? <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>{h.note}</div> : null}
+                        </div>
+
+                        <div style={{ fontWeight: 900, opacity: 0.8, whiteSpace: "nowrap" }}>{h.staff_id ? "STAFF" : "—"}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setAttModalTarget(null)}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ✅ ADMIN EDIT RULES MODAL */}
+          {ruleTarget && (
+            <div className="receipt-overlay" onClick={() => (savingRule ? null : setRuleTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">EDIT CODE RULES</h3>
+                <p className="receipt-subtitle">
+                  {ruleTarget.full_name} • Code: <b>{ruleTarget.promo_code || "—"}</b>
+                </p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Attempts</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={ruleAttemptsInput}
+                    onChange={(e) => setRuleAttemptsInput(e.currentTarget.value)}
+                    disabled={savingRule}
+                    placeholder="0"
+                  />
+                </div>
+
+                <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>Tip: attempts = remaining uses. If you want unlimited, set to 0.</div>
+
+                <div className="receipt-row" style={{ marginTop: 10 }}>
+                  <span>Validity End</span>
+                  <input
+                    className="money-input"
+                    type="datetime-local"
+                    value={ruleValidityInput}
+                    onChange={(e) => setRuleValidityInput(e.currentTarget.value)}
+                    disabled={savingRule}
+                  />
+                </div>
+
+                <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>If blank = no expiry.</div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setRuleTarget(null)} disabled={savingRule}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void saveRule()} disabled={savingRule}>
+                    {savingRule ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CANCEL MODAL */}
           {cancelTarget && (
             <div className="receipt-overlay" onClick={() => (cancelling ? null : setCancelTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1136,7 +1392,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL (FREE INPUTS like Customer) */}
+          {/* PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1351,7 +1607,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT */}
+          {/* RECEIPT (added attendance + rules display) */}
           {selected && (
             <div className="receipt-overlay" onClick={() => setSelected(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1364,7 +1620,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Status</span>
-                  <span>{getStatus(selected.start_at, selected.end_at)}</span>
+                  <span>{getStatus(selected.start_at, selected.end_at, tick)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -1378,113 +1634,57 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Area</span>
-                  <span>{prettyArea(selected.area)}</span>
+                  <span>Promo Code</span>
+                  <span style={{ fontWeight: 900 }}>{selected.promo_code || "—"}</span>
                 </div>
 
                 <div className="receipt-row">
-                  <span>Seat</span>
-                  <span>{seatLabel(selected)}</span>
+                  <span>Attempts</span>
+                  <span>{selected.attempts}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Validity End</span>
+                  <span>
+                    {selected.validity_end_at ? new Date(selected.validity_end_at).toLocaleString("en-PH") : "—"}
+                    {selected.validity_end_at && isExpired(selected.validity_end_at) ? (
+                      <span style={{ marginLeft: 8, color: "#b00020", fontWeight: 900 }}>
+                        EXPIRED
+                      </span>
+                    ) : null}
+                  </span>
                 </div>
 
                 <hr />
 
-                <div className="receipt-row">
-                  <span>Package</span>
-                  <span>{selected.packages?.title || "—"}</span>
-                </div>
-
-                <div className="receipt-row">
-                  <span>Option</span>
-                  <span>{selected.package_options?.option_name || "—"}</span>
-                </div>
-
-                {selected.package_options?.duration_value && selected.package_options?.duration_unit ? (
-                  <div className="receipt-row">
-                    <span>Duration</span>
-                    <span>{formatDuration(Number(selected.package_options.duration_value), selected.package_options.duration_unit)}</span>
+                <div style={{ fontWeight: 900, marginBottom: 8 }}>Attendance Logs</div>
+                {logsFor(selected.id).length === 0 ? (
+                  <div style={{ opacity: 0.8, fontSize: 13 }}>No attendance logs.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {logsFor(selected.id).slice(0, 8).map((h) => (
+                      <div
+                        key={h.id}
+                        style={{
+                          border: "1px solid rgba(0,0,0,0.10)",
+                          borderRadius: 12,
+                          padding: 10,
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 1000 }}>
+                            {String(h.action).toUpperCase()} • {new Date(h.created_at).toLocaleString("en-PH")}
+                          </div>
+                          {h.note ? <div style={{ fontSize: 12, opacity: 0.85 }}>{h.note}</div> : null}
+                        </div>
+                        <div style={{ fontWeight: 900, opacity: 0.8 }}>{h.staff_id ? "STAFF" : "—"}</div>
+                      </div>
+                    ))}
                   </div>
-                ) : null}
-
-                <hr />
-
-                <div className="receipt-row">
-                  <span>Start</span>
-                  <span>{new Date(selected.start_at).toLocaleString("en-PH")}</span>
-                </div>
-
-                <div className="receipt-row">
-                  <span>End</span>
-                  <span>{new Date(selected.end_at).toLocaleString("en-PH")}</span>
-                </div>
-
-                <hr />
-
-                {(() => {
-                  const base = round2(Math.max(0, toNumber(selected.price)));
-                  const { discountedCost, discountAmount } = applyDiscount(base, selected.discount_kind, selected.discount_value);
-                  const due = round2(discountedCost);
-
-                  const pi = getPaidInfo(selected);
-                  const remaining = round2(Math.max(0, due - pi.totalPaid));
-                  const paid = toBool(selected.is_paid);
-
-                  return (
-                    <>
-                      <div className="receipt-row">
-                        <span>System Cost (Before)</span>
-                        <span>₱{base.toFixed(2)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Discount</span>
-                        <span>{getDiscountTextFrom(selected.discount_kind, selected.discount_value)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Discount Amount</span>
-                        <span>₱{discountAmount.toFixed(2)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Final Cost</span>
-                        <span>₱{due.toFixed(2)}</span>
-                      </div>
-
-                      <hr />
-
-                      <div className="receipt-row">
-                        <span>GCash</span>
-                        <span>₱{pi.gcash.toFixed(2)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Cash</span>
-                        <span>₱{pi.cash.toFixed(2)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Total Paid</span>
-                        <span>₱{pi.totalPaid.toFixed(2)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Remaining</span>
-                        <span>₱{remaining.toFixed(2)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Paid Status</span>
-                        <span className="receipt-status">{paid ? "PAID" : "UNPAID"}</span>
-                      </div>
-
-                      <div className="receipt-total">
-                        <span>TOTAL</span>
-                        <span>₱{due.toFixed(2)}</span>
-                      </div>
-                    </>
-                  );
-                })()}
+                )}
 
                 <button className="close-btn" onClick={() => setSelected(null)}>
                   Close
