@@ -802,7 +802,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       <th>Total Restock</th>
                       <th>Total Sold</th>
                       <th>Expected Sales</th>
-                      <th>Overall Sales (NET)</th>
+                      <th>Overall Sales</th>
                       <th>Cash Outs</th>
                       <th>Remaining</th>
                       <th>Action</th>
