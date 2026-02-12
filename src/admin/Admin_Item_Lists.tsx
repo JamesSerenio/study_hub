@@ -1,14 +1,14 @@
 // src/pages/Admin_Item_Lists.tsx
+// ✅ UI UPDATED: match Staff_Consignment_Record (receipt-btn / receipt-overlay modals)
 // ✅ Add Stocks button + Restock history via RPC
 // ✅ No "any"
-// ✅ SAME UI/CLASSNAMES as Product_Item_Lists (PIL theme)
-// ✅ Search bar (name/category/size)
+// ✅ Search bar (name/category/size) using customer-* classes
 // ✅ Sort by Category OR Stock (asc/desc)
-// ✅ Actions kept (Add Stocks / Edit / Delete)
+// ✅ Actions now: receipt-btn buttons (Add Stocks / History / Edit / Delete)
+// ✅ Modals now: staff-style overlays (Edit / Restock / History / Delete confirm / Void confirm)
 // ✅ Export to Excel (.xlsx) with images using ExcelJS
-// ✅ NEW: SIZE column
-// ✅ NEW: Expired + Inventory Loss + Bilin columns (DB: expired, inventory_loss, bilin)
-// ✅ NEW: Adjustment History + VOID (reverts counters via RPC void_addon_expense)
+// ✅ SIZE column + Expired + Inventory Loss + Bilin
+// ✅ Adjustment History + VOID (RPC void_addon_expense)
 // ✅ FIX: VOID updates header stock/overall immediately (syncHistoryHeaderFromLatest)
 // ✅ FIX: history refresh does NOT re-open/re-init modal (no flicker)
 // ✅ FIX: silent fetch for header sync (no global loading flicker)
@@ -19,44 +19,15 @@ import {
   IonPage,
   IonHeader,
   IonToolbar,
-  IonContent,
-  IonGrid,
-  IonRow,
   IonTitle,
-  IonCol,
-  IonLabel,
-  IonButton,
-  IonIcon,
-  IonToast,
+  IonContent,
   IonRefresher,
   IonRefresherContent,
   RefresherEventDetail,
-  IonAlert,
-  IonModal,
-  IonInput,
-  IonItem,
-  IonImg,
-  IonText,
-  IonButtons,
+  IonToast,
   IonSpinner,
-  IonSelect,
-  IonSelectOption,
 } from "@ionic/react";
-import {
-  trash,
-  create,
-  arrowUp,
-  arrowDown,
-  addCircle,
-  addCircleOutline,
-  swapVerticalOutline,
-  closeOutline,
-  downloadOutline,
-  timeOutline,
-  closeCircleOutline,
-} from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
-import type { IonSelectCustomEvent, SelectChangeEventDetail } from "@ionic/core";
 
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
@@ -151,6 +122,41 @@ const typeLabel = (t: ExpenseType): string => {
   return "Bilin";
 };
 
+// storage helpers (same approach as staff)
+const safeExtFromName = (name: string): string => {
+  const parts = name.split(".");
+  const last = parts.length > 1 ? parts[parts.length - 1] : "";
+  const ext = last.trim().toLowerCase();
+  if (!ext) return "jpg";
+  if (ext.length > 8) return "jpg";
+  return ext.replace(/[^a-z0-9]/g, "") || "jpg";
+};
+
+// Extract storage object path from public URL:
+// .../storage/v1/object/public/<bucket>/<path>
+const extractPathFromPublicUrl = (url: string, bucket: string): string | null => {
+  try {
+    const u = new URL(url);
+    const marker = `/storage/v1/object/public/${bucket}/`;
+    const idx = u.pathname.indexOf(marker);
+    if (idx === -1) return null;
+    return decodeURIComponent(u.pathname.slice(idx + marker.length));
+  } catch {
+    return null;
+  }
+};
+
+const deleteStorageByUrl = async (url: string | null, bucket: string): Promise<void> => {
+  if (!url) return;
+  const path = extractPathFromPublicUrl(url, bucket);
+  if (!path) return;
+  const { error } = await supabase.storage.from(bucket).remove([path]);
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Storage delete failed:", error.message);
+  }
+};
+
 const Admin_Item_Lists: React.FC = () => {
   const [addOns, setAddOns] = useState<AddOn[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -163,28 +169,33 @@ const Admin_Item_Lists: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState<string>("");
 
-  // delete
-  const [showDeleteAlert, setShowDeleteAlert] = useState<boolean>(false);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-
-  // edit
-  const [showEditModal, setShowEditModal] = useState<boolean>(false);
+  // edit overlay
   const [editingAddOn, setEditingAddOn] = useState<AddOn | null>(null);
-  const [newImageFile, setNewImageFile] = useState<File | null>(null);
+  const [savingEdit, setSavingEdit] = useState<boolean>(false);
 
-  // restock
-  const [showRestockModal, setShowRestockModal] = useState<boolean>(false);
+  // image upload state (staff-style)
+  const [newImageFile, setNewImageFile] = useState<File | null>(null);
+  const [newImagePreview, setNewImagePreview] = useState<string>("");
+  const [removeImage, setRemoveImage] = useState<boolean>(false);
+
+  // restock overlay
   const [restockingAddOn, setRestockingAddOn] = useState<AddOn | null>(null);
   const [restockQty, setRestockQty] = useState<string>("");
   const [restockNote, setRestockNote] = useState<string>("");
+  const [savingRestock, setSavingRestock] = useState<boolean>(false);
 
-  // history + void
-  const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
+  // history overlay
   const [historyAddOn, setHistoryAddOn] = useState<AddOn | null>(null);
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [historyRows, setHistoryRows] = useState<AddOnExpenseRow[]>([]);
+
+  // delete confirm overlay
+  const [deleteTarget, setDeleteTarget] = useState<AddOn | null>(null);
+  const [deleting, setDeleting] = useState<boolean>(false);
+
+  // void confirm overlay
   const [voidTarget, setVoidTarget] = useState<AddOnExpenseRow | null>(null);
-  const [showVoidAlert, setShowVoidAlert] = useState<boolean>(false);
+  const [voiding, setVoiding] = useState<boolean>(false);
 
   // ✅ keep history header in sync
   const syncHistoryHeaderFromLatest = (latest: AddOn[]): void => {
@@ -241,6 +252,13 @@ const Admin_Item_Lists: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // cleanup preview object URL
+  useEffect(() => {
+    return () => {
+      if (newImagePreview.startsWith("blob:")) URL.revokeObjectURL(newImagePreview);
+    };
+  }, [newImagePreview]);
+
   const handleRefresh = (event: CustomEvent<RefresherEventDetail>): void => {
     void fetchAddOns().finally(() => event.detail.complete());
   };
@@ -274,12 +292,118 @@ const Admin_Item_Lists: React.FC = () => {
 
   const toggleSortOrder = (): void => setSortOrder((p) => (p === "asc" ? "desc" : "asc"));
 
-  const handleEdit = (id: string): void => {
-    const addOnToEdit = addOns.find((a) => a.id === id);
-    if (!addOnToEdit) return;
-    setEditingAddOn({ ...addOnToEdit, size: normSize(addOnToEdit.size) });
+  /* =========================
+     ACTIONS (STAFF-STYLE)
+  ========================= */
+
+  const openEdit = (id: string): void => {
+    const a = addOns.find((x) => x.id === id);
+    if (!a) return;
+
+    setEditingAddOn({ ...a, size: normSize(a.size) });
     setNewImageFile(null);
-    setShowEditModal(true);
+    setRemoveImage(false);
+
+    if (newImagePreview.startsWith("blob:")) URL.revokeObjectURL(newImagePreview);
+    setNewImagePreview("");
+  };
+
+  const onPickImage = (file: File | null): void => {
+    setNewImageFile(file);
+    setRemoveImage(false);
+
+    if (newImagePreview.startsWith("blob:")) URL.revokeObjectURL(newImagePreview);
+    setNewImagePreview(file ? URL.createObjectURL(file) : "");
+  };
+
+  const uploadNewImage = async (): Promise<string> => {
+    if (!newImageFile) throw new Error("No image selected");
+
+    const ext = safeExtFromName(newImageFile.name);
+    const safeName = `add_ons/${Date.now()}-${Math.random().toString(16).slice(2)}.${ext}`;
+
+    const { error } = await supabase.storage.from(BUCKET).upload(safeName, newImageFile, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType: newImageFile.type || undefined,
+    });
+    if (error) throw new Error(error.message);
+
+    const { data } = supabase.storage.from(BUCKET).getPublicUrl(safeName);
+    const publicUrl = data?.publicUrl ?? "";
+    if (!publicUrl) throw new Error("Failed to get public URL.");
+    return publicUrl;
+  };
+
+  const handleSaveEdit = async (): Promise<void> => {
+    if (!editingAddOn) return;
+
+    if (!editingAddOn.name.trim()) return void (setToastMessage("Name is required."), setShowToast(true));
+    if (!editingAddOn.category.trim()) return void (setToastMessage("Category is required."), setShowToast(true));
+
+    const fixedSize = normSize(editingAddOn.size);
+
+    if (!Number.isFinite(editingAddOn.price) || editingAddOn.price < 0)
+      return void (setToastMessage("Price must be a valid positive number."), setShowToast(true));
+    if (!Number.isFinite(editingAddOn.sold) || editingAddOn.sold < 0)
+      return void (setToastMessage("Sold must be a valid non-negative number."), setShowToast(true));
+    if (!Number.isFinite(editingAddOn.expenses) || editingAddOn.expenses < 0)
+      return void (setToastMessage("Expenses must be a valid non-negative number."), setShowToast(true));
+
+    const oldImageUrl: string | null = editingAddOn.image_url ?? null;
+
+    try {
+      setSavingEdit(true);
+
+      let finalImageUrl: string | null = oldImageUrl;
+
+      // new upload
+      if (newImageFile) {
+        finalImageUrl = await uploadNewImage();
+      } else if (removeImage) {
+        finalImageUrl = null;
+      }
+
+      const { error } = await supabase
+        .from("add_ons")
+        .update({
+          category: editingAddOn.category,
+          name: editingAddOn.name,
+          size: fixedSize,
+          price: editingAddOn.price,
+          sold: editingAddOn.sold,
+          expenses: editingAddOn.expenses,
+          image_url: finalImageUrl,
+        })
+        .eq("id", editingAddOn.id);
+
+      if (error) throw error;
+
+      // delete old if changed
+      const changedImage = (oldImageUrl ?? null) !== (finalImageUrl ?? null);
+      if (changedImage && oldImageUrl) {
+        await deleteStorageByUrl(oldImageUrl, BUCKET);
+      }
+
+      setToastMessage("Add-on updated successfully.");
+      setShowToast(true);
+
+      setEditingAddOn(null);
+      setNewImageFile(null);
+      setRemoveImage(false);
+
+      if (newImagePreview.startsWith("blob:")) URL.revokeObjectURL(newImagePreview);
+      setNewImagePreview("");
+
+      void fetchAddOns();
+    } catch (error: unknown) {
+      // eslint-disable-next-line no-console
+      console.error("Error updating add-on:", error);
+      setToastMessage(`Error updating add-on: ${error instanceof Error ? error.message : "Please try again."}`);
+      setShowToast(true);
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const openRestock = (id: string): void => {
@@ -288,10 +412,47 @@ const Admin_Item_Lists: React.FC = () => {
     setRestockingAddOn(a);
     setRestockQty("");
     setRestockNote("");
-    setShowRestockModal(true);
   };
 
-  // ✅ dedicated history loader (no modal reset)
+  const submitRestock = async (): Promise<void> => {
+    if (!restockingAddOn) return;
+
+    const qty = parseInt(restockQty.trim(), 10);
+    if (Number.isNaN(qty) || qty <= 0) {
+      setToastMessage("Restock quantity must be a positive number.");
+      setShowToast(true);
+      return;
+    }
+
+    try {
+      setSavingRestock(true);
+
+      const { error } = await supabase.rpc("restock_add_on", {
+        p_add_on_id: restockingAddOn.id,
+        p_qty: qty,
+        p_note: restockNote.trim() || null,
+      });
+
+      if (error) throw error;
+
+      setToastMessage("Stocks added successfully.");
+      setShowToast(true);
+
+      setRestockingAddOn(null);
+      setRestockQty("");
+      setRestockNote("");
+
+      void fetchAddOns();
+    } catch (error: unknown) {
+      // eslint-disable-next-line no-console
+      console.error("Error restocking:", error);
+      setToastMessage(`Error restocking: ${error instanceof Error ? error.message : "Please try again."}`);
+      setShowToast(true);
+    } finally {
+      setSavingRestock(false);
+    }
+  };
+
   const fetchHistoryRowsFor = async (addOnId: string): Promise<void> => {
     setHistoryLoading(true);
     try {
@@ -316,14 +477,15 @@ const Admin_Item_Lists: React.FC = () => {
         }))
       );
 
-      // ✅ silent header sync (no global loading)
+      // ✅ silent header sync
       void fetchAddOns({ silent: true });
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error("history fetch error:", e);
       setToastMessage(`History load failed: ${e instanceof Error ? e.message : "Try again."}`);
       setShowToast(true);
-      setShowHistoryModal(false);
+      setHistoryAddOn(null);
+      setHistoryRows([]);
     } finally {
       setHistoryLoading(false);
     }
@@ -335,7 +497,6 @@ const Admin_Item_Lists: React.FC = () => {
 
     setHistoryAddOn(a);
     setHistoryRows([]);
-    setShowHistoryModal(true);
 
     await fetchHistoryRowsFor(a.id);
   };
@@ -345,165 +506,14 @@ const Admin_Item_Lists: React.FC = () => {
     await fetchHistoryRowsFor(historyAddOn.id);
   };
 
-  // ✅ Extract storage path from public URL
-  const getStoragePathFromPublicUrl = (publicUrl: string, bucket: string): string | null => {
-    try {
-      const marker = `/storage/v1/object/public/${bucket}/`;
-      const idx = publicUrl.indexOf(marker);
-      if (idx === -1) return null;
-
-      const pathWithMaybeQuery = publicUrl.substring(idx + marker.length);
-      const path = pathWithMaybeQuery.split("?")[0];
-      return decodeURIComponent(path);
-    } catch {
-      return null;
-    }
-  };
-
-  const uploadNewImage = async (): Promise<{ publicUrl: string; newPath: string }> => {
-    if (!newImageFile) throw new Error("No image selected");
-
-    const { data: userRes, error: userErr } = await supabase.auth.getUser();
-    if (userErr) throw userErr;
-    if (!userRes?.user) throw new Error("Not logged in");
-
-    const userId: string = userRes.user.id;
-
-    const extRaw: string | undefined = newImageFile.name.split(".").pop();
-    const fileExt: string = (extRaw ? extRaw.toLowerCase() : "jpg").trim();
-    const fileName: string = `${Date.now()}.${fileExt}`;
-    const newPath: string = `${userId}/${fileName}`;
-
-    const { error: uploadErr } = await supabase.storage.from(BUCKET).upload(newPath, newImageFile, {
-      contentType: newImageFile.type,
-      upsert: false,
-    });
-    if (uploadErr) throw uploadErr;
-
-    const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(newPath);
-    return { publicUrl: urlData.publicUrl, newPath };
-  };
-
-  const deleteOldImageIfAny = async (oldImageUrl: string | null): Promise<void> => {
-    if (!oldImageUrl) return;
-
-    const oldPath = getStoragePathFromPublicUrl(oldImageUrl, BUCKET);
-    if (!oldPath) return;
-
-    const { error } = await supabase.storage.from(BUCKET).remove([oldPath]);
-    if (error) console.warn("Failed to delete old image:", error.message);
-  };
-
-  const handleSaveEdit = async (): Promise<void> => {
-    if (!editingAddOn) return;
-
-    if (!editingAddOn.name.trim()) return void (setToastMessage("Name is required."), setShowToast(true));
-    if (!editingAddOn.category.trim()) return void (setToastMessage("Category is required."), setShowToast(true));
-
-    const fixedSize = normSize(editingAddOn.size);
-
-    if (!Number.isFinite(editingAddOn.price) || editingAddOn.price < 0)
-      return void (setToastMessage("Price must be a valid positive number."), setShowToast(true));
-    if (!Number.isFinite(editingAddOn.sold) || editingAddOn.sold < 0)
-      return void (setToastMessage("Sold must be a valid non-negative number."), setShowToast(true));
-    if (!Number.isFinite(editingAddOn.expenses) || editingAddOn.expenses < 0)
-      return void (setToastMessage("Expenses must be a valid non-negative number."), setShowToast(true));
-
-    const oldImageUrl: string | null = editingAddOn.image_url ?? null;
-
-    try {
-      let finalImageUrl: string | null = oldImageUrl;
-
-      if (newImageFile) {
-        const uploaded = await uploadNewImage();
-        finalImageUrl = uploaded.publicUrl;
-      }
-
-      const { error } = await supabase
-        .from("add_ons")
-        .update({
-          category: editingAddOn.category,
-          name: editingAddOn.name,
-          size: fixedSize,
-          price: editingAddOn.price,
-          sold: editingAddOn.sold,
-          expenses: editingAddOn.expenses,
-          image_url: finalImageUrl,
-        })
-        .eq("id", editingAddOn.id);
-
-      if (error) throw error;
-
-      if (newImageFile && finalImageUrl && finalImageUrl !== oldImageUrl) {
-        await deleteOldImageIfAny(oldImageUrl);
-      }
-
-      const updated: AddOn = { ...editingAddOn, size: fixedSize, image_url: finalImageUrl };
-      setAddOns((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
-
-      setToastMessage("Add-on updated successfully.");
-      setShowToast(true);
-
-      setShowEditModal(false);
-      setEditingAddOn(null);
-      setNewImageFile(null);
-
-      void fetchAddOns();
-    } catch (error: unknown) {
-      // eslint-disable-next-line no-console
-      console.error("Error updating add-on:", error);
-      setToastMessage(`Error updating add-on: ${error instanceof Error ? error.message : "Please try again."}`);
-      setShowToast(true);
-    }
-  };
-
-  // ✅ RESTOCK SUBMIT (RPC)
-  const submitRestock = async (): Promise<void> => {
-    if (!restockingAddOn) return;
-
-    const qty = parseInt(restockQty.trim(), 10);
-    if (Number.isNaN(qty) || qty <= 0) {
-      setToastMessage("Restock quantity must be a positive number.");
-      setShowToast(true);
-      return;
-    }
-
-    try {
-      const { error } = await supabase.rpc("restock_add_on", {
-        p_add_on_id: restockingAddOn.id,
-        p_qty: qty,
-        p_note: restockNote.trim() || null,
-      });
-
-      if (error) throw error;
-
-      setToastMessage("Stocks added successfully.");
-      setShowToast(true);
-
-      setShowRestockModal(false);
-      setRestockingAddOn(null);
-      setRestockQty("");
-      setRestockNote("");
-
-      void fetchAddOns();
-    } catch (error: unknown) {
-      // eslint-disable-next-line no-console
-      console.error("Error restocking:", error);
-      setToastMessage(`Error restocking: ${error instanceof Error ? error.message : "Please try again."}`);
-      setShowToast(true);
-    }
-  };
-
-  // ✅ VOID adjustment (RPC)
-  const confirmVoid = (row: AddOnExpenseRow): void => {
-    setVoidTarget(row);
-    setShowVoidAlert(true);
-  };
+  const confirmVoid = (row: AddOnExpenseRow): void => setVoidTarget(row);
 
   const doVoid = async (): Promise<void> => {
     if (!voidTarget) return;
 
     try {
+      setVoiding(true);
+
       const { error } = await supabase.rpc("void_addon_expense", {
         p_expense_id: voidTarget.id,
       });
@@ -513,7 +523,6 @@ const Admin_Item_Lists: React.FC = () => {
       setToastMessage("Voided successfully. Counters restored.");
       setShowToast(true);
 
-      setShowVoidAlert(false);
       setVoidTarget(null);
 
       // ✅ refresh list + history WITHOUT modal reset/flicker
@@ -524,56 +533,53 @@ const Admin_Item_Lists: React.FC = () => {
       console.error("void error:", e);
       setToastMessage(`Void failed: ${e instanceof Error ? e.message : "Try again."}`);
       setShowToast(true);
+    } finally {
+      setVoiding(false);
     }
   };
 
-  // ✅ DELETE (DB + optional image delete)
-  const handleDelete = (id: string): void => {
-    setDeleteId(id);
-    setShowDeleteAlert(true);
+  const confirmDelete = (id: string): void => {
+    const a = addOns.find((x) => x.id === id) ?? null;
+    setDeleteTarget(a);
   };
 
-  const confirmDeleteRow = async (): Promise<void> => {
-    if (!deleteId) {
-      setShowDeleteAlert(false);
-      return;
-    }
-
-    const target = addOns.find((a) => a.id === deleteId) ?? null;
-    const oldImageUrl = target?.image_url ?? null;
+  const doDelete = async (): Promise<void> => {
+    if (!deleteTarget) return;
 
     try {
-      const { error } = await supabase.from("add_ons").delete().eq("id", deleteId);
+      setDeleting(true);
+
+      const oldImageUrl = deleteTarget.image_url ?? null;
+
+      const { error } = await supabase.from("add_ons").delete().eq("id", deleteTarget.id);
       if (error) throw error;
 
-      if (oldImageUrl) {
-        await deleteOldImageIfAny(oldImageUrl);
-      }
+      if (oldImageUrl) await deleteStorageByUrl(oldImageUrl, BUCKET);
 
-      setAddOns((prev) => prev.filter((a) => a.id !== deleteId));
+      setAddOns((prev) => prev.filter((a) => a.id !== deleteTarget.id));
 
-      if (historyAddOn?.id === deleteId) {
-        setShowHistoryModal(false);
+      if (historyAddOn?.id === deleteTarget.id) {
         setHistoryAddOn(null);
         setHistoryRows([]);
       }
 
       setToastMessage("Add-on deleted successfully.");
       setShowToast(true);
+
+      setDeleteTarget(null);
     } catch (error: unknown) {
       // eslint-disable-next-line no-console
       console.error("Error deleting add-on:", error);
       setToastMessage(`Error deleting add-on: ${error instanceof Error ? error.message : "Please try again."}`);
       setShowToast(true);
+    } finally {
+      setDeleting(false);
     }
-
-    setShowDeleteAlert(false);
-    setDeleteId(null);
   };
 
-  // =========================
-  // ✅ EXPORT EXCEL (NO ID, IMAGES EMBEDDED)
-  // =========================
+  /* =========================
+     EXPORT (unchanged logic)
+  ========================= */
 
   const blobToBase64 = (blob: Blob): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -738,488 +744,548 @@ const Admin_Item_Lists: React.FC = () => {
   const sortLabel = `${sortKey === "category" ? "category" : "stocks"} (${sortOrder})`;
 
   return (
-    <IonPage className="pil-page">
-      <IonHeader className="pil-header">
-        <IonToolbar className="pil-toolbar">
-          <IonTitle className="pil-title">Item Lists (Admin)</IonTitle>
+    <IonPage>
+      <IonHeader>
+        <IonToolbar>
+          <IonTitle>Item Lists (Admin)</IonTitle>
         </IonToolbar>
       </IonHeader>
 
-      <IonContent className="pil-content">
+      <IonContent className="staff-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>
 
-        <div className="pil-actions">
-          <IonButton className="pil-btn pil-btn--primary" fill="solid" onClick={() => void fetchAddOns()}>
-            <IonIcon slot="start" icon={addCircleOutline} />
-            Refresh
-          </IonButton>
+        <div className="customer-lists-container">
+          {/* TOPBAR (staff style) */}
+          <div className="customer-topbar">
+            <div className="customer-topbar-left">
+              <h2 className="customer-lists-title">Item Lists (Admin)</h2>
+              <div className="customer-subtext">
+                Sorted by <b>{sortLabel}</b> • Rows: <b>{filteredAddOns.length}</b>
+              </div>
 
-          <IonButton
-            className="pil-btn pil-btn--ghost"
-            fill="outline"
-            disabled={loading || filteredAddOns.length === 0}
-            onClick={() => void exportToExcel()}
-          >
-            <IonIcon slot="start" icon={downloadOutline} />
-            Export Excel
-          </IonButton>
-
-          <IonItem lines="none" className="pil-sort-item">
-            <IonLabel className="pil-sort-label">Sort</IonLabel>
-            <IonSelect
-              className="pil-sort-select"
-              value={sortKey}
-              onIonChange={(e: IonSelectCustomEvent<SelectChangeEventDetail>) => setSortKey(String(e.detail.value) as SortKey)}
-            >
-              <IonSelectOption value="category">Category</IonSelectOption>
-              <IonSelectOption value="stocks">Stocks</IonSelectOption>
-            </IonSelect>
-          </IonItem>
-
-          <IonButton className="pil-btn pil-btn--ghost" fill="clear" onClick={toggleSortOrder}>
-            <IonIcon slot="start" icon={swapVerticalOutline} />
-            <span className="pil-sort-order">{sortOrder === "asc" ? "Asc" : "Desc"}</span>
-            <IonIcon icon={sortOrder === "asc" ? arrowUp : arrowDown} />
-          </IonButton>
-
-          {/* SEARCH */}
-          <div className="customer-searchbar-inline">
-            <div className="customer-searchbar-inner">
-              <span className="customer-search-icon" aria-hidden="true">
-                🔎
-              </span>
-
-              <input
-                className="customer-search-input"
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
-                placeholder="Search name, category, or size..."
-              />
-
-              {search.trim() && (
-                <button className="customer-search-clear" type="button" onClick={() => setSearch("")}>
-                  Clear
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="receipt-btn" onClick={() => setSortKey("category")} style={{ opacity: sortKey === "category" ? 1 : 0.6 }}>
+                  Sort: Category
                 </button>
-              )}
+                <button className="receipt-btn" onClick={() => setSortKey("stocks")} style={{ opacity: sortKey === "stocks" ? 1 : 0.6 }}>
+                  Sort: Stocks
+                </button>
+                <button className="receipt-btn" onClick={toggleSortOrder}>
+                  Order: {sortOrder === "asc" ? "Asc" : "Desc"}
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
 
-        <div className="pil-card">
-          <div className="pil-card-head">
-            <div>
-              <div className="pil-card-title">Add-ons</div>
-              <div className="pil-card-sub">
-                Sorted by <b>{sortLabel}</b>
+            <div className="customer-topbar-right">
+              {/* SEARCH */}
+              <div className="customer-searchbar-inline">
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+                    placeholder="Search name, category, or size..."
+                  />
+
+                  {search.trim() && (
+                    <button className="customer-search-clear" type="button" onClick={() => setSearch("")}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="admin-tools-row">
+                <button className="receipt-btn" onClick={() => void fetchAddOns()} disabled={loading}>
+                  Refresh
+                </button>
+                <button className="receipt-btn" onClick={() => void exportToExcel()} disabled={loading || filteredAddOns.length === 0}>
+                  Export Excel
+                </button>
               </div>
             </div>
           </div>
 
+          {/* TABLE */}
           {loading ? (
-            <div className="pil-loading">
-              <IonSpinner />
-              <IonLabel>Loading add-ons...</IonLabel>
+            <div className="customer-note" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <IonSpinner /> Loading add-ons...
             </div>
           ) : filteredAddOns.length === 0 ? (
-            <div className="pil-empty">
-              <IonLabel>No add-ons found.</IonLabel>
-            </div>
+            <p className="customer-note">No add-ons found.</p>
           ) : (
-            <div className="pil-table-wrap">
-              <IonGrid className="pil-grid">
-                <IonRow className="pil-row pil-row--head">
-                  <IonCol className="pil-col pil-col--img">Image</IonCol>
-                  <IonCol className="pil-col pil-col--strong">Name</IonCol>
-                  <IonCol className="pil-col">Category</IonCol>
-                  <IonCol className="pil-col">Size</IonCol>
-                  <IonCol className="pil-col">Price</IonCol>
-                  <IonCol className="pil-col">Restocked</IonCol>
-                  <IonCol className="pil-col">Sold</IonCol>
-                  <IonCol className="pil-col">Expired</IonCol>
-                  <IonCol className="pil-col">Inventory Loss</IonCol>
-                  <IonCol className="pil-col">Bilin</IonCol>
-                  <IonCol className="pil-col">Stocks</IonCol>
-                  <IonCol className="pil-col">Expenses</IonCol>
-                  <IonCol className="pil-col">Overall</IonCol>
-                  <IonCol className="pil-col">Expected</IonCol>
-                  <IonCol className="pil-col">Actions</IonCol>
-                </IonRow>
+            <div className="customer-table-wrap">
+              <table className="customer-table">
+                <thead>
+                  <tr>
+                    <th>Image</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Size</th>
+                    <th>Price</th>
+                    <th>Restocked</th>
+                    <th>Sold</th>
+                    <th>Expired</th>
+                    <th>Inventory Loss</th>
+                    <th>Bilin</th>
+                    <th>Stocks</th>
+                    <th>Expenses</th>
+                    <th>Overall</th>
+                    <th>Expected</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
 
-                {filteredAddOns.map((addOn) => (
-                  <IonRow className="pil-row" key={addOn.id}>
-                    <IonCol className="pil-col pil-col--img">
-                      {addOn.image_url ? <IonImg className="pil-img" src={addOn.image_url} alt={addOn.name} /> : <span className="pil-muted">No image</span>}
-                    </IonCol>
+                <tbody>
+                  {filteredAddOns.map((a) => (
+                    <tr key={a.id}>
+                      <td style={{ width: 86 }}>
+                        {a.image_url ? (
+                          <img
+                            src={a.image_url}
+                            alt={a.name}
+                            style={{
+                              width: 64,
+                              height: 64,
+                              objectFit: "cover",
+                              borderRadius: 12,
+                              border: "1px solid rgba(0,0,0,0.12)",
+                            }}
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width: 64,
+                              height: 64,
+                              borderRadius: 12,
+                              border: "1px dashed rgba(0,0,0,0.25)",
+                              display: "grid",
+                              placeItems: "center",
+                              fontSize: 12,
+                              opacity: 0.75,
+                            }}
+                          >
+                            No Image
+                          </div>
+                        )}
+                      </td>
 
-                    <IonCol className="pil-col pil-col--strong">{addOn.name}</IonCol>
-                    <IonCol className="pil-col">{addOn.category}</IonCol>
-                    <IonCol className="pil-col">{normSize(addOn.size) ?? "—"}</IonCol>
-                    <IonCol className="pil-col">{money2(toNum(addOn.price))}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.restocked)}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.sold)}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.expired)}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.inventory_loss)}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.bilin)}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.stocks)}</IonCol>
-                    <IonCol className="pil-col">{toNum(addOn.expenses)}</IonCol>
-                    <IonCol className="pil-col">{money2(toNum(addOn.overall_sales))}</IonCol>
-                    <IonCol className="pil-col">{money2(toNum(addOn.expected_sales))}</IonCol>
+                      <td style={{ fontWeight: 900 }}>{a.name}</td>
+                      <td style={{ fontWeight: 900 }}>{a.category}</td>
+                      <td>{normSize(a.size) ?? "—"}</td>
+                      <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{money2(toNum(a.price))}</td>
 
-                    <IonCol className="pil-col">
-                      <div className="pil-actions-cell">
-                        <IonButton className="pil-act-btn pil-act-btn--add" fill="clear" onClick={() => openRestock(addOn.id)}>
-                          <IonIcon icon={addCircle} />
-                        </IonButton>
+                      <td style={{ fontWeight: 900 }}>{toNum(a.restocked)}</td>
+                      <td style={{ fontWeight: 900 }}>{toNum(a.sold)}</td>
 
-                        <IonButton className="pil-act-btn" fill="clear" onClick={() => void openHistory(addOn.id)}>
-                          <IonIcon icon={timeOutline} />
-                        </IonButton>
+                      <td style={{ fontWeight: 900 }}>{toNum(a.expired)}</td>
+                      <td style={{ fontWeight: 900 }}>{toNum(a.inventory_loss)}</td>
+                      <td style={{ fontWeight: 900 }}>{toNum(a.bilin)}</td>
 
-                        <IonButton className="pil-act-btn pil-act-btn--edit" fill="clear" onClick={() => handleEdit(addOn.id)}>
-                          <IonIcon icon={create} />
-                        </IonButton>
+                      <td style={{ fontWeight: 900 }}>{toNum(a.stocks)}</td>
+                      <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{money2(toNum(a.expenses))}</td>
+                      <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{money2(toNum(a.overall_sales))}</td>
+                      <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{money2(toNum(a.expected_sales))}</td>
 
-                        <IonButton className="pil-act-btn pil-act-btn--del" fill="clear" color="danger" onClick={() => handleDelete(addOn.id)}>
-                          <IonIcon icon={trash} />
-                        </IonButton>
-                      </div>
-                    </IonCol>
-                  </IonRow>
-                ))}
-              </IonGrid>
+                      <td>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button className="receipt-btn" onClick={() => openRestock(a.id)}>
+                            Add Stocks
+                          </button>
+                          <button className="receipt-btn" onClick={() => void openHistory(a.id)}>
+                            History
+                          </button>
+                          <button className="receipt-btn" onClick={() => openEdit(a.id)}>
+                            Edit
+                          </button>
+                          <button className="receipt-btn" onClick={() => confirmDelete(a.id)} style={{ opacity: 0.9 }}>
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <IonToast isOpen={showToast} message={toastMessage} duration={2600} onDidDismiss={() => setShowToast(false)} />
+
+          {/* =========================
+              EDIT OVERLAY (STAFF STYLE)
+          ========================= */}
+          {editingAddOn && (
+            <div className="receipt-overlay" onClick={() => (savingEdit ? null : setEditingAddOn(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">EDIT ADD-ON</h3>
+                <p className="receipt-subtitle">{editingAddOn.name}</p>
+
+                <hr />
+
+                {/* IMAGE PREVIEW + UPLOAD */}
+                <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      width: 84,
+                      height: 84,
+                      borderRadius: 14,
+                      overflow: "hidden",
+                      border: "1px solid rgba(0,0,0,0.12)",
+                      background: "rgba(0,0,0,0.03)",
+                      display: "grid",
+                      placeItems: "center",
+                    }}
+                  >
+                    {newImagePreview ? (
+                      <img src={newImagePreview} alt="New" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : editingAddOn.image_url && !removeImage ? (
+                      <img src={editingAddOn.image_url} alt="Current" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>No Image</div>
+                    )}
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <label className="receipt-btn" style={{ cursor: savingEdit ? "not-allowed" : "pointer", opacity: savingEdit ? 0.6 : 1 }}>
+                      Upload Image
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        disabled={savingEdit}
+                        onChange={(e) => {
+                          const f = e.currentTarget.files?.[0] ?? null;
+                          onPickImage(f);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+
+                    <button
+                      className="receipt-btn"
+                      onClick={() => {
+                        onPickImage(null);
+                        setRemoveImage(true);
+                      }}
+                      disabled={savingEdit}
+                      style={{ opacity: 0.9 }}
+                      title="Remove image (will delete old after saving)"
+                    >
+                      Remove Image
+                    </button>
+
+                    {newImageFile ? <div style={{ fontSize: 12, opacity: 0.8 }}>Selected: {newImageFile.name}</div> : null}
+                    {removeImage && !newImageFile ? <div style={{ fontSize: 12, opacity: 0.8 }}>Image will be removed.</div> : null}
+                  </div>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Name *</span>
+                  <input
+                    className="money-input"
+                    value={editingAddOn.name}
+                    onChange={(e) => setEditingAddOn({ ...editingAddOn, name: e.currentTarget.value })}
+                    disabled={savingEdit}
+                  />
+                </div>
+
+                <div className="receipt-row">
+                  <span>Category *</span>
+                  <input
+                    className="money-input"
+                    value={editingAddOn.category}
+                    onChange={(e) => setEditingAddOn({ ...editingAddOn, category: e.currentTarget.value })}
+                    disabled={savingEdit}
+                  />
+                </div>
+
+                <div className="receipt-row">
+                  <span>Size</span>
+                  <input
+                    className="money-input"
+                    value={editingAddOn.size ?? ""}
+                    placeholder='e.g. "Small", "16oz"'
+                    onChange={(e) => setEditingAddOn({ ...editingAddOn, size: e.currentTarget.value })}
+                    disabled={savingEdit}
+                  />
+                </div>
+
+                <div className="receipt-row">
+                  <span>Price</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    value={editingAddOn.price}
+                    onChange={(e) => {
+                      const v = parseFloat(e.currentTarget.value);
+                      setEditingAddOn({ ...editingAddOn, price: Number.isNaN(v) ? 0 : v });
+                    }}
+                    disabled={savingEdit}
+                  />
+                </div>
+
+                <div className="receipt-row">
+                  <span>Sold</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    value={editingAddOn.sold}
+                    onChange={(e) => {
+                      const v = parseInt(e.currentTarget.value, 10);
+                      setEditingAddOn({ ...editingAddOn, sold: Number.isNaN(v) ? 0 : v });
+                    }}
+                    disabled={savingEdit}
+                  />
+                </div>
+
+                <div className="receipt-row">
+                  <span>Expenses</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    value={editingAddOn.expenses}
+                    onChange={(e) => {
+                      const v = parseFloat(e.currentTarget.value);
+                      setEditingAddOn({ ...editingAddOn, expenses: Number.isNaN(v) ? 0 : v });
+                    }}
+                    disabled={savingEdit}
+                  />
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setEditingAddOn(null)} disabled={savingEdit}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void handleSaveEdit()} disabled={savingEdit}>
+                    {savingEdit ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================
+              RESTOCK OVERLAY (STAFF STYLE)
+          ========================= */}
+          {restockingAddOn && (
+            <div className="receipt-overlay" onClick={() => (savingRestock ? null : setRestockingAddOn(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">ADD STOCKS</h3>
+                <p className="receipt-subtitle">
+                  {restockingAddOn.name} • Current Restock: <b>{toNum(restockingAddOn.restocked)}</b>
+                </p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Quantity to add *</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={restockQty}
+                    onChange={(e) => setRestockQty(e.currentTarget.value)}
+                    disabled={savingRestock}
+                    placeholder="e.g. 10"
+                  />
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>Note (optional)</div>
+                  <textarea
+                    value={restockNote}
+                    onChange={(e) => setRestockNote(e.currentTarget.value)}
+                    placeholder="e.g. supplier restock / new batch"
+                    style={{
+                      width: "100%",
+                      minHeight: 90,
+                      resize: "vertical",
+                      padding: 12,
+                      borderRadius: 12,
+                      border: "1px solid rgba(0,0,0,0.15)",
+                      outline: "none",
+                      fontSize: 14,
+                    }}
+                    disabled={savingRestock}
+                  />
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setRestockingAddOn(null)} disabled={savingRestock}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void submitRestock()} disabled={savingRestock}>
+                    {savingRestock ? "Saving..." : "Confirm Restock"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================
+              HISTORY OVERLAY (STAFF STYLE)
+          ========================= */}
+          {historyAddOn && (
+            <div className="receipt-overlay" onClick={() => (historyLoading ? null : setHistoryAddOn(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980 }}>
+                <h3 className="receipt-title">ADJUSTMENT HISTORY</h3>
+                <p className="receipt-subtitle">{historyAddOn.name}</p>
+
+                <div style={{ opacity: 0.85, marginBottom: 10 }}>
+                  Current Stock: <b>{historyAddOn.stocks}</b> • Overall: <b>{money2(historyAddOn.overall_sales)}</b>
+                </div>
+
+                <hr />
+
+                {historyLoading ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <IonSpinner /> Loading history...
+                  </div>
+                ) : historyRows.length === 0 ? (
+                  <div style={{ opacity: 0.85 }}>No adjustment records.</div>
+                ) : (
+                  <div className="customer-table-wrap" style={{ maxHeight: 420, overflow: "auto" }}>
+                    <table className="customer-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Type</th>
+                          <th>Qty</th>
+                          <th>Amount</th>
+                          <th>By</th>
+                          <th>Reason</th>
+                          <th>Status</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {historyRows.map((r) => (
+                          <tr key={r.id}>
+                            <td>{formatPH(r.created_at)}</td>
+                            <td style={{ fontWeight: 900 }}>{typeLabel(r.expense_type)}</td>
+                            <td style={{ fontWeight: 900 }}>{toNum(r.quantity)}</td>
+                            <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{money2(toNum(r.expense_amount))}</td>
+                            <td style={{ fontWeight: 900 }}>{r.full_name}</td>
+                            <td>{r.description}</td>
+                            <td style={{ fontWeight: 900 }}>{r.voided ? "VOIDED" : "ACTIVE"}</td>
+                            <td>
+                              {!r.voided ? (
+                                <button className="receipt-btn" onClick={() => confirmVoid(r)} disabled={voiding}>
+                                  Void
+                                </button>
+                              ) : (
+                                <span style={{ opacity: 0.7 }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setHistoryAddOn(null)} disabled={historyLoading}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void refreshHistory()} disabled={historyLoading}>
+                    Refresh
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================
+              DELETE CONFIRM (STAFF STYLE)
+          ========================= */}
+          {deleteTarget && (
+            <div className="receipt-overlay" onClick={() => (deleting ? null : setDeleteTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DELETE ITEM</h3>
+                <p className="receipt-subtitle">
+                  Are you sure you want to delete <b>{deleteTarget.name}</b>?
+                </p>
+
+                <hr />
+
+                <div style={{ display: "grid", gap: 8, fontSize: 13, opacity: 0.9 }}>
+                  <div>
+                    Category: <b>{deleteTarget.category}</b>
+                  </div>
+                  <div>
+                    Stocks: <b>{toNum(deleteTarget.stocks)}</b> • Sold: <b>{toNum(deleteTarget.sold)}</b>
+                  </div>
+                  <div style={{ opacity: 0.85 }}>
+                    Image: <b>{deleteTarget.image_url ? "will be deleted" : "none"}</b>
+                  </div>
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                    Cancel
+                  </button>
+                  <button className="receipt-btn" onClick={() => void doDelete()} disabled={deleting}>
+                    {deleting ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =========================
+              VOID CONFIRM (STAFF STYLE)
+          ========================= */}
+          {voidTarget && (
+            <div className="receipt-overlay" onClick={() => (voiding ? null : setVoidTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">VOID ADJUSTMENT</h3>
+                <p className="receipt-subtitle">
+                  Are you sure you want to void this adjustment? This will restore counters and mark it as <b>VOIDED</b>.
+                </p>
+
+                <hr />
+
+                <div style={{ display: "grid", gap: 8, fontSize: 13, opacity: 0.9 }}>
+                  <div>
+                    Date: <b>{formatPH(voidTarget.created_at)}</b>
+                  </div>
+                  <div>
+                    Type: <b>{typeLabel(voidTarget.expense_type)}</b>
+                  </div>
+                  <div>
+                    Qty: <b>{toNum(voidTarget.quantity)}</b>
+                  </div>
+                  <div>
+                    Amount: <b>{money2(toNum(voidTarget.expense_amount))}</b>
+                  </div>
+                  <div>
+                    By: <b>{voidTarget.full_name}</b>
+                  </div>
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setVoidTarget(null)} disabled={voiding}>
+                    Cancel
+                  </button>
+                  <button className="receipt-btn" onClick={() => void doVoid()} disabled={voiding}>
+                    {voiding ? "Voiding..." : "Void"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
-
-        <IonToast isOpen={showToast} message={toastMessage} duration={3000} onDidDismiss={() => setShowToast(false)} />
-
-        {/* DELETE ALERT */}
-        <IonAlert
-          isOpen={showDeleteAlert}
-          onDidDismiss={() => setShowDeleteAlert(false)}
-          header="Confirm Delete"
-          message="Are you sure you want to delete this add-on? This will remove it from the database."
-          buttons={[
-            { text: "Cancel", role: "cancel", handler: () => setShowDeleteAlert(false) },
-            { text: "Delete", role: "destructive", handler: () => void confirmDeleteRow() },
-          ]}
-        />
-
-        {/* VOID ALERT */}
-        <IonAlert
-          isOpen={showVoidAlert}
-          onDidDismiss={() => setShowVoidAlert(false)}
-          header="Void Adjustment"
-          message="Are you sure you want to void this adjustment? This will restore counters and mark the record as VOIDED."
-          buttons={[
-            { text: "Cancel", role: "cancel", handler: () => setShowVoidAlert(false) },
-            { text: "Void", role: "destructive", handler: () => void doVoid() },
-          ]}
-        />
-
-        {/* RESTOCK MODAL */}
-        <IonModal isOpen={showRestockModal} onDidDismiss={() => setShowRestockModal(false)} className="pil-modal">
-          <IonHeader className="pil-modal-header">
-            <IonToolbar className="pil-modal-toolbar">
-              <IonTitle className="pil-modal-title">Add Stocks</IonTitle>
-              <IonButtons slot="end">
-                <IonButton className="pil-btn" onClick={() => setShowRestockModal(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-
-          <IonContent className="pil-modal-content">
-            <div className="pil-modal-card">
-              {restockingAddOn && (
-                <>
-                  <IonText>
-                    <h2 style={{ marginTop: 0, marginBottom: 8 }}>{restockingAddOn.name}</h2>
-                  </IonText>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Quantity to add *
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      type="number"
-                      inputMode="numeric"
-                      value={restockQty}
-                      placeholder="e.g. 10"
-                      onIonChange={(e) => setRestockQty((e.detail.value ?? "").toString())}
-                    />
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Note (optional)
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      value={restockNote}
-                      placeholder="e.g. supplier restock / new batch"
-                      onIonChange={(e) => setRestockNote((e.detail.value ?? "").toString())}
-                    />
-                  </IonItem>
-
-                  <div className="pil-modal-actions">
-                    <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={() => void submitRestock()}>
-                      Confirm Restock
-                    </IonButton>
-
-                    <IonButton
-                      className="pil-btn"
-                      expand="block"
-                      fill="outline"
-                      onClick={() => {
-                        setShowRestockModal(false);
-                        setRestockingAddOn(null);
-                        setRestockQty("");
-                        setRestockNote("");
-                      }}
-                    >
-                      Cancel
-                    </IonButton>
-                  </div>
-                </>
-              )}
-            </div>
-          </IonContent>
-        </IonModal>
-
-        {/* HISTORY MODAL */}
-        <IonModal isOpen={showHistoryModal} onDidDismiss={() => setShowHistoryModal(false)} className="pil-modal">
-          <IonHeader className="pil-modal-header">
-            <IonToolbar className="pil-modal-toolbar">
-              <IonTitle className="pil-modal-title">Adjustment History</IonTitle>
-              <IonButtons slot="end">
-                <IonButton className="pil-btn" onClick={() => setShowHistoryModal(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-
-          <IonContent className="pil-modal-content">
-            <div className="pil-modal-card">
-              {historyAddOn && (
-                <IonText>
-                  <h2 style={{ marginTop: 0, marginBottom: 8 }}>{historyAddOn.name}</h2>
-                  <div style={{ opacity: 0.8, marginBottom: 10 }}>
-                    Current Stock: <b>{historyAddOn.stocks}</b> • Overall: <b>{money2(historyAddOn.overall_sales)}</b>
-                  </div>
-                </IonText>
-              )}
-
-              {historyLoading ? (
-                <div className="pil-loading">
-                  <IonSpinner />
-                  <IonLabel>Loading history...</IonLabel>
-                </div>
-              ) : historyRows.length === 0 ? (
-                <div className="pil-empty">
-                  <IonLabel>No adjustment records.</IonLabel>
-                </div>
-              ) : (
-                <div className="pil-table-wrap">
-                  <IonGrid className="pil-grid">
-                    <IonRow className="pil-row pil-row--head">
-                      <IonCol className="pil-col">Date</IonCol>
-                      <IonCol className="pil-col">Type</IonCol>
-                      <IonCol className="pil-col">Qty</IonCol>
-                      <IonCol className="pil-col">Amount</IonCol>
-                      <IonCol className="pil-col">By</IonCol>
-                      <IonCol className="pil-col">Reason</IonCol>
-                      <IonCol className="pil-col">Status</IonCol>
-                      <IonCol className="pil-col">Action</IonCol>
-                    </IonRow>
-
-                    {historyRows.map((r) => (
-                      <IonRow className="pil-row" key={r.id}>
-                        <IonCol className="pil-col">{formatPH(r.created_at)}</IonCol>
-                        <IonCol className="pil-col">{typeLabel(r.expense_type)}</IonCol>
-                        <IonCol className="pil-col">{toNum(r.quantity)}</IonCol>
-                        <IonCol className="pil-col">{money2(toNum(r.expense_amount))}</IonCol>
-                        <IonCol className="pil-col">{r.full_name}</IonCol>
-                        <IonCol className="pil-col">{r.description}</IonCol>
-                        <IonCol className="pil-col">{r.voided ? "VOIDED" : "ACTIVE"}</IonCol>
-                        <IonCol className="pil-col">
-                          {!r.voided ? (
-                            <IonButton className="pil-act-btn pil-act-btn--del" fill="clear" color="danger" onClick={() => confirmVoid(r)}>
-                              <IonIcon icon={closeCircleOutline} />
-                            </IonButton>
-                          ) : (
-                            <span className="pil-muted">—</span>
-                          )}
-                        </IonCol>
-                      </IonRow>
-                    ))}
-                  </IonGrid>
-                </div>
-              )}
-
-              <div className="pil-modal-actions">
-                <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={() => void refreshHistory()} disabled={historyLoading}>
-                  Refresh History
-                </IonButton>
-                <IonButton className="pil-btn" expand="block" fill="outline" onClick={() => setShowHistoryModal(false)}>
-                  Close
-                </IonButton>
-              </div>
-            </div>
-          </IonContent>
-        </IonModal>
-
-        {/* EDIT MODAL */}
-        <IonModal isOpen={showEditModal} onDidDismiss={() => setShowEditModal(false)} className="pil-modal">
-          <IonHeader className="pil-modal-header">
-            <IonToolbar className="pil-modal-toolbar">
-              <IonTitle className="pil-modal-title">Edit Add-On</IonTitle>
-              <IonButtons slot="end">
-                <IonButton className="pil-btn" onClick={() => setShowEditModal(false)}>
-                  <IonIcon icon={closeOutline} />
-                </IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-
-          <IonContent className="pil-modal-content">
-            <div className="pil-modal-card">
-              {editingAddOn && (
-                <>
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Name
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      value={editingAddOn.name}
-                      onIonChange={(e) => setEditingAddOn({ ...editingAddOn, name: (e.detail.value ?? "").toString() })}
-                    />
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Category
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      value={editingAddOn.category}
-                      onIonChange={(e) => setEditingAddOn({ ...editingAddOn, category: (e.detail.value ?? "").toString() })}
-                    />
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Size (optional)
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      value={editingAddOn.size ?? ""}
-                      placeholder='e.g. "Small", "Medium", "Large", "16oz"'
-                      onIonChange={(e) => setEditingAddOn({ ...editingAddOn, size: (e.detail.value ?? "").toString() })}
-                    />
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Replace Image (optional)
-                    </IonLabel>
-                    <input
-                      className="pil-file"
-                      type="file"
-                      accept="image/*"
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                        const files: FileList | null = e.target.files;
-                        setNewImageFile(files && files.length > 0 ? files[0] : null);
-                      }}
-                    />
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Current Image
-                    </IonLabel>
-                    {editingAddOn.image_url ? (
-                      <IonImg className="pil-img pil-img--big" src={editingAddOn.image_url} alt="current" />
-                    ) : (
-                      <span className="pil-muted">No image</span>
-                    )}
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Price
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      type="number"
-                      value={editingAddOn.price}
-                      onIonChange={(e) => {
-                        const v = parseFloat((e.detail.value ?? "0").toString());
-                        setEditingAddOn({ ...editingAddOn, price: Number.isNaN(v) ? 0 : v });
-                      }}
-                    />
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Sold
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      type="number"
-                      value={editingAddOn.sold}
-                      onIonChange={(e) => {
-                        const v = parseInt((e.detail.value ?? "0").toString(), 10);
-                        setEditingAddOn({ ...editingAddOn, sold: Number.isNaN(v) ? 0 : v });
-                      }}
-                    />
-                  </IonItem>
-
-                  <IonItem className="pil-item">
-                    <IonLabel position="stacked" className="pil-label">
-                      Expenses
-                    </IonLabel>
-                    <IonInput
-                      className="pil-input"
-                      type="number"
-                      value={editingAddOn.expenses}
-                      onIonChange={(e) => {
-                        const v = parseFloat((e.detail.value ?? "0").toString());
-                        setEditingAddOn({ ...editingAddOn, expenses: Number.isNaN(v) ? 0 : v });
-                      }}
-                    />
-                  </IonItem>
-
-                  <div className="pil-modal-actions">
-                    <IonButton className="pil-btn pil-btn--primary" expand="block" onClick={() => void handleSaveEdit()}>
-                      Save Changes
-                    </IonButton>
-
-                    <IonButton
-                      className="pil-btn"
-                      expand="block"
-                      fill="outline"
-                      onClick={() => {
-                        setShowEditModal(false);
-                        setEditingAddOn(null);
-                        setNewImageFile(null);
-                      }}
-                    >
-                      Cancel
-                    </IonButton>
-                  </div>
-                </>
-              )}
-            </div>
-          </IonContent>
-        </IonModal>
       </IonContent>
     </IonPage>
   );
