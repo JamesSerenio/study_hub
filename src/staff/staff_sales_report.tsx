@@ -1,11 +1,30 @@
 // src/pages/staff_sales_report.tsx
+// ✅ STRICT TS, NO any
+// ✅ Cash Outs TOTAL now split into CASH / GCASH (uses cash_outs.payment_method)
+// ✅ If your table still uses ONLY cashout_date + amount, it will fallback to ALL as CASH
+// ✅ Uses paid_at date window logic elsewhere unchanged
+// ✅ FIX: Add-ons (Paid) is now based on PAYMENT amounts (cash_amount + gcash_amount)
+//         grouped per order (same full_name+seat within 10s) to avoid double counting
+// ✅ FIX (YOUR REQUEST): "Total Time" is now based on TIME CONSUMED amount
+//         Example: 1 hour => ₱20 (HOURLY_RATE=20). Uses Customer_Lists/Reservations logic.
+//         Includes BOTH: non-reservation (date) + reservation (reservation_date).
+//         If OPEN session: uses NOW as time_out.
+// ✅ NEW (YOUR REQUEST): If session is UNPAID, DO NOT COUNT:
+//         - Discount total
+//         - Total Time amount
+//         Applies to BOTH non-reservation + reservation.
+// ✅ CONSIGNMENT NET (SAME AS ADMIN):
+//         - Uses RPC: get_consignment_totals_for_day(p_date)
+//         - RPC handles Manila date inside (paid_at at time zone 'Asia/Manila')
+//         - Returns: gross, fee15, net
+//         - Display boxes: Consignment Sales / 15% / net + Inventory Loss
+//         - Sales System computed uses NET
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
   IonContent,
   IonHeader,
-  IonToolbar,
-  IonTitle,
   IonCard,
   IonCardContent,
   IonSpinner,
@@ -22,15 +41,25 @@ import {
   IonButtons,
   IonIcon,
   IonDatetime,
+  IonToolbar,
+  IonTitle,
 } from "@ionic/react";
 import { calendarOutline, closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
+
+/* =========================
+   PRICING (same idea as Customer_Lists/Reservations)
+========================= */
+
+const HOURLY_RATE = 20;
+const FREE_MINUTES = 0;
 
 /* =========================
    TYPES
 ========================= */
 
 type MoneyKind = "cash" | "coin";
+type CashOutMethod = "cash" | "gcash";
 
 interface DailyReportRow {
   id: string;
@@ -97,6 +126,37 @@ type ConsignmentState = {
   net: number;
 };
 
+type ConsignmentRpcRow = {
+  gross: number | string | null;
+  fee15: number | string | null;
+  net: number | string | null;
+};
+
+// ✅ for Add-ons payment grouping (avoid double counting)
+type AddOnPaymentRow = {
+  created_at: string;
+  full_name: string;
+  seat_number: string;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
+
+// ✅ for total time + discount (PAID ONLY)
+type SessionForTimeRow = {
+  date: string | null;
+  reservation: string | null;
+  reservation_date: string | null;
+
+  time_started: string | null;
+  time_ended: string | null;
+  hour_avail: string | null;
+
+  is_paid: boolean | null;
+
+  discount_kind: string | null; // 'none' | 'percent' | 'amount'
+  discount_value: number | string | null;
+};
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -110,6 +170,8 @@ const toNumber = (v: string | number | null | undefined): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 };
+
+const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
 
 const todayYMD = (): string => {
   const d = new Date();
@@ -149,10 +211,7 @@ const getDetailValue = (ev: unknown): unknown => {
   return (detail as { value?: unknown }).value ?? null;
 };
 
-const valueToString = (v: unknown): string => {
-  if (typeof v === "string") return v;
-  return "";
-};
+const valueToString = (v: unknown): string => (typeof v === "string" ? v : "");
 
 const valueToNonNegInt = (v: unknown): number => {
   const s = valueToString(v).trim();
@@ -169,11 +228,6 @@ const valueToNonNegMoney = (v: unknown): number => {
   if (!Number.isFinite(n) || n < 0) return 0;
   return n;
 };
-
-/* =========================
-   TIME DISPLAY (hours -> hr/min)
-========================= */
-
 
 /* =========================
    DATE HELPERS
@@ -193,6 +247,113 @@ const buildZeroLines = (reportId: string): CashLine[] => {
   return merged;
 };
 
+const ms = (iso: string): number => {
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+
+const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+
+/* =========================
+   ADD-ONS PAYMENT GROUPING (avoid double count)
+   - same full_name + seat_number within 10 seconds = 1 order
+   - payment per order = MAX(gcash_amount) + MAX(cash_amount)
+========================= */
+
+const GROUP_WINDOW_MS = 10_000;
+
+const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
+  if (rows.length === 0) return 0;
+
+  const sorted = [...rows].sort((a, b) => ms(a.created_at) - ms(b.created_at));
+
+  let total = 0;
+
+  let curName = "";
+  let curSeat = "";
+  let curLast = 0;
+  let started = false;
+
+  let maxG = 0;
+  let maxC = 0;
+
+  const flush = (): void => {
+    total += Math.max(0, maxG) + Math.max(0, maxC);
+    maxG = 0;
+    maxC = 0;
+  };
+
+  for (const r of sorted) {
+    const t = ms(r.created_at);
+    const name = norm(r.full_name);
+    const seat = norm(r.seat_number);
+
+    const g = Math.max(0, toNumber(r.gcash_amount));
+    const c = Math.max(0, toNumber(r.cash_amount));
+
+    const startNew = !started || name !== curName || seat !== curSeat || Math.abs(t - curLast) > GROUP_WINDOW_MS;
+
+    if (startNew) {
+      if (started) flush();
+      started = true;
+      curName = name;
+      curSeat = seat;
+      curLast = t;
+      maxG = g;
+      maxC = c;
+      continue;
+    }
+
+    curLast = t;
+    maxG = Math.max(maxG, g);
+    maxC = Math.max(maxC, c);
+  }
+
+  if (started) flush();
+
+  return total;
+};
+
+/* =========================
+   TOTAL TIME AMOUNT (TIME CONSUMED => ₱)
+   + DISCOUNT TOTAL (PAID ONLY)
+========================= */
+
+const isOpenTimeSession = (hourAvail: string | null | undefined, timeEnded: string | null | undefined): boolean => {
+  if ((hourAvail ?? "").toUpperCase() === "OPEN") return true;
+  if (!timeEnded) return true;
+  const end = new Date(timeEnded);
+  if (!Number.isFinite(end.getTime())) return true;
+  return end.getFullYear() >= 2999;
+};
+
+const diffMinutes = (startIso: string, endIso: string): number => {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return Math.floor((end - start) / (1000 * 60));
+};
+
+const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
+  const minutesUsed = diffMinutes(startIso, endIso);
+  const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
+  const perMinute = HOURLY_RATE / 60;
+  return round2(chargeMinutes * perMinute);
+};
+
+const computeDiscountAmountFromTimeCost = (
+  timeCost: number,
+  kindRaw: string | null | undefined,
+  valueRaw: number | string | null | undefined
+): number => {
+  const kind = (kindRaw ?? "none").toLowerCase().trim();
+  const v = Math.max(0, toNumber(valueRaw));
+
+  if (kind === "amount") return round2(v);
+  if (kind === "percent") return round2(timeCost * (v / 100));
+  return 0;
+};
+
 /* =========================
    PAGE
 ========================= */
@@ -207,20 +368,28 @@ const StaffSalesReport: React.FC = () => {
   const [lines, setLines] = useState<CashLine[]>([]);
   const [totals, setTotals] = useState<SalesTotalsRow | null>(null);
 
-  // ✅ CONSIGNMENT (PAID ONLY)
+  // ✅ CONSIGNMENT (PAID ONLY) — from RPC (same as admin)
   const [consignment, setConsignment] = useState<ConsignmentState>({ gross: 0, fee15: 0, net: 0 });
 
-  // ✅ ADD-ONS (PAID ONLY)
+  // ✅ ADD-ONS (PAYMENTS)
   const [addonsPaid, setAddonsPaid] = useState<number>(0);
 
+  // ✅ CASH OUTS TOTAL (cashout_date) split cash/gcash
+  const [cashOutsCash, setCashOutsCash] = useState<number>(0);
+  const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
+
+  // ✅ Total Time amount (₱) — PAID ONLY
+  const [totalTimeAmount, setTotalTimeAmount] = useState<number>(0);
+
+  // ✅ Discount total — PAID ONLY
+  const [discountPaid, setDiscountPaid] = useState<number>(0);
+
   const [submitting, setSubmitting] = useState(false);
-  const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>([
-    {
-      open: false,
-      msg: "",
-      color: "success",
-    },
-  ][0]);
+  const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(() => ({
+    open: false,
+    msg: "",
+    color: "success",
+  }));
 
   /* =========================
      LOAD / ENSURE REPORT
@@ -229,9 +398,13 @@ const StaffSalesReport: React.FC = () => {
   const ensureReportRow = async (dateYMD: string): Promise<void> => {
     const upsertRes = await supabase
       .from("daily_sales_reports")
-      .upsert({ report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 }, { onConflict: "report_date", ignoreDuplicates: true });
+      .upsert(
+        { report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 },
+        { onConflict: "report_date", ignoreDuplicates: true }
+      );
 
     if (upsertRes.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_sales_reports ensure(upsert) error:", upsertRes.error.message);
     }
   };
@@ -245,6 +418,10 @@ const StaffSalesReport: React.FC = () => {
       setTotals(null);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       setAddonsPaid(0);
+      setCashOutsCash(0);
+      setCashOutsGcash(0);
+      setTotalTimeAmount(0);
+      setDiscountPaid(0);
       setLoading(false);
       return;
     }
@@ -258,12 +435,17 @@ const StaffSalesReport: React.FC = () => {
       .single<DailyReportRow>();
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_sales_reports select error:", res.error.message);
       setReport(null);
       setLines([]);
       setTotals(null);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       setAddonsPaid(0);
+      setCashOutsCash(0);
+      setCashOutsGcash(0);
+      setTotalTimeAmount(0);
+      setDiscountPaid(0);
       setLoading(false);
       return;
     }
@@ -274,6 +456,12 @@ const StaffSalesReport: React.FC = () => {
       setReport({ ...r, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 });
       setLines(buildZeroLines(r.id));
       setTotals(null);
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      setAddonsPaid(0);
+      setCashOutsCash(0);
+      setCashOutsGcash(0);
+      setTotalTimeAmount(0);
+      setDiscountPaid(0);
       setLoading(false);
       return;
     }
@@ -283,9 +471,13 @@ const StaffSalesReport: React.FC = () => {
   };
 
   const loadCashLines = async (reportId: string): Promise<void> => {
-    const res = await supabase.from("daily_cash_count_lines").select("report_id, money_kind, denomination, qty").eq("report_id", reportId);
+    const res = await supabase
+      .from("daily_cash_count_lines")
+      .select("report_id, money_kind, denomination, qty")
+      .eq("report_id", reportId);
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_cash_count_lines select error:", res.error.message);
       return;
     }
@@ -312,9 +504,14 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("v_daily_sales_report_totals").select("*").eq("report_date", dateYMD).single<SalesTotalsRow>();
+    const res = await supabase
+      .from("v_daily_sales_report_totals")
+      .select("*")
+      .eq("report_date", dateYMD)
+      .single<SalesTotalsRow>();
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("v_daily_sales_report_totals error:", res.error.message);
       setTotals(null);
       return;
@@ -324,7 +521,10 @@ const StaffSalesReport: React.FC = () => {
   };
 
   /**
-   * ✅ CONSIGNMENT: PAID ONLY (paid_at date)
+   * ✅ CONSIGNMENT NET (SAME AS ADMIN):
+   * - Uses RPC: get_consignment_totals_for_day(p_date)
+   * - RPC handles Manila date inside (paid_at at time zone 'Asia/Manila')
+   * - Reads customer_session_consignment (paid + not voided) inside RPC
    */
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -332,61 +532,181 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const startISO = `${dateYMD}T00:00:00.000`;
-    const endISO = `${dateYMD}T23:59:59.999`;
-
-    const res = await supabase
-      .from("customer_session_add_ons")
-      .select("total, paid_at, add_ons!inner(category)")
-      .eq("is_paid", true)
-      .not("paid_at", "is", null)
-      .eq("add_ons.category", "CONSIGNMENT")
-      .gte("paid_at", startISO)
-      .lte("paid_at", endISO);
+    const res = await supabase.rpc("get_consignment_totals_for_day", { p_date: dateYMD });
 
     if (res.error) {
-      console.error("consignment query error:", res.error.message);
+      // eslint-disable-next-line no-console
+      console.error("get_consignment_totals_for_day error:", res.error.message);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
-    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
-    const fee15 = gross * 0.15;
-    const net = gross - fee15;
+    const row = (res.data?.[0] ?? null) as ConsignmentRpcRow | null;
+    if (!row) {
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      return;
+    }
 
-    setConsignment({ gross, fee15, net });
+    setConsignment({
+      gross: toNumber(row.gross),
+      fee15: toNumber(row.fee15),
+      net: toNumber(row.net),
+    });
   };
 
-  /**
-   * ✅ ADD-ONS: PAID ONLY (paid_at date)
-   */
+  // ✅ FIXED: Add-ons (Paid) based on PAYMENT, not total
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setAddonsPaid(0);
       return;
     }
 
-    const startISO = `${dateYMD}T00:00:00.000`;
-    const endISO = `${dateYMD}T23:59:59.999`;
+    // Manila day range (timestamptz safe)
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
     const res = await supabase
       .from("customer_session_add_ons")
-      .select("total, paid_at")
-      .eq("is_paid", true)
-      .not("paid_at", "is", null)
-      .gte("paid_at", startISO)
-      .lte("paid_at", endISO);
+      .select("created_at, full_name, seat_number, gcash_amount, cash_amount")
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString());
 
     if (res.error) {
-      console.error("addonsPaid query error:", res.error.message);
+      // eslint-disable-next-line no-console
+      console.error("addonsPaid(payment) query error:", res.error.message);
       setAddonsPaid(0);
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
-    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
-    setAddonsPaid(gross);
+    const rows = (res.data ?? []) as AddOnPaymentRow[];
+    const onlyWithPayment = rows.filter((r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0);
+
+    const totalPayments = computeAddonsPaidFromPayments(onlyWithPayment);
+    setAddonsPaid(totalPayments);
+  };
+
+  /**
+   * ✅ CASH OUTS (FIX)
+   * - Prefer: cash_outs.payment_method ('cash' | 'gcash')
+   * - If column doesn't exist, fallback to old schema
+   */
+  const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setCashOutsCash(0);
+      setCashOutsGcash(0);
+      return;
+    }
+
+    // Try with payment_method first
+    const res = await supabase.from("cash_outs").select("amount, cashout_date, payment_method").eq("cashout_date", dateYMD);
+
+    if (res.error) {
+      // If payment_method column doesn't exist, fallback to old schema
+      const fallback = await supabase.from("cash_outs").select("amount, cashout_date").eq("cashout_date", dateYMD);
+
+      if (fallback.error) {
+        // eslint-disable-next-line no-console
+        console.error("cash_outs query error:", fallback.error.message);
+        setCashOutsCash(0);
+        setCashOutsGcash(0);
+        return;
+      }
+
+      const rows = (fallback.data ?? []) as Array<{ amount: number | string | null }>;
+      const total = rows.reduce((sum, r) => sum + toNumber(r.amount), 0);
+      setCashOutsCash(total);
+      setCashOutsGcash(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as Array<{ amount: number | string | null; payment_method?: CashOutMethod | null }>;
+    const cash = rows.filter((r) => (r.payment_method ?? "cash") === "cash").reduce((sum, r) => sum + toNumber(r.amount), 0);
+    const gcash = rows.filter((r) => (r.payment_method ?? "cash") === "gcash").reduce((sum, r) => sum + toNumber(r.amount), 0);
+
+    setCashOutsCash(cash);
+    setCashOutsGcash(gcash);
+  };
+
+  /**
+   * ✅ FIX (YOUR REQUEST):
+   * - TOTAL TIME AMOUNT: PAID ONLY
+   * - DISCOUNT TOTAL: PAID ONLY
+   * - Includes BOTH:
+   *    - Non-reservation: customer_sessions.date == selectedDate AND reservation='no'
+   *    - Reservation:     customer_sessions.reservation_date == selectedDate AND reservation='yes'
+   * - If OPEN: use NOW as time_out
+   */
+  const loadTimeAndDiscountPaid = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setTotalTimeAmount(0);
+      setDiscountPaid(0);
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const selectCols =
+      "date,reservation,reservation_date,time_started,time_ended,hour_avail,is_paid,discount_kind,discount_value";
+
+    // 1) Walk-in (PAID only)
+    const walkinRes = await supabase
+      .from("customer_sessions")
+      .select(selectCols)
+      .eq("reservation", "no")
+      .eq("date", dateYMD)
+      .eq("is_paid", true);
+
+    if (walkinRes.error) {
+      // eslint-disable-next-line no-console
+      console.error("time/discount walkin query error:", walkinRes.error.message);
+      setTotalTimeAmount(0);
+      setDiscountPaid(0);
+      return;
+    }
+
+    // 2) Reservation (PAID only)
+    const reservRes = await supabase
+      .from("customer_sessions")
+      .select(selectCols)
+      .eq("reservation", "yes")
+      .eq("reservation_date", dateYMD)
+      .eq("is_paid", true);
+
+    if (reservRes.error) {
+      // eslint-disable-next-line no-console
+      console.error("time/discount reservation query error:", reservRes.error.message);
+      setTotalTimeAmount(0);
+      setDiscountPaid(0);
+      return;
+    }
+
+    const all: SessionForTimeRow[] = ([] as SessionForTimeRow[]).concat(
+      (walkinRes.data ?? []) as SessionForTimeRow[],
+      (reservRes.data ?? []) as SessionForTimeRow[]
+    );
+
+    let timeSum = 0;
+    let discountSum = 0;
+
+    for (const s of all) {
+      if (!s.is_paid) continue;
+
+      const start = String(s.time_started ?? "").trim();
+      if (!start) continue;
+
+      const open = isOpenTimeSession(s.hour_avail, s.time_ended);
+      const end = open ? nowIso : String(s.time_ended ?? "").trim();
+      if (!end) continue;
+
+      const timeCost = computeCostWithFreeMinutes(start, end);
+      timeSum += timeCost;
+
+      const dAmt = computeDiscountAmountFromTimeCost(timeCost, s.discount_kind, s.discount_value);
+      discountSum += dAmt;
+    }
+
+    setTotalTimeAmount(round2(timeSum));
+    setDiscountPaid(round2(discountSum));
   };
 
   const upsertQty = async (line: CashLine, qty: number): Promise<void> => {
@@ -402,9 +722,13 @@ const StaffSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("daily_cash_count_lines")
-      .upsert({ report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty }, { onConflict: "report_id,money_kind,denomination" });
+      .upsert(
+        { report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty },
+        { onConflict: "report_id,money_kind,denomination" }
+      );
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_cash_count_lines upsert error:", res.error.message);
       return;
     }
@@ -412,11 +736,13 @@ const StaffSalesReport: React.FC = () => {
     setLines((prev) =>
       prev.map((x) => (x.money_kind === line.money_kind && x.denomination === line.denomination ? { ...x, qty } : x))
     );
-
     await loadTotals(selectedDate);
   };
 
-  const updateReportField = async (field: "starting_cash" | "starting_gcash" | "bilin_amount", valueNum: number): Promise<void> => {
+  const updateReportField = async (
+    field: "starting_cash" | "starting_gcash" | "bilin_amount",
+    valueNum: number
+  ): Promise<void> => {
     if (!report || submitting) return;
 
     const safe = Math.max(0, valueNum);
@@ -430,6 +756,7 @@ const StaffSalesReport: React.FC = () => {
     const res = await supabase.from("daily_sales_reports").update({ [field]: safe }).eq("id", report.id);
 
     if (res.error) {
+      // eslint-disable-next-line no-console
       console.error("daily_sales_reports update error:", res.error.message);
       return;
     }
@@ -449,6 +776,10 @@ const StaffSalesReport: React.FC = () => {
     setTotals(null);
     setConsignment({ gross: 0, fee15: 0, net: 0 });
     setAddonsPaid(0);
+    setCashOutsCash(0);
+    setCashOutsGcash(0);
+    setTotalTimeAmount(0);
+    setDiscountPaid(0);
     setSelectedDate(next);
   };
 
@@ -479,7 +810,9 @@ const StaffSalesReport: React.FC = () => {
     }));
 
     if (payload.length > 0) {
-      const r2 = await supabase.from("daily_cash_count_lines").upsert(payload, { onConflict: "report_id,money_kind,denomination" });
+      const r2 = await supabase
+        .from("daily_cash_count_lines")
+        .upsert(payload, { onConflict: "report_id,money_kind,denomination" });
       if (r2.error) return r2.error.message;
     }
 
@@ -503,13 +836,24 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("daily_sales_reports").update({ is_submitted: true, submitted_at: new Date().toISOString() }).eq("id", report.id);
+    const res = await supabase
+      .from("daily_sales_reports")
+      .update({ is_submitted: true, submitted_at: new Date().toISOString() })
+      .eq("id", report.id);
 
     if (res.error) {
       setToast({ open: true, msg: `Submit failed: ${res.error.message}`, color: "danger" });
       setSubmitting(false);
       return;
     }
+
+    // ✅ after submit hide/zero
+    setConsignment({ gross: 0, fee15: 0, net: 0 });
+    setAddonsPaid(0);
+    setCashOutsCash(0);
+    setCashOutsGcash(0);
+    setTotalTimeAmount(0);
+    setDiscountPaid(0);
 
     setToast({ open: true, msg: `DONE saved for ${selectedDate}. Moving to next day…`, color: "success" });
 
@@ -522,9 +866,41 @@ const StaffSalesReport: React.FC = () => {
   ========================= */
 
   useEffect(() => {
-    void loadReport(selectedDate);
-    void loadConsignment(selectedDate);
-    void loadAddonsPaid(selectedDate);
+    void (async () => {
+      await loadReport(selectedDate);
+
+      if (!isYMD(selectedDate)) {
+        setConsignment({ gross: 0, fee15: 0, net: 0 });
+        setAddonsPaid(0);
+        setCashOutsCash(0);
+        setCashOutsGcash(0);
+        setTotalTimeAmount(0);
+        setDiscountPaid(0);
+        return;
+      }
+
+      const check = await supabase
+        .from("daily_sales_reports")
+        .select("is_submitted")
+        .eq("report_date", selectedDate)
+        .single<{ is_submitted: boolean }>();
+
+      const isSubmitted = Boolean(check.data?.is_submitted);
+
+      if (isSubmitted) {
+        setConsignment({ gross: 0, fee15: 0, net: 0 });
+        setAddonsPaid(0);
+        setCashOutsCash(0);
+        setCashOutsGcash(0);
+        setTotalTimeAmount(0);
+        setDiscountPaid(0);
+      } else {
+        void loadConsignment(selectedDate); // ✅ RPC like admin
+        void loadAddonsPaid(selectedDate);
+        void loadCashOutsTotal(selectedDate);
+        void loadTimeAndDiscountPaid(selectedDate);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
@@ -554,29 +930,47 @@ const StaffSalesReport: React.FC = () => {
     return lines.filter((l) => l.money_kind === "coin").reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
-  // still computed but not shown (we removed "Sales Collected" box)
-  const coh = totals ? toNumber(totals.coh_total) : 0;
-  const salesCollected = totals ? toNumber(totals.sales_collected) : coh;
-
-  const bilin = report ? toNumber(report.bilin_amount) : 0;
-  const netCollected = totals ? toNumber(totals.net_collected) : salesCollected - bilin;
-
   const expenses = totals ? toNumber(totals.expenses_amount) : 0;
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
-  // ✅ paid-only add-ons
+  // ✅ COH: cash from cash count, gcash from gcashSales
+  const cohCash = cashTotal + coinTotal;
+  const cohGcash = gcashSales;
+
+  // ✅ SHOW VALUES (UI)
+  const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
+  const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
+
+  const advCash = totals ? toNumber(totals.advance_cash) : 0;
+  const advGcash = totals ? toNumber(totals.advance_gcash) : 0;
+
+  const dpCash = totals ? toNumber(totals.walkin_cash) : 0;
+  const dpGcash = totals ? toNumber(totals.walkin_gcash) : 0;
+
+  const startingCash = report ? toNumber(report.starting_cash) : 0;
+  const startingGcash = report ? toNumber(report.starting_gcash) : 0;
+
   const addons = addonsPaid;
+  const discount = discountPaid;
 
-  const discount = totals ? toNumber(totals.discount_total) : 0;
-  const systemSale = totals ? toNumber(totals.system_sale) : 0;
+  const bilin = report ? toNumber(report.bilin_amount) : 0;
 
-  // ✅ FIXED TOTAL TIME: use totals.total_time (hours)
-  // same as admin — AMOUNT not hours
-const totalTimeAmount =
-  (totals ? toNumber(totals.walkin_cash) : 0) +
-  (totals ? toNumber(totals.walkin_gcash) : 0);
+  /**
+   * ✅ Actual System (your existing)
+   */
+  const salesSystem = cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
 
+  /**
+   * ✅ Sales System (computed)
+   * add-ons + total time (PAID ONLY) + consignment NET - discount (PAID ONLY)
+   */
+  const salesSystemComputed = addons + totalTimeAmount + consignment.net - discount;
+
+  /**
+   * ✅ Sales Collected:
+   */
+  const salesCollectedDisplay = salesSystem - bilin;
 
   if (loading) {
     return (
@@ -595,9 +989,7 @@ const totalTimeAmount =
 
   return (
     <IonPage>
-      <IonHeader>
-      </IonHeader>
-
+      <IonHeader />
       <IonContent className="ion-padding ssr-page">
         <IonToast
           isOpen={toast.open}
@@ -726,39 +1118,50 @@ const totalTimeAmount =
                     </div>
                   </div>
 
+                  {/* COH */}
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">COH / Total of the Day</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(cashTotal + coinTotal)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">—</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(cohCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(cohGcash)}</div>
                   </div>
 
+                  {/* ✅ CASH OUTS SPLIT */}
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">Expenses</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(expenses)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">—</div>
+                    <div className="ssr-left-label">Cash Outs</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(cashOutsCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(cashOutsGcash)}</div>
                   </div>
 
+                  {/* Paid reservations */}
                   <div className="ssr-left-row ssr-left-row--tint">
                     <div className="ssr-left-label">Paid reservations for this date</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.paid_reservation_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.paid_reservation_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(paidResCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(paidResGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">New Advance Payments</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.advance_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.advance_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(advCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(advGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Down payments within this date only</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(totals ? toNumber(totals.walkin_cash) : 0)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totals ? toNumber(totals.walkin_gcash) : 0)}</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(dpCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(dpGcash)}</div>
                   </div>
 
-                  <div className="ssr-left-row ssr-left-row--system">
-                    <div className="ssr-left-label">Sales System</div>
-                    <div className="ssr-left-value ssr-left-value--system ssr-span-2">{peso(systemSale)}</div>
+                  {/* Actual + Computed */}
+                  <div className="ssr-system-grid">
+                    <div className="ssr-system-box">
+                      <div className="ssr-system-label">Actual System</div>
+                      <div className="ssr-system-value">{peso(salesSystem)}</div>
+                    </div>
+
+                    <div className="ssr-system-box">
+                      <div className="ssr-system-label">Sales System</div>
+                      <div className="ssr-system-value">{peso(salesSystemComputed)}</div>
+                    </div>
                   </div>
 
                   <div className="ssr-sales-boxes">
@@ -772,19 +1175,16 @@ const totalTimeAmount =
                     </div>
                   </div>
 
-                  {/* CONSIGNMENT like Admin */}
+                  {/* ✅ SAME AS ADMIN: show consignment breakdown + inventory loss */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
-                      <span className="ssr-sales-box-value">{peso(consignment.gross)}</span>
-                    </div>
-                    <div className="ssr-sales-box">
-                      <span className="ssr-sales-box-label">Consignment 15%</span>
-                      <span className="ssr-sales-box-value">{peso(consignment.fee15)}</span>
-                    </div>
-                    <div className="ssr-sales-box">
-                      <span className="ssr-sales-box-label">Consignment Net</span>
                       <span className="ssr-sales-box-value">{peso(consignment.net)}</span>
+                    </div>
+
+                    <div className="ssr-sales-box">
+                      <span className="ssr-sales-box-label">Inventory Loss</span>
+                      <span className="ssr-sales-box-value">{peso(expenses)}</span>
                     </div>
                   </div>
                 </IonCardContent>
@@ -798,7 +1198,7 @@ const totalTimeAmount =
                   <div className="ssr-card-head">
                     <IonText className="ssr-card-title">Cash Count</IonText>
                     <div className="ssr-total-chip">
-                      Bills: <b>{peso(cashTotal)}</b> | Coins: <b>{peso(coinTotal)}</b>
+                      Cash: <b>{peso(cashTotal)}</b> | Coins: <b>{peso(coinTotal)}</b>
                     </div>
                   </div>
 
@@ -873,7 +1273,7 @@ const totalTimeAmount =
 
                     <div className="ssr-coh-bar">
                       <span>COH / Total of the Day</span>
-                      <b>{peso(cashTotal + coinTotal)}</b>
+                      <b>{peso(cohCash)}</b>
                     </div>
                   </div>
 
@@ -890,10 +1290,9 @@ const totalTimeAmount =
                       />
                     </div>
 
-                    {/* ✅ Renamed: Net -> Sales Collected (and old Sales Collected removed) */}
                     <div className="ssr-collected-box ssr-collected-box--net">
                       <div className="ssr-collected-label">Sales Collected</div>
-                      <div className="ssr-collected-value">{peso(netCollected)}</div>
+                      <div className="ssr-collected-value">{peso(salesCollectedDisplay)}</div>
                     </div>
                   </div>
                 </IonCardContent>
@@ -906,12 +1305,14 @@ const totalTimeAmount =
                   <div className="ssr-mini">
                     <div className="ssr-mini-row">
                       <span>Add-ons (Paid)</span>
-                      <b>{peso(addons)}</b>
+                      <b>{peso(addonsPaid)}</b>
                     </div>
+
                     <div className="ssr-mini-row">
                       <span>Discount (amount)</span>
-                      <b>{peso(discount)}</b>
+                      <b>{peso(discountPaid)}</b>
                     </div>
+
                     <div className="ssr-mini-row">
                       <span>Total Time</span>
                       <b>{peso(totalTimeAmount)}</b>

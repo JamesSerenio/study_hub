@@ -1,6 +1,6 @@
 // src/pages/Admin_Restock_Record.tsx
 // ✅ Day/Month filter via IonDatetime modal (same calendar style)
-// ✅ Export CSV (Excel) based on selected Day/Month
+// ✅ Export EXCEL (.xlsx) with nice layout + embedded images (like your add-ons report)
 // ✅ Delete by filter (Day/Month): reverses add_ons.restocked then deletes restock rows
 // ✅ Edit RESTOCK (exact value): updates restock qty + adjusts add_ons.restocked by delta
 // ✅ Void row: reverses add_ons.restocked then deletes row
@@ -42,6 +42,10 @@ import {
   closeCircleOutline as voidIcon,
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
+
+// ✅ Excel export (same as Add-ons report)
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 type FilterMode = "day" | "month";
 
@@ -174,34 +178,38 @@ const normalizeMonthValue = (v: string): string => {
   return base;
 };
 
-const buildCSV = (rows: RestockRecordRow[]): string => {
-  const header = ["Restock Date", "Item Name", "Category", "Restock"];
-  const lines = [header.join(",")];
-
-  for (const r of rows) {
-    const d = dateKeyFromISO(r.created_at);
-    const name = (r.add_ons?.name ?? "Unknown").replaceAll('"', '""');
-    const cat = (r.add_ons?.category ?? "—").replaceAll('"', '""');
-    const qty = String(r.qty);
-
-    lines.push([`="${d}"`, `"${name}"`, `"${cat}"`, qty].join(","));
-  }
-
-  return "\uFEFF" + lines.join("\n");
+const ymd = (d: Date): string => {
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
 };
 
-const downloadCSV = (filename: string, csv: string): void => {
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+// ===== Excel Image Helpers (NO any) =====
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const res = reader.result;
+      if (typeof res !== "string") return reject(new Error("Failed to convert image"));
+      const base64 = res.split(",")[1] ?? "";
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("FileReader error"));
+    reader.readAsDataURL(blob);
+  });
 
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+const fetchImageBase64 = async (url: string): Promise<{ base64: string; ext: "png" | "jpeg" }> => {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Image fetch failed");
 
-  URL.revokeObjectURL(url);
+  const ct = (r.headers.get("content-type") ?? "").toLowerCase();
+  const blob = await r.blob();
+  const base64 = await blobToBase64(blob);
+
+  const isPng = ct.includes("png") || url.toLowerCase().includes(".png");
+  const ext: "png" | "jpeg" = isPng ? "png" : "jpeg";
+  return { base64, ext };
 };
 
 const Admin_Restock_Record: React.FC = () => {
@@ -223,7 +231,7 @@ const Admin_Restock_Record: React.FC = () => {
   // ✅ EDIT EXACT VALUE
   const [editOpen, setEditOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<RestockRecordRow | null>(null);
-  const [editQty, setEditQty] = useState<string>("0"); // new exact restock value
+  const [editQty, setEditQty] = useState<string>("0");
 
   const [voidRow, setVoidRow] = useState<RestockRecordRow | null>(null);
 
@@ -288,6 +296,8 @@ const Admin_Restock_Record: React.FC = () => {
     });
   }, [records, search, filterMode, selectedDate, selectedMonth]);
 
+  const totalQty = useMemo(() => filtered.reduce((sum, r) => sum + (Number.isFinite(r.qty) ? r.qty : 0), 0), [filtered]);
+
   const openCalendar = (): void => setDateModalOpen(true);
 
   const clearFilterValue = (): void => {
@@ -295,13 +305,138 @@ const Admin_Restock_Record: React.FC = () => {
     else setSelectedMonth("");
   };
 
-  const exportCSV = (): void => {
-    const csv = buildCSV(filtered);
-    const suffix =
-      filterMode === "day"
-        ? selectedDate || todayKey()
-        : selectedMonth || monthKeyNow();
-    downloadCSV(`restock_records_${suffix}.csv`, csv);
+  // ✅ Pretty Excel Export (with images)
+  const exportExcel = async (): Promise<void> => {
+    try {
+      const now = new Date();
+      const modeLabel = filterMode === "day" ? "DAY" : "MONTH";
+      const filterLabel =
+        filterMode === "day" ? (selectedDate || todayKey()) : (selectedMonth || monthKeyNow());
+      const title = "RESTOCK RECORDS REPORT";
+      const generated = `Generated: ${now.toLocaleString()}`;
+      const info = `Mode: ${modeLabel}   Filter: ${filterLabel}   Search: ${search.trim() ? search.trim() : "—"}`;
+      const summary = `Total Rows: ${filtered.length}   Total Restock Qty: ${totalQty}`;
+
+      const workbook = new ExcelJS.Workbook();
+      const ws = workbook.addWorksheet("Restocks", {
+        views: [{ state: "frozen", ySplit: 6 }],
+      });
+
+      // Columns (NO ID column)
+      ws.columns = [
+        { header: "Image", key: "image", width: 14 },
+        { header: "Item Name", key: "name", width: 34 },
+        { header: "Category", key: "category", width: 18 },
+        { header: "Restock Qty", key: "qty", width: 14 },
+        { header: "Restock Date", key: "date", width: 18 },
+        { header: "Restock Time", key: "time", width: 14 },
+      ];
+
+      // Title rows (1-4)
+      ws.mergeCells(1, 1, 1, 6);
+      ws.mergeCells(2, 1, 2, 6);
+      ws.mergeCells(3, 1, 3, 6);
+      ws.mergeCells(4, 1, 4, 6);
+
+      ws.getCell("A1").value = title;
+      ws.getCell("A2").value = generated;
+      ws.getCell("A3").value = info;
+      ws.getCell("A4").value = summary;
+
+      ws.getCell("A1").font = { bold: true, size: 16 };
+      ws.getCell("A2").font = { size: 11 };
+      ws.getCell("A3").font = { size: 11 };
+      ws.getCell("A4").font = { size: 11, bold: true };
+
+      ws.addRow([]); // row 5 blank
+
+      // Header row = row 6
+      const headerRow = ws.getRow(6);
+      headerRow.values = ["Image", "Item Name", "Category", "Restock Qty", "Restock Date", "Restock Time"];
+      headerRow.font = { bold: true };
+      headerRow.alignment = { vertical: "middle", horizontal: "center" };
+      headerRow.height = 20;
+
+      headerRow.eachCell((cell) => {
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFEFEFEF" },
+        };
+      });
+
+      // Data starts row 7
+      let rowIndex = 7;
+
+      for (const r of filtered) {
+        const row = ws.getRow(rowIndex);
+
+        const name = r.add_ons?.name ?? "Unknown";
+        const cat = r.add_ons?.category ?? "—";
+
+        const d = new Date(r.created_at);
+        const datePart = isNaN(d.getTime()) ? dateKeyFromISO(r.created_at) : ymd(d);
+        const timePart = isNaN(d.getTime())
+          ? ""
+          : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+        // A (image) blank -> image overlay
+        row.getCell(2).value = name;
+        row.getCell(3).value = cat;
+        row.getCell(4).value = Number(r.qty ?? 0);
+        row.getCell(5).value = datePart;
+        row.getCell(6).value = timePart;
+
+        row.height = 52;
+
+        for (let c = 1; c <= 6; c++) {
+          const cell = row.getCell(c);
+          cell.alignment =
+            c === 2 ? { vertical: "middle", horizontal: "left", wrapText: true } : { vertical: "middle", horizontal: "center" };
+          cell.border = {
+            top: { style: "thin" },
+            left: { style: "thin" },
+            bottom: { style: "thin" },
+            right: { style: "thin" },
+          };
+        }
+
+        // Image embed (if possible)
+        const imgUrl = r.add_ons?.image_url ?? null;
+        if (imgUrl) {
+          try {
+            const { base64, ext } = await fetchImageBase64(imgUrl);
+            const imgId = workbook.addImage({ base64, extension: ext });
+            ws.addImage(imgId, {
+              tl: { col: 0.15, row: rowIndex - 1 + 0.15 },
+              ext: { width: 48, height: 48 },
+            });
+          } catch {
+            // leave blank if CORS/fetch fails
+          }
+        }
+
+        row.commit();
+        rowIndex++;
+      }
+
+      const buf = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      saveAs(blob, `restock_records_${filterLabel}.xlsx`);
+      notify("Exported Excel successfully.");
+    } catch (e) {
+      console.error(e);
+      notify("Export failed.");
+    }
   };
 
   /* ==========================
@@ -353,7 +488,7 @@ const Admin_Restock_Record: React.FC = () => {
   // ✅ OPEN EDIT (exact value)
   const openEdit = (row: RestockRecordRow): void => {
     setEditingRow(row);
-    setEditQty(String(row.qty)); // show current qty as editable
+    setEditQty(String(row.qty));
     setEditOpen(true);
   };
 
@@ -368,7 +503,7 @@ const Admin_Restock_Record: React.FC = () => {
     }
 
     const oldQty = editingRow.qty;
-    const delta = newQty - oldQty; // ✅ only affects THIS row difference
+    const delta = newQty - oldQty;
 
     try {
       await adjustRestocked(editingRow.add_on_id, delta);
@@ -435,33 +570,27 @@ const Admin_Restock_Record: React.FC = () => {
 
   return (
     <IonPage>
-      <IonHeader>
-        <IonToolbar>
-          <IonTitle>Restock Records</IonTitle>
-        </IonToolbar>
-      </IonHeader>
+      <IonHeader></IonHeader>
 
-      {/* ✅ SAME BACKGROUND AS OTHERS */}
-      <IonContent className="staff-content" scrollY={false}>
+      <IonContent className="staff-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>
 
         <div className="customer-lists-container restock-wrap">
-          {/* ✅ TOP BAR (same as Customer_Lists) */}
           <div className="customer-topbar restock-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Restock Record</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{activeDateLabel}</strong>{" "}
                 <span style={{ marginLeft: 8 }}>
-                  (Total: <strong>{filtered.length}</strong>)
+                  (Total: <strong>{filtered.length}</strong> | Qty: <strong>{totalQty}</strong>)
                 </span>
               </div>
             </div>
 
             <div className="customer-topbar-right restock-actions">
-              <IonButton className="receipt-btn" fill="outline" onClick={exportCSV}>
+              <IonButton className="receipt-btn" fill="outline" onClick={() => void exportExcel()}>
                 <IonIcon icon={downloadOutline} slot="start" />
                 Export Excel
               </IonButton>
@@ -483,18 +612,35 @@ const Admin_Restock_Record: React.FC = () => {
             </div>
           </div>
 
-          {/* ✅ FILTER ROW */}
           <div className="restock-filters">
             <div className="restock-left">
-              <div className="restock-search">
-                <div className="restock-label">Search (item / category)</div>
+            {/* ✅ SAME SEARCH BAR AS BOOKING / CUSTOMER LISTS */}
+            <div className="customer-searchbar-inline">
+              <div className="customer-searchbar-inner">
+                <span className="customer-search-icon" aria-hidden="true">
+                  🔎
+                </span>
+
                 <input
-                  className="restock-input"
+                  className="customer-search-input"
+                  type="text"
                   value={search}
-                  placeholder="Type to search…"
                   onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+                  placeholder="Search item or category..."
                 />
+
+                {search.trim() && (
+                  <button
+                    className="customer-search-clear"
+                    onClick={() => setSearch("")}
+                    type="button"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
+            </div>
+
             </div>
 
             <div className="restock-right">
@@ -512,26 +658,14 @@ const Admin_Restock_Record: React.FC = () => {
                 </IonItem>
               </div>
 
-              {/* ✅ DATE PILL (same vibe) */}
               <label className="date-pill restock-datepill">
                 <span className="date-pill-label">{filterMode === "day" ? "Date" : "Month"}</span>
 
-                {/* display as text, open modal on click */}
-                <button
-                  type="button"
-                  className="restock-datebtn"
-                  onClick={openCalendar}
-                  title="Open calendar"
-                >
+                <button type="button" className="restock-datebtn" onClick={openCalendar} title="Open calendar">
                   {activeDateLabel}
                 </button>
 
-                <button
-                  type="button"
-                  className="restock-iconbtn"
-                  onClick={openCalendar}
-                  title="Calendar"
-                >
+                <button type="button" className="restock-iconbtn" onClick={openCalendar} title="Calendar">
                   <IonIcon icon={calendarOutline} />
                 </button>
 
@@ -548,7 +682,6 @@ const Admin_Restock_Record: React.FC = () => {
             </div>
           </div>
 
-          {/* ✅ TABLE */}
           {loading ? (
             <div className="customer-note restock-loading">
               <IonSpinner />
@@ -575,11 +708,7 @@ const Admin_Restock_Record: React.FC = () => {
                     <tr key={r.id} className="restock-row">
                       <td>
                         {r.add_ons?.image_url ? (
-                          <img
-                            className="restock-img"
-                            src={r.add_ons.image_url}
-                            alt={r.add_ons?.name ?? "item"}
-                          />
+                          <img className="restock-img" src={r.add_ons.image_url} alt={r.add_ons?.name ?? "item"} />
                         ) : (
                           <div className="restock-imgFallback">No Image</div>
                         )}
@@ -600,18 +729,13 @@ const Admin_Restock_Record: React.FC = () => {
                       <td>{formatDateTime(r.created_at)}</td>
 
                       <td>
-                        {/* actions behavior same, css only */}
                         <div className="action-stack action-stack--row">
                           <button className="receipt-btn" onClick={() => openEdit(r)} title="Edit">
                             <IonIcon icon={createOutline} />
                             <span style={{ marginLeft: 6 }}>Edit</span>
                           </button>
 
-                          <button
-                            className="receipt-btn btn-danger"
-                            onClick={() => setVoidRow(r)}
-                            title="Void"
-                          >
+                          <button className="receipt-btn btn-danger" onClick={() => setVoidRow(r)} title="Void">
                             <IonIcon icon={voidIcon} />
                             <span style={{ marginLeft: 6 }}>Void</span>
                           </button>
@@ -718,10 +842,18 @@ const Admin_Restock_Record: React.FC = () => {
               {editingRow && (
                 <>
                   <div className="restock-editInfo">
-                    <div><b>Item:</b> {editingRow.add_ons?.name ?? "Unknown"}</div>
-                    <div><b>Category:</b> {editingRow.add_ons?.category ?? "—"}</div>
-                    <div><b>Current Restock:</b> {editingRow.qty}</div>
-                    <div><b>Date:</b> {formatDateTime(editingRow.created_at)}</div>
+                    <div>
+                      <b>Item:</b> {editingRow.add_ons?.name ?? "Unknown"}
+                    </div>
+                    <div>
+                      <b>Category:</b> {editingRow.add_ons?.category ?? "—"}
+                    </div>
+                    <div>
+                      <b>Current Restock:</b> {editingRow.qty}
+                    </div>
+                    <div>
+                      <b>Date:</b> {formatDateTime(editingRow.created_at)}
+                    </div>
                   </div>
 
                   <IonItem>
@@ -733,9 +865,7 @@ const Admin_Restock_Record: React.FC = () => {
                     />
                   </IonItem>
 
-                  <div className="restock-help">
-                    Change will affect only this row difference (delta).
-                  </div>
+                  <div className="restock-help">Change will affect only this row difference (delta).</div>
 
                   <div className="restock-editBtns">
                     <IonButton expand="block" onClick={() => void saveEditQty()}>
@@ -758,12 +888,7 @@ const Admin_Restock_Record: React.FC = () => {
             </IonContent>
           </IonModal>
 
-          <IonToast
-            isOpen={toastOpen}
-            message={toastMsg}
-            duration={2500}
-            onDidDismiss={() => setToastOpen(false)}
-          />
+          <IonToast isOpen={toastOpen} message={toastMsg} duration={2500} onDidDismiss={() => setToastOpen(false)} />
         </div>
       </IonContent>
     </IonPage>

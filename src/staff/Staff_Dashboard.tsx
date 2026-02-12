@@ -17,6 +17,8 @@
 // ✅ 4 right-side color swatches are NOT editable
 // ✅ FIX: When setting Occupied/Reserved, auto-delete overlapping TEMP promo first (TEMP only)
 // ✅ FIX: CLEAR NOW truly deletes both seat_blocked_times + promo_bookings overlap NOW
+// ✅ NEW FIX (REQUESTED): IGNORE auto reservation blocks (note="reservation") so seats won't auto turn violet.
+//    Staff will be the only one who can set statuses/colors in the dashboard.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -109,12 +111,7 @@ const farFutureIso = (): string => new Date("2999-12-31T23:59:59.000Z").toISOStr
 const isStoredPos = (v: unknown): v is StoredPos => {
   if (typeof v !== "object" || v === null) return false;
   const obj = v as Record<string, unknown>;
-  return (
-    typeof obj.x === "number" &&
-    Number.isFinite(obj.x) &&
-    typeof obj.y === "number" &&
-    Number.isFinite(obj.y)
-  );
+  return typeof obj.x === "number" && Number.isFinite(obj.x) && typeof obj.y === "number" && Number.isFinite(obj.y);
 };
 
 const loadStored = (): StoredMap => {
@@ -205,6 +202,12 @@ const isTempMirrorRow = (note: string | null): boolean => {
   return n === "temp";
 };
 
+// ✅ NEW: reservation auto blocks from BookingModal are ignored in Staff_Dashboard
+const isAutoReservationRow = (note: string | null): boolean => {
+  const n = (note ?? "").trim().toLowerCase();
+  return n === "reservation";
+};
+
 const Staff_Dashboard: React.FC = () => {
   // ✅ SAME X/Y AS ADMIN + add 4 swatches (NOT editable)
   const defaultPins: SeatPin[] = useMemo(
@@ -251,42 +254,10 @@ const Staff_Dashboard: React.FC = () => {
       { id: "12C", label: "12C", x: 24, y: 68.2, kind: "seat" },
 
       // ✅ RIGHT-SIDE COLOR SWATCHES (NOT editable / not clickable)
-      {
-        id: SWATCH_GREEN_ID,
-        label: "",
-        x: 90,
-        y: 83.5,
-        kind: "seat",
-        readonly: true,
-        fixedStatus: "temp_available",
-      },
-      {
-        id: SWATCH_YELLOW_ID,
-        label: "",
-        x: 90,
-        y: 88,
-        kind: "seat",
-        readonly: true,
-        fixedStatus: "occupied_temp",
-      },
-      {
-        id: SWATCH_RED_ID,
-        label: "",
-        x: 90,
-        y: 92.5,
-        kind: "seat",
-        readonly: true,
-        fixedStatus: "occupied",
-      },
-      {
-        id: SWATCH_PURPLE_ID,
-        label: "",
-        x: 90,
-        y: 96,
-        kind: "seat",
-        readonly: true,
-        fixedStatus: "reserved",
-      },
+      { id: SWATCH_GREEN_ID, label: "", x: 90, y: 83.5, kind: "seat", readonly: true, fixedStatus: "temp_available" },
+      { id: SWATCH_YELLOW_ID, label: "", x: 90, y: 88, kind: "seat", readonly: true, fixedStatus: "occupied_temp" },
+      { id: SWATCH_RED_ID, label: "", x: 90, y: 92.5, kind: "seat", readonly: true, fixedStatus: "occupied" },
+      { id: SWATCH_PURPLE_ID, label: "", x: 90, y: 96, kind: "seat", readonly: true, fixedStatus: "reserved" },
     ],
     []
   );
@@ -395,8 +366,9 @@ const Staff_Dashboard: React.FC = () => {
   };
 
   // ✅ conflict check:
-  // - seat_blocked_times overlap (but ignore TEMP MIRROR rows note='temp')
+  // - seat_blocked_times overlap (ignore TEMP mirror rows note='temp')
   // - promo_bookings overlap (active)
+  // ✅ NEW: ignore auto reservation rows (note="reservation") so staff is the only controller
   const checkConflicts = async (
     pinId: string,
     kind: PinKind,
@@ -405,7 +377,7 @@ const Staff_Dashboard: React.FC = () => {
   ): Promise<string | null> => {
     const seatKey = kind === "room" ? CONFERENCE_ID : pinId;
 
-    // 1) seat_blocked_times overlap (ignore note='temp')
+    // 1) seat_blocked_times overlap (ignore note='temp' AND note='reservation')
     const { data: blk, error: blkErr } = await supabase
       .from("seat_blocked_times")
       .select("seat_number, source, note")
@@ -415,7 +387,9 @@ const Staff_Dashboard: React.FC = () => {
 
     if (blkErr) return `Block check error: ${blkErr.message}`;
 
-    const hardBlocks = ((blk ?? []) as SeatBlockedRow[]).filter((r) => !isTempMirrorRow(r.note));
+    const hardBlocks = ((blk ?? []) as SeatBlockedRow[]).filter(
+      (r) => !isTempMirrorRow(r.note) && !isAutoReservationRow(r.note)
+    );
     if (hardBlocks.length > 0) return "Already blocked (occupied/reserved).";
 
     // 2) promo_bookings overlap (active)
@@ -530,12 +504,12 @@ const Staff_Dashboard: React.FC = () => {
     } else {
       const rows = (promoConfData ?? []) as PromoBookingRow[];
       if (rows.length > 0) {
-        // use the first row for determining current vs future
         applyPromoRow(CONFERENCE_ID, rows[0]);
       }
     }
 
     // ✅ seat_blocked_times statuses (HIGHEST priority)
+    // ✅ NEW: ignore note="reservation" rows so dashboard won't auto change color on user reservation
     if (blockedErr) {
       console.error("seat_blocked_times status error:", blockedErr.message);
     } else {
@@ -545,6 +519,9 @@ const Staff_Dashboard: React.FC = () => {
       for (const r of rows) {
         // ignore TEMP MIRROR rows note='temp' so they don't change colors
         if (isTempMirrorRow(r.note)) continue;
+
+        // ✅ ignore auto reservation rows
+        if (isAutoReservationRow(r.note)) continue;
 
         const id = normalizeSeatId(r.seat_number);
 
@@ -636,9 +613,7 @@ const Staff_Dashboard: React.FC = () => {
       .lt("start_at", endIso)
       .gt("end_at", startIso);
 
-    const { error } =
-      kind === "room" ? await base.is("seat_number", null) : await base.eq("seat_number", seatKey);
-
+    const { error } = kind === "room" ? await base.is("seat_number", null) : await base.eq("seat_number", seatKey);
     if (error) return error.message;
     return null;
   };
@@ -809,8 +784,7 @@ const Staff_Dashboard: React.FC = () => {
 
     const seatKey = selectedKind === "room" ? CONFERENCE_ID : selectedSeat;
 
-    // 🔥 remove occupied/reserved first (seat_blocked_times) BUT keep future promos (they are in promo_bookings)
-    // we only delete overlaps to allow temp now
+    // delete overlaps so temp can be set now
     {
       const { error: delBlkErr } = await supabase
         .from("seat_blocked_times")
@@ -825,7 +799,7 @@ const Staff_Dashboard: React.FC = () => {
       }
     }
 
-    // 🔥 remove previous TEMP mirror rows (note='temp') overlaps
+    // remove old TEMP mirror overlaps
     {
       const { error: delTempMirrorErr } = await supabase
         .from("seat_blocked_times")
@@ -841,7 +815,6 @@ const Staff_Dashboard: React.FC = () => {
       }
     }
 
-    // insert TEMP promo booking
     const insertPayload: {
       user_id: string;
       full_name: string;
@@ -884,8 +857,7 @@ const Staff_Dashboard: React.FC = () => {
       return alert(`Error saving promo booking: ${promoInsErr.message}`);
     }
 
-    // ✅ mirror insert into seat_blocked_times (constraint-friendly)
-    // source allowed: regular/reserved only => use reserved, note=temp
+    // mirror insert into seat_blocked_times (source=reserved, note=temp)
     {
       const mirrorPayload: {
         seat_number: string;
@@ -905,10 +877,7 @@ const Staff_Dashboard: React.FC = () => {
       mirrorPayload.created_by = auth.user.id;
 
       const { error: mirrorErr } = await supabase.from("seat_blocked_times").insert(mirrorPayload);
-      if (mirrorErr) {
-        // we keep the promo_booking, but warn
-        console.warn("TEMP mirror insert failed:", mirrorErr.message);
-      }
+      if (mirrorErr) console.warn("TEMP mirror insert failed:", mirrorErr.message);
     }
 
     setSaving(false);
@@ -917,8 +886,7 @@ const Staff_Dashboard: React.FC = () => {
     await loadSeatStatuses();
   };
 
-  const currentStatus: SeatStatus =
-    selectedSeat ? statusBySeat[selectedSeat] ?? "temp_available" : "temp_available";
+  const currentStatus: SeatStatus = selectedSeat ? statusBySeat[selectedSeat] ?? "temp_available" : "temp_available";
 
   return (
     <IonPage>
@@ -937,8 +905,7 @@ const Staff_Dashboard: React.FC = () => {
                 {pins.map((p) => {
                   const st: SeatStatus = p.fixedStatus ?? (statusBySeat[p.id] ?? "temp_available");
                   const baseCls = p.kind === "room" ? "seat-pin room" : "seat-pin";
-                  const selectedCls =
-                    calibrate && selectedPinId === p.id && !p.readonly ? " selected" : "";
+                  const selectedCls = calibrate && selectedPinId === p.id && !p.readonly ? " selected" : "";
                   const readonlyCls = p.readonly ? " seat-pin--readonly" : "";
                   const cls = `${baseCls} ${STATUS_COLOR[st]}${selectedCls}${readonlyCls}`;
                   const isRoom = p.kind === "room";
@@ -949,13 +916,7 @@ const Staff_Dashboard: React.FC = () => {
                       type="button"
                       className={cls}
                       style={{ left: `${p.x}%`, top: `${p.y}%` }}
-                      title={
-                        p.readonly
-                          ? "Legend"
-                          : calibrate
-                          ? `Click to select: ${p.label}`
-                          : `Manage: ${p.label}`
-                      }
+                      title={p.readonly ? "Legend" : calibrate ? `Click to select: ${p.label}` : `Manage: ${p.label}`}
                       onClick={(ev) => {
                         ev.stopPropagation();
 
@@ -992,8 +953,7 @@ const Staff_Dashboard: React.FC = () => {
 
               {calibrate ? (
                 <div className="seatmap-hint">
-                  Calibrate mode ON: click a pin to select, then click exact number on the image to
-                  place it.
+                  Calibrate mode ON: click a pin to select, then click exact number on the image to place it.
                   <br />
                   Selected: <strong>{selectedPinId || "NONE"}</strong>{" "}
                   <button type="button" onClick={clearSaved} style={{ marginLeft: 8 }}>
@@ -1009,15 +969,14 @@ const Staff_Dashboard: React.FC = () => {
         </div>
 
         {/* MODAL */}
-          <IonModal
-            isOpen={isModalOpen}
-            className="seat-manage-modal"
-            onDidDismiss={() => {
-              setIsModalOpen(false);
-              setSelectedSeat("");
-            }}
-          >
-
+        <IonModal
+          isOpen={isModalOpen}
+          className="seat-manage-modal"
+          onDidDismiss={() => {
+            setIsModalOpen(false);
+            setSelectedSeat("");
+          }}
+        >
           <IonHeader>
             <IonToolbar>
               <IonTitle>Seat Status</IonTitle>
@@ -1038,10 +997,7 @@ const Staff_Dashboard: React.FC = () => {
             <div className="bookadd-card">
               <IonItem className="form-item">
                 <IonLabel position="stacked">Target</IonLabel>
-                <IonInput
-                  value={isConference(selectedSeat) ? "CONFERENCE ROOM" : `SEAT ${selectedSeat}`}
-                  readonly
-                />
+                <IonInput value={isConference(selectedSeat) ? "CONFERENCE ROOM" : `SEAT ${selectedSeat}`} readonly />
               </IonItem>
 
               <IonItem className="form-item">
@@ -1075,52 +1031,21 @@ const Staff_Dashboard: React.FC = () => {
                 <IonInput value={fullName} onIonChange={(e) => setFullName(e.detail.value ?? "")} />
               </IonItem>
 
-              <IonButton
-                expand="block"
-                color="medium"
-                disabled={saving}
-                onClick={() => void clearToAvailableNow(selectedSeat, selectedKind)}
-              >
+              <IonButton expand="block" color="medium" disabled={saving} onClick={() => void clearToAvailableNow(selectedSeat, selectedKind)}>
                 {saving ? "Working..." : "Set as Temporarily Available (CLEAR NOW)"}
               </IonButton>
 
               <div style={{ height: 10 }} />
 
-              <IonButton
-                expand="block"
-                className="seat-modal-btn seat-modal-btn--clear"
-                disabled={saving}
-                onClick={() => void clearToAvailableNow(selectedSeat, selectedKind)}
-              >
-                {saving ? "Working..." : "Set as Temporarily Available (CLEAR NOW)"}
-              </IonButton>
-
-              <div style={{ height: 10 }} />
-
-              <IonButton
-                expand="block"
-                className="seat-modal-btn seat-modal-btn--temp"
-                disabled={saving}
-                onClick={() => void saveTempOccupied()}
-              >
+              <IonButton expand="block" className="seat-modal-btn seat-modal-btn--temp" disabled={saving} onClick={() => void saveTempOccupied()}>
                 Set as Occupied Temporarily (Yellow)
               </IonButton>
 
-              <IonButton
-                expand="block"
-                className="seat-modal-btn seat-modal-btn--occupied"
-                disabled={saving}
-                onClick={() => void setBlocked("occupied")}
-              >
+              <IonButton expand="block" className="seat-modal-btn seat-modal-btn--occupied" disabled={saving} onClick={() => void setBlocked("occupied")}>
                 Set as Occupied (Red)
               </IonButton>
 
-              <IonButton
-                expand="block"
-                className="seat-modal-btn seat-modal-btn--reserved"
-                disabled={saving}
-                onClick={() => void setBlocked("reserved")}
-              >
+              <IonButton expand="block" className="seat-modal-btn seat-modal-btn--reserved" disabled={saving} onClick={() => void setBlocked("reserved")}>
                 Set as Reserved (Purple)
               </IonButton>
             </div>

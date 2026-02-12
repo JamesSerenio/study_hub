@@ -6,7 +6,6 @@
 // ✅ Reservation auto-blocks seats in seat_blocked_times (source="reserved")
 // ✅ Seat buttons DISABLED until date+time+duration ready (prevents stale summary seat)
 // ✅ Auto refresh seats when date/time changes
-// ✅ 1-TAP date refresh (IonDatetime inline calendar fix)
 // ✅ Auto-delete expired reserved blocks (end_at < now) so seats come back
 // ✅ FIX: Reservation "Open Time" will NOT use 2999 anymore
 //    - reservation openTime => end_at = end of the selected reservation date (23:59:59.999)
@@ -15,6 +14,10 @@
 // ✅ NEW: If Reservation Time Started is earlier than CURRENT TIME -> show modal + block saving
 // ✅ FIX: DB `date` ALWAYS saves CURRENT DATE (local) even for reservation
 // ✅ NO any
+// ✅ NEW UI: Reservation Date uses scroll/wheel picker (IonDatetimeButton + modal)
+// ✅ NEW FIX: Can save even without login (auto anonymous auth)
+// ✅ NEW: Phone Number required (both reservation and non-reservation)
+// ✅ NEW: Phone validation MODAL (kulang/sobra/hindi 09)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -33,6 +36,7 @@ import {
   IonSelectOption,
   IonToggle,
   IonDatetime,
+  IonDatetimeButton,
   IonAlert,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
@@ -44,7 +48,7 @@ import type {
 } from "@ionic/core";
 
 const HOURLY_RATE = 20;
-const FREE_MINUTES = 5;
+const FREE_MINUTES = 0;
 const SEAT_NA = "N/A";
 const FAR_FUTURE_ISO = new Date("2999-12-31T23:59:59.000Z").toISOString();
 
@@ -52,6 +56,7 @@ type CustomerType = "reviewer" | "student" | "regular" | "";
 
 interface CustomerForm {
   full_name: string;
+  phone_number: string; // ✅ NEW
   customer_type: CustomerType;
   customer_field: string;
   has_id: boolean;
@@ -90,6 +95,60 @@ const toYYYYMMDD = (v: string): string | null => {
 
 // ✅ LOCAL current date in YYYY-MM-DD (no red, no UTC issue)
 const todayLocalYYYYMMDD = (): string => new Date().toLocaleDateString("en-CA");
+
+/* =========================
+   ✅ PHONE HELPERS (NEW)
+========================= */
+
+// keep digits and optional leading +, normalize +63 to 09, remove spaces/dashes
+const normalizePhonePH = (raw: string): string => {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+
+  // keep digits and +
+  let s = trimmed.replace(/[^\d+]/g, "");
+
+  // if starts with +63XXXXXXXXXX => 0XXXXXXXXXX
+  if (s.startsWith("+63")) s = "0" + s.slice(3);
+
+  // if starts with 63XXXXXXXXXX (no +) => 0XXXXXXXXXX
+  if (s.startsWith("63")) s = "0" + s.slice(2);
+
+  // remove all non-digits now
+  s = s.replace(/[^\d]/g, "");
+
+  return s;
+};
+
+type PhoneValidation =
+  | { ok: true; normalized: string }
+  | { ok: false; message: string };
+
+const validatePhonePH = (raw: string): PhoneValidation => {
+  const normalized = normalizePhonePH(raw);
+
+  if (!normalized) return { ok: false, message: "Phone Number is required." };
+
+  // must start with 09
+  if (!normalized.startsWith("09")) {
+    return { ok: false, message: 'Phone Number must start with "09". Example: 09XXXXXXXXX' };
+  }
+
+  // must be exactly 11 digits (09 + 9 digits)
+  if (normalized.length < 11) {
+    return { ok: false, message: "Phone Number is too short. It must be 11 digits (09XXXXXXXXX)." };
+  }
+  if (normalized.length > 11) {
+    return { ok: false, message: "Phone Number is too long. It must be 11 digits (09XXXXXXXXX)." };
+  }
+
+  // digits only check
+  if (!/^09\d{9}$/.test(normalized)) {
+    return { ok: false, message: "Phone Number must contain digits only. Example: 09XXXXXXXXX" };
+  }
+
+  return { ok: true, normalized };
+};
 
 const normalizeTimeAvail = (value: string): string | null => {
   const raw = value
@@ -260,9 +319,22 @@ type SeatBlockInsert = {
 
 type SeatBlockInsertResult = { id: string; seat_number: string };
 
+// ✅ NEW: create/get user session automatically (anonymous)
+const ensureAuthUserId = async (): Promise<string> => {
+  const { data: sess } = await supabase.auth.getSession();
+  if (sess?.session?.user?.id) return sess.session.user.id;
+
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error || !data?.user?.id) {
+    throw new Error(error?.message ?? "Anonymous sign-in failed. Enable Anonymous provider in Supabase.");
+  }
+  return data.user.id;
+};
+
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
+    phone_number: "",
     customer_type: "",
     customer_field: "",
     has_id: false,
@@ -292,6 +364,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [timeAlertOpen, setTimeAlertOpen] = useState(false);
   const [timeAlertMsg, setTimeAlertMsg] = useState("");
+
+  // ✅ PHONE ERROR MODAL (NEW)
+  const [phoneAlertOpen, setPhoneAlertOpen] = useState(false);
+  const [phoneAlertMsg, setPhoneAlertMsg] = useState("");
 
   const commitReservationTime = (raw: string) => {
     const normalized = normalizeReservationTime(raw);
@@ -581,9 +657,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const handleSubmitBooking = async (): Promise<void> => {
     if (form.reservation && reservationStartIso) {
       if (isReservationStartInPast(reservationStartIso)) {
-        setTimeAlertMsg(
-          "Time Started cannot be earlier than the current time. Please choose a valid future time."
-        );
+        setTimeAlertMsg("Time Started cannot be earlier than the current time. Please choose a valid future time.");
         setTimeAlertOpen(true);
         return;
       }
@@ -591,6 +665,15 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     const trimmedName = form.full_name.trim();
     if (!trimmedName) return alert("Full Name is required.");
+
+    // ✅ PHONE VALIDATION MODAL (NEW)
+    const phoneCheck = validatePhonePH(form.phone_number);
+    if (!phoneCheck.ok) {
+      setPhoneAlertMsg(phoneCheck.message);
+      setPhoneAlertOpen(true);
+      return;
+    }
+    const phoneToStore = phoneCheck.normalized;
 
     if (form.reservation) {
       if (!form.reservation_date) return alert("Please select a reservation date.");
@@ -613,13 +696,19 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
     }
 
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth?.user) return alert("You must be logged in to save records.");
+    // ✅ no-login needed; auto anonymous user id
+    let userId: string;
+    try {
+      userId = await ensureAuthUserId();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown auth error";
+      return alert(msg);
+    }
 
     const startIsoToStore =
       form.reservation && reservationStartIso ? reservationStartIso : new Date().toISOString();
 
-    // ✅ FIX: ALWAYS current date saved to DB
+    // ✅ ALWAYS current date saved to DB
     const dateToStore = todayLocalYYYYMMDD();
 
     const timeEndedToStore = (() => {
@@ -673,15 +762,16 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           form.seat_number,
           startIsoToStore,
           timeEndedToStore,
-          auth.user.id
+          userId
         );
         createdBlockIds = created.map((r) => r.id);
       }
 
       const { error: sessionErr } = await supabase.from("customer_sessions").insert({
-        staff_id: auth.user.id,
-        date: dateToStore, // ✅ current date always
+        staff_id: null,
+        date: dateToStore,
         full_name: trimmedName,
+        phone_number: phoneToStore, // ✅ store normalized phone (passes DB check)
         customer_type: form.customer_type,
         customer_field: form.customer_field,
         has_id: form.has_id,
@@ -693,7 +783,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         total_amount: timeAmount,
         seat_number: seatToStore,
         reservation: form.reservation ? "yes" : "no",
-        reservation_date: form.reservation_date ?? null, // ✅ selected reservation date stays here
+        reservation_date: form.reservation_date ?? null,
       });
 
       if (sessionErr) {
@@ -702,13 +792,14 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error";
-      return alert(`Error blocking seat(s): ${msg}`);
+      return alert(`Error saving: ${msg}`);
     }
 
     const wasReservation = form.reservation;
 
     setForm({
       full_name: "",
+      phone_number: "",
       customer_type: "",
       customer_field: "",
       has_id: false,
@@ -746,12 +837,22 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         </IonToolbar>
       </IonHeader>
 
+      {/* Time Started modal */}
       <IonAlert
         isOpen={timeAlertOpen}
         header="Invalid Time Started"
         message={timeAlertMsg}
         buttons={["OK"]}
         onDidDismiss={() => setTimeAlertOpen(false)}
+      />
+
+      {/* ✅ Phone Number modal */}
+      <IonAlert
+        isOpen={phoneAlertOpen}
+        header="Invalid Phone Number"
+        message={phoneAlertMsg}
+        buttons={["OK"]}
+        onDidDismiss={() => setPhoneAlertOpen(false)}
       />
 
       <IonContent className="ion-padding">
@@ -766,8 +867,21 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             <IonLabel position="stacked">Full Name *</IonLabel>
             <IonInput
               value={form.full_name}
+              required
               onIonChange={(e) => setForm({ ...form, full_name: e.detail.value ?? "" })}
               placeholder="Enter full name"
+            />
+          </IonItem>
+
+          <IonItem className="form-item">
+            <IonLabel position="stacked">Phone Number *</IonLabel>
+            <IonInput
+              type="tel"
+              inputMode="tel"
+              value={form.phone_number}
+              required
+              onIonChange={(e) => setForm({ ...form, phone_number: e.detail.value ?? "" })}
+              placeholder="e.g., 09XXXXXXXXX or +639XXXXXXXXX"
             />
           </IonItem>
 
@@ -796,10 +910,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           <IonItem className="form-item">
             <IonLabel>ID</IonLabel>
-            <IonToggle
-              checked={form.has_id}
-              onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })}
-            />
+            <IonToggle checked={form.has_id} onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })} />
             <IonLabel slot="end">{form.has_id ? "With" : "Without"}</IonLabel>
           </IonItem>
 
@@ -833,9 +944,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 setRefreshSeatsTick((x) => x + 1);
 
                 if (checked) {
-                  commitReservationTime(
-                    timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am"
-                  );
+                  commitReservationTime(timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am");
                 }
               }}
             />
@@ -847,19 +956,22 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               <IonItem className="form-item">
                 <IonLabel position="stacked">Reservation Date</IonLabel>
 
-                <IonDatetime
-                  ref={dateRef}
-                  presentation="date"
-                  min={todayLocalYYYYMMDD()}
-                  value={form.reservation_date}
-                  onIonChange={(e) => applyPickedDate(e.detail.value)}
-                  onClickCapture={() => {
-                    setTimeout(() => {
-                      const v = dateRef.current?.value;
-                      applyPickedDate(v);
-                    }, 0);
-                  }}
-                />
+                <div style={{ marginTop: 8, width: "100%" }}>
+                  <IonDatetimeButton datetime="reservation-date" />
+                </div>
+
+                <IonModal keepContentsMounted>
+                  <IonDatetime
+                    id="reservation-date"
+                    ref={dateRef}
+                    presentation="date"
+                    preferWheel={true}
+                    showDefaultButtons={true}
+                    min={todayLocalYYYYMMDD()}
+                    value={form.reservation_date}
+                    onIonChange={(e) => applyPickedDate(e.detail.value)}
+                  />
+                </IonModal>
               </IonItem>
 
               <IonItem className="form-item">
@@ -984,7 +1096,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
             {form.reservation && (
               <p className="summary-text">
-                <strong>Seat:</strong> {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
+                <strong>Seat:</strong>{" "}
+                {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
               </p>
             )}
           </div>

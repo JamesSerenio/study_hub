@@ -1,59 +1,81 @@
 // src/pages/Customer_Reservations.tsx
-// ✅ SAME CLASSNAMES as Customer_Lists so SAME CSS works
-// ✅ Date filter (shows reservations by selected reservation_date)
-// ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both)
-// ✅ Receipt summary shows ONLY: Total Balance OR Total Change
-// ✅ Promo type filtered out (DB + frontend)
-// ✅ OPEN sessions auto-update display
-// ✅ DISCOUNT + PAYMENT + PAID:
-//    - Discount modal per reservation (percent/peso/none) + reason saved
-//    - Auto recompute totals (table + receipt)
-//    - Payment modal (GCash/Cash auto based on Total Balance AFTER discount)
-//    - Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
-//    - Manual PAID/UNPAID toggle still works
-// ✅ Open Time Stop -> ALSO releases seat_blocked_times (end_at = now)
+// ✅ SAME STYLE/CLASSNAMES as Customer_Lists.tsx
+// ✅ Shows ONLY RESERVATION records (reservation = "yes")
+// ✅ Seat column INCLUDED
+// ✅ Discount UI same as Customer_Lists (breakdown)
+// ✅ Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
+// ✅ Manual PAID/UNPAID toggle still works
+// ✅ Payment is based on TIME CONSUMED (System Cost after discount) — ❌ DOES NOT deduct Down Payment
+// ✅ Down Payment column between Discount and Payment
+// ✅ Down Payment is EDITABLE (modal) and saved to DB: customer_sessions.down_payment
+// ✅ Receipt: removed "Edit DP" button
+// ✅ Receipt auto-updates balance/change after DP edit (row + selectedSession updated)
+// ✅ Phone # column beside Full Name
+// ✅ View to Customer is REALTIME using SINGLE ROW customer_view_state (id=1)
+// ✅ Search bar (Full Name only)
+// ✅ Date filter uses reservation_date
+// ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now)
+// ✅ ✅ CANCEL SAME AS Customer_Lists:
+//    - Cancel requires DESCRIPTION (modal)
+//    - Uses RPC cancel_customer_session (moves to customer_sessions_cancelled)
+//    - Stops View to Customer if active
+//    - Releases reserved seats
+// ✅ NEW:
+//    ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
+// ✅ NEW: REFRESH button beside DATE FILTER (same className so same color)
 // ✅ No "any"
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
 const HOURLY_RATE = 20;
-const FREE_MINUTES = 5; // hidden
-const DOWN_PAYMENT = 50;
+const FREE_MINUTES = 0;
+
+/* ✅ LOCAL STORAGE KEYS (fallback) */
+const LS_VIEW_ENABLED = "customer_view_enabled";
+const LS_SESSION_ID = "customer_view_session_id";
+
+/* ✅ REALTIME TABLE (single row) */
+const VIEW_STATE_TABLE = "customer_view_state";
+const VIEW_STATE_ID = 1;
 
 type DiscountKind = "none" | "percent" | "amount";
 
 interface CustomerSession {
   id: string;
-  date: string;
+
+  date: string; // fallback
+  reservation_date: string | null; // filter basis
+
   full_name: string;
+  phone_number?: string | null;
+
   customer_type: string;
   customer_field: string | null;
   has_id: boolean;
   id_number: string | null;
+
   hour_avail: string;
   time_started: string;
   time_ended: string;
 
-  total_time: number | string;
-  total_amount: number | string;
+  total_time: number;
+  total_amount: number;
 
-  reservation: string;
-  reservation_date: string | null; // YYYY-MM-DD
+  reservation: string; // "yes"
   seat_number: string;
 
-  // DISCOUNT
+  down_payment?: number | string | null;
+
   discount_kind?: DiscountKind;
-  discount_value?: number;
+  discount_value?: number | string;
   discount_reason?: string | null;
 
-  // PAYMENT
-  gcash_amount?: number;
-  cash_amount?: number;
+  gcash_amount?: number | string;
+  cash_amount?: number | string;
 
-  // PAID STATUS
   is_paid?: boolean | number | string | null;
   paid_at?: string | null;
 }
@@ -65,6 +87,13 @@ type SeatBlockedRow = {
   end_at: string;
   source: string;
   note: string | null;
+};
+
+type ViewStateRow = {
+  id: number;
+  enabled: boolean;
+  session_id: string | null;
+  updated_at: string;
 };
 
 const yyyyMmDdLocal = (d: Date): string => {
@@ -81,12 +110,13 @@ const formatTimeText = (iso: string): string => {
 };
 
 const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
-const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
 
 const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
+
+const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
 
 const toBool = (v: unknown): boolean => {
   if (typeof v === "boolean") return v;
@@ -129,7 +159,8 @@ const applyDiscount = (
   return { discountedCost: round2(cost), discountAmount: 0 };
 };
 
-// keep gcash (clamp to due), cash = remaining
+// ✅ keep gcash (clamp to due), cash = remaining
+// (used by DISCOUNT save only; payment modal is now FREE INPUTS)
 const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
   const d = round2(Math.max(0, due));
   if (d <= 0) return { gcash: 0, cash: 0 };
@@ -146,15 +177,6 @@ const splitSeats = (seatStr: string): string[] => {
     .filter((s) => s.length > 0 && s.toUpperCase() !== "N/A");
 };
 
-const formatMinutesToTime = (minutes: number): string => {
-  if (!Number.isFinite(minutes) || minutes <= 0) return "0 min";
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hrs === 0) return `${mins} min`;
-  if (mins === 0) return `${hrs} hour${hrs > 1 ? "s" : ""}`;
-  return `${hrs} hr ${mins} min`;
-};
-
 const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -162,11 +184,13 @@ const Customer_Reservations: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
 
-  // tick so OPEN sessions auto-update display
-  const [nowTick, setNowTick] = useState<number>(Date.now());
+  const [, setViewTick] = useState<number>(0);
 
-  // Date filter (by reservation_date)
+  // Date filter (reservation_date)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+
+  // ✅ Search (Full Name only)
+  const [searchName, setSearchName] = useState<string>("");
 
   // Discount modal
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
@@ -174,6 +198,11 @@ const Customer_Reservations: React.FC = () => {
   const [discountInput, setDiscountInput] = useState<string>("0");
   const [discountReason, setDiscountReason] = useState<string>("");
   const [savingDiscount, setSavingDiscount] = useState<boolean>(false);
+
+  // ✅ Down Payment modal
+  const [dpTarget, setDpTarget] = useState<CustomerSession | null>(null);
+  const [dpInput, setDpInput] = useState<string>("0");
+  const [savingDp, setSavingDp] = useState<boolean>(false);
 
   // Payment modal
   const [paymentTarget, setPaymentTarget] = useState<CustomerSession | null>(null);
@@ -184,53 +213,192 @@ const Customer_Reservations: React.FC = () => {
   // Paid toggle busy id
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
-  const isPromoType = (t: string | null | undefined): boolean => (t ?? "").trim().toLowerCase() === "promo";
+  // ✅ view state (realtime)
+  const [viewEnabled, setViewEnabled] = useState<boolean>(false);
+  const [viewSessionId, setViewSessionId] = useState<string>("");
+
+  // guard (avoid flicker)
+  const viewHydratedRef = useRef<boolean>(false);
+
+  // ✅ CANCEL modal (same as Customer_Lists: requires description + RPC)
+  const [cancelTarget, setCancelTarget] = useState<CustomerSession | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>("");
+  const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
+
+  // ✅ refresh busy
+  const [refreshing, setRefreshing] = useState<boolean>(false);
 
   useEffect(() => {
-    void fetchReservations();
+    void fetchReservationSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* =========================
+     REALTIME VIEW STATE
+  ========================= */
+
+  const writeLocalFallback = (enabled: boolean, sessionId: string | null): void => {
+    localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
+    if (enabled && sessionId) localStorage.setItem(LS_SESSION_ID, sessionId);
+    else localStorage.removeItem(LS_SESSION_ID);
+  };
+
+  const readLocalFallback = (): { enabled: boolean; sessionId: string } => {
+    const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
+    const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
+    return { enabled, sessionId: sid };
+  };
+
+  const applyViewState = (enabled: boolean, sessionId: string): void => {
+    setViewEnabled(enabled);
+    setViewSessionId(sessionId);
+    writeLocalFallback(enabled, enabled ? sessionId : null);
+    setViewTick((x) => x + 1);
+  };
+
+  const hydrateViewState = async (): Promise<void> => {
+    // 1) try DB state
+    const { data, error } = await supabase
+      .from(VIEW_STATE_TABLE)
+      .select("id, enabled, session_id, updated_at")
+      .eq("id", VIEW_STATE_ID)
+      .maybeSingle();
+
+    if (!error && data) {
+      const row = data as ViewStateRow;
+      const enabled = toBool(row.enabled);
+      const sid = String(row.session_id ?? "").trim();
+      applyViewState(enabled, sid);
+      viewHydratedRef.current = true;
+      return;
+    }
+
+    // 2) fallback local
+    const local = readLocalFallback();
+    applyViewState(local.enabled, local.sessionId);
+    viewHydratedRef.current = true;
+  };
+
   useEffect(() => {
-    const t = window.setInterval(() => setNowTick(Date.now()), 10000);
-    return () => window.clearInterval(t);
+    void hydrateViewState();
+
+    const channel = supabase
+      .channel("realtime_customer_view_state_reservations")
+      .on("postgres_changes", { event: "*", schema: "public", table: VIEW_STATE_TABLE }, (payload) => {
+        const next = (payload.new ?? null) as ViewStateRow | null;
+        if (!next) return;
+        if (Number(next.id) !== VIEW_STATE_ID) return;
+
+        const enabled = toBool(next.enabled);
+        const sid = String(next.session_id ?? "").trim();
+
+        if (!viewHydratedRef.current) viewHydratedRef.current = true;
+        applyViewState(enabled, sid);
+      })
+      .subscribe();
+
+    const onStorage = (e: StorageEvent): void => {
+      if (!e.key) return;
+      if (e.key === LS_VIEW_ENABLED || e.key === LS_SESSION_ID) {
+        const local = readLocalFallback();
+        if (!viewHydratedRef.current) applyViewState(local.enabled, local.sessionId);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      void supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchReservations = async (): Promise<void> => {
+  const isCustomerViewOnFor = (sessionId: string): boolean => viewEnabled && viewSessionId === sessionId;
+
+  // ✅ IMPORTANT: since DB is SINGLE ROW with id=1, use UPDATE (NOT UPSERT)
+  const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
+    const sid = enabled && sessionId ? sessionId : null;
+
+    applyViewState(Boolean(enabled), String(sid ?? ""));
+
+    const { error } = await supabase
+      .from(VIEW_STATE_TABLE)
+      .update({
+        enabled: Boolean(enabled),
+        session_id: sid,
+      })
+      .eq("id", VIEW_STATE_ID);
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.warn("setCustomerViewRealtime error:", error.message);
+      writeLocalFallback(Boolean(enabled), sid);
+      setViewTick((x) => x + 1);
+    }
+  };
+
+  const stopCustomerViewRealtime = async (): Promise<void> => {
+    await setCustomerViewRealtime(false, null);
+  };
+
+  /* =========================
+     LIST / FILTER
+  ========================= */
+
+  const filteredSessions = useMemo(() => {
+    const q = searchName.trim().toLowerCase();
+    return sessions.filter((s) => {
+      const sameDate = (s.reservation_date ?? "") === selectedDate;
+      if (!sameDate) return false;
+
+      if (!q) return true;
+      const name = String(s.full_name ?? "").toLowerCase();
+      return name.includes(q);
+    });
+  }, [sessions, selectedDate, searchName]);
+
+  const fetchReservationSessions = async (): Promise<void> => {
     setLoading(true);
 
     const { data, error } = await supabase
       .from("customer_sessions")
       .select("*")
       .eq("reservation", "yes")
-      .neq("customer_type", "promo")
       .order("reservation_date", { ascending: false });
 
     if (error) {
       // eslint-disable-next-line no-console
       console.error(error);
-      alert(`Error loading reservations: ${error.message}`);
+      alert("Error loading reservations");
       setSessions([]);
       setLoading(false);
       return;
     }
 
-    const cleaned = ((data as CustomerSession[]) || []).filter((s) => !isPromoType(s.customer_type));
-    setSessions(cleaned);
+    setSessions((data as CustomerSession[]) || []);
     setLoading(false);
   };
 
-  // filter sessions by reservation_date
-  const filteredSessions = useMemo(() => {
-    return sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
-  }, [sessions, selectedDate]);
+  // ✅ Refresh button action
+  const refreshAll = async (): Promise<void> => {
+    try {
+      setRefreshing(true);
+      await Promise.all([fetchReservationSessions(), hydrateViewState()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
-  // ✅ Open Time detection: hour_avail === "OPEN" (primary)
-  // (Optional legacy fallback) if you still have old 2999 rows
+  const phoneText = (s: CustomerSession): string => {
+    const p = String(s.phone_number ?? "").trim();
+    return p || "N/A";
+  };
+
+  const getDownPayment = (s: CustomerSession): number => round2(Math.max(0, toMoney(s.down_payment ?? 0)));
+
   const isOpenTimeSession = (s: CustomerSession): boolean => {
-    if ((s.hour_avail || "").trim().toUpperCase() === "OPEN") return true;
+    if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
     const end = new Date(s.time_ended);
-    if (!Number.isFinite(end.getTime())) return false;
     return end.getFullYear() >= 2999;
   };
 
@@ -241,6 +409,14 @@ const Customer_Reservations: React.FC = () => {
     return Math.floor((end - start) / (1000 * 60));
   };
 
+  const computeHours = (startIso: string, endIso: string): number => {
+    const start = new Date(startIso).getTime();
+    const end = new Date(endIso).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+    const hours = (end - start) / (1000 * 60 * 60);
+    return Number(hours.toFixed(2));
+  };
+
   const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
     const minutesUsed = diffMinutes(startIso, endIso);
     const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
@@ -248,27 +424,13 @@ const Customer_Reservations: React.FC = () => {
     return round2(chargeMinutes * perMinute);
   };
 
-  const getScheduledStartDateTime = (s: CustomerSession): Date => {
-    const start = new Date(s.time_started);
-    if (s.reservation_date) {
-      const d = new Date(s.reservation_date);
-      start.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
-    }
-    return start;
+  const getLiveTotalCost = (s: CustomerSession): number => {
+    const nowIso = new Date().toISOString();
+    return computeCostWithFreeMinutes(s.time_started, nowIso);
   };
 
-  const getDisplayedTotalMinutes = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
-    return toMoney(s.total_time);
-  };
-
-  // base cost before discount
   const getBaseSystemCost = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) {
-      const endIso = new Date(nowTick).toISOString();
-      return computeCostWithFreeMinutes(s.time_started, endIso);
-    }
-    return toMoney(s.total_amount);
+    return isOpenTimeSession(s) ? getLiveTotalCost(s) : toMoney(s.total_amount);
   };
 
   const getDiscountInfo = (s: CustomerSession): { kind: DiscountKind; value: number; reason: string } => {
@@ -283,28 +445,30 @@ const Customer_Reservations: React.FC = () => {
     return getDiscountTextFrom(di.kind, di.value);
   };
 
-  // final cost after discount
-  const getSessionTotalCost = (s: CustomerSession): number => {
+  // ✅ Payment basis = system cost after discount (NO DP deduction)
+  const getSessionSystemCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
     return applyDiscount(base, di.kind, di.value).discountedCost;
   };
 
-  const getSessionBalance = (s: CustomerSession): number => {
-    const totalCost = getSessionTotalCost(s);
-    return round2(Math.max(0, totalCost - DOWN_PAYMENT));
+  // ✅ display balance/change uses DP (display only)
+  const getSessionBalanceAfterDP = (s: CustomerSession): number => {
+    const systemCost = getSessionSystemCost(s);
+    const dp = getDownPayment(s);
+    return round2(Math.max(0, systemCost - dp));
   };
 
-  const getSessionChange = (s: CustomerSession): number => {
-    const totalCost = getSessionTotalCost(s);
-    return round2(Math.max(0, DOWN_PAYMENT - totalCost));
+  const getSessionChangeAfterDP = (s: CustomerSession): number => {
+    const systemCost = getSessionSystemCost(s);
+    const dp = getDownPayment(s);
+    return round2(Math.max(0, dp - systemCost));
   };
 
-  // one display amount only
   const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
-    const bal = getSessionBalance(s);
-    if (bal > 0) return { label: "Total Balance", value: bal };
-    return { label: "Total Change", value: getSessionChange(s) };
+    const balance = getSessionBalanceAfterDP(s);
+    if (balance > 0) return { label: "Total Balance", value: balance };
+    return { label: "Total Change", value: getSessionChangeAfterDP(s) };
   };
 
   const getPaidInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
@@ -314,24 +478,7 @@ const Customer_Reservations: React.FC = () => {
     return { gcash, cash, totalPaid };
   };
 
-  const getStatus = (session: CustomerSession): string => {
-    const now = new Date(nowTick);
-    const start = getScheduledStartDateTime(session);
-    const end = new Date(session.time_ended);
-
-    if (now < start) return "Upcoming";
-    if (now >= start && now <= end) return "Ongoing";
-    return "Finished";
-  };
-
-  const canShowStopButton = (session: CustomerSession): boolean => {
-    if (!isOpenTimeSession(session)) return false;
-    const start = getScheduledStartDateTime(session).getTime();
-    if (!Number.isFinite(start)) return false;
-    return nowTick >= start;
-  };
-
-  // ✅ Release seat_blocked_times for this session (end_at = now)
+  // ✅ Release reserved seat blocks when stop time / cancel is used
   const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
@@ -354,7 +501,7 @@ const Customer_Reservations: React.FC = () => {
     if (rows.length === 0) {
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
-        .update({ end_at: nowIso, note: "stopped (fallback)" })
+        .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
         .in("seat_number", seats)
         .eq("source", "reserved")
         .gt("end_at", nowIso);
@@ -367,8 +514,7 @@ const Customer_Reservations: React.FC = () => {
     }
 
     const ids = rows.map((r) => r.id);
-
-    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in("id", ids);
+    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped/cancelled" }).in("id", ids);
 
     if (upErr) {
       // eslint-disable-next-line no-console
@@ -376,25 +522,19 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  const stopReservationTime = async (session: CustomerSession): Promise<void> => {
-    if (!canShowStopButton(session)) {
-      alert("Stop Time is only allowed when the reservation date/time has started.");
-      return;
-    }
-
+  const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
       setStoppingId(session.id);
 
       const nowIso = new Date().toISOString();
-      const totalMinutes = diffMinutes(session.time_started, nowIso);
+      const totalHours = computeHours(session.time_started, nowIso);
       const totalCost = computeCostWithFreeMinutes(session.time_started, nowIso);
 
-      // 1) stop session
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
           time_ended: nowIso,
-          total_time: totalMinutes,
+          total_time: totalHours,
           total_amount: totalCost,
           hour_avail: "CLOSED",
         })
@@ -407,15 +547,9 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      // 2) release seats immediately
       await releaseSeatBlocksNow(session, nowIso);
 
-      // 3) update UI
-      setSessions((prev) => {
-        const next = prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s));
-        return next.filter((s) => !isPromoType(s.customer_type));
-      });
-
+      setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
       setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -432,14 +566,80 @@ const Customer_Reservations: React.FC = () => {
     return t || "—";
   };
 
+  const renderStatus = (s: CustomerSession): string => {
+    if (isOpenTimeSession(s)) return "Ongoing";
+    const end = new Date(s.time_ended);
+    if (!Number.isFinite(end.getTime())) return "Finished";
+    return new Date() > end ? "Finished" : "Ongoing";
+  };
+
   const getUsedMinutesForReceipt = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
+    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
     return diffMinutes(s.time_started, s.time_ended);
   };
 
   const getChargeMinutesForReceipt = (s: CustomerSession): number => {
     const used = getUsedMinutesForReceipt(s);
     return Math.max(0, used - FREE_MINUTES);
+  };
+
+  /* =========================
+     ✅ CANCEL FLOW (uses your SQL table via RPC)
+  ========================= */
+
+  const openCancelModal = (s: CustomerSession): void => {
+    setCancelTarget(s);
+    setCancelReason("");
+  };
+
+  const submitCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
+
+    const reason = cancelReason.trim();
+    if (!reason) return;
+
+    try {
+      setCancellingBusy(true);
+
+      // stop customer view if this is being viewed
+      if (isCustomerViewOnFor(cancelTarget.id)) {
+        try {
+          await stopCustomerViewRealtime();
+        } catch {
+          // ignore
+        }
+      }
+
+      // ✅ RPC: inserts into public.customer_sessions_cancelled then deletes original
+      const { error } = await supabase.rpc("cancel_customer_session", {
+        p_session_id: cancelTarget.id,
+        p_reason: reason,
+      });
+
+      if (error) {
+        alert(`Cancel failed: ${error.message}`);
+        return;
+      }
+
+      // release reserved seats
+      const nowIso = new Date().toISOString();
+      await releaseSeatBlocksNow(cancelTarget, nowIso);
+
+      // remove from UI list immediately
+      setSessions((prev) => prev.filter((x) => x.id !== cancelTarget.id));
+
+      // close receipt if same
+      if (selectedSession?.id === cancelTarget.id) setSelectedSession(null);
+
+      setCancelTarget(null);
+      setCancelReason("");
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Cancel failed.");
+    } finally {
+      setCancellingBusy(false);
+    }
   };
 
   // -----------------------
@@ -460,16 +660,16 @@ const Customer_Reservations: React.FC = () => {
     const clean = Number.isFinite(raw) ? Math.max(0, raw) : 0;
     const finalValue = discountKind === "percent" ? clamp(clean, 0, 100) : clean;
 
-    // recompute due AFTER discount, then auto-adjust payments
     const base = getBaseSystemCost(discountTarget);
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
-    const due = round2(Math.max(0, discounted - DOWN_PAYMENT));
+    const dueForPayment = round2(Math.max(0, discounted));
 
+    // ✅ keep your old behavior here (auto adjusts to due)
     const prevPay = getPaidInfo(discountTarget);
-    const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
+    const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
 
     const totalPaid = round2(adjPay.gcash + adjPay.cash);
-    const autoPaid = due > 0 && totalPaid >= due;
+    const autoPaid = dueForPayment <= 0 ? true : totalPaid >= dueForPayment;
 
     try {
       setSavingDiscount(true);
@@ -480,12 +680,8 @@ const Customer_Reservations: React.FC = () => {
           discount_kind: discountKind,
           discount_value: finalValue,
           discount_reason: discountReason.trim(),
-
-          // auto adjust payment to new due
           gcash_amount: adjPay.gcash,
           cash_amount: adjPay.cash,
-
-          // auto set paid status
           is_paid: autoPaid,
           paid_at: autoPaid ? new Date().toISOString() : null,
         })
@@ -511,48 +707,76 @@ const Customer_Reservations: React.FC = () => {
   };
 
   // -----------------------
-  // PAYMENT MODAL
+  // ✅ DOWN PAYMENT MODAL
+  // -----------------------
+  const openDpModal = (s: CustomerSession): void => {
+    setDpTarget(s);
+    setDpInput(String(getDownPayment(s)));
+  };
+
+  const saveDownPayment = async (): Promise<void> => {
+    if (!dpTarget) return;
+
+    const raw = Number(dpInput);
+    const dp = round2(Math.max(0, Number.isFinite(raw) ? raw : 0));
+
+    try {
+      setSavingDp(true);
+
+      const { data: updated, error } = await supabase
+        .from("customer_sessions")
+        .update({ down_payment: dp })
+        .eq("id", dpTarget.id)
+        .select("*")
+        .single();
+
+      if (error || !updated) {
+        alert(`Save down payment error: ${error?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setSessions((prev) => prev.map((s) => (s.id === dpTarget.id ? (updated as CustomerSession) : s)));
+      setSelectedSession((prev) => (prev?.id === dpTarget.id ? (updated as CustomerSession) : prev));
+      setDpTarget(null);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Save down payment failed.");
+    } finally {
+      setSavingDp(false);
+    }
+  };
+
+  // -----------------------
+  // ✅ PAYMENT MODAL (FREE INPUTS — NO LIMIT)
   // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
-    const due = getSessionBalance(s); // after discount
     const pi = getPaidInfo(s);
-
-    const existingGcash = pi.totalPaid > 0 ? pi.gcash : 0;
-    const adj = recalcPaymentsToDue(due, existingGcash);
-
     setPaymentTarget(s);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+    setGcashInput(String(pi.gcash));
+    setCashInput(String(pi.cash));
   };
 
-  const setGcashAndAutoCash = (s: CustomerSession, gcashStr: string): void => {
-    const due = getSessionBalance(s);
-    const gc = Math.max(0, toMoney(gcashStr));
-    const adj = recalcPaymentsToDue(due, gc);
-    setGcashInput(String(adj.gcash));
-    setCashInput(String(adj.cash));
+  const setGcashFree = (gcashStr: string): void => {
+    const v = round2(Math.max(0, toMoney(gcashStr)));
+    setGcashInput(String(v));
   };
 
-  const setCashAndAutoGcash = (s: CustomerSession, cashStr: string): void => {
-    const due = round2(Math.max(0, getSessionBalance(s)));
-    const ca = round2(Math.max(0, toMoney(cashStr)));
-
-    const cash = round2(Math.min(due, ca));
-    const gcash = round2(Math.max(0, due - cash));
-
-    setCashInput(String(cash));
-    setGcashInput(String(gcash));
+  const setCashFree = (cashStr: string): void => {
+    const v = round2(Math.max(0, toMoney(cashStr)));
+    setCashInput(String(v));
   };
 
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = getSessionBalance(paymentTarget); // after discount
-    const gcIn = Math.max(0, toMoney(gcashInput));
-    const adj = recalcPaymentsToDue(due, gcIn);
+    const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-    const totalPaid = round2(adj.gcash + adj.cash);
-    const isPaidAuto = due > 0 && totalPaid >= due;
+    const gc = round2(Math.max(0, toMoney(gcashInput)));
+    const ca = round2(Math.max(0, toMoney(cashInput)));
+
+    const totalPaid = round2(gc + ca);
+    const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
       setSavingPayment(true);
@@ -560,8 +784,8 @@ const Customer_Reservations: React.FC = () => {
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
-          gcash_amount: adj.gcash,
-          cash_amount: adj.cash,
+          gcash_amount: gc,
+          cash_amount: ca,
           is_paid: isPaidAuto,
           paid_at: isPaidAuto ? new Date().toISOString() : null,
         })
@@ -586,9 +810,6 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // PAID / UNPAID TOGGLE (manual)
-  // -----------------------
   const togglePaid = async (s: CustomerSession): Promise<void> => {
     try {
       setTogglingPaidId(s.id);
@@ -622,33 +843,80 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
+  const closeReceipt = async (): Promise<void> => {
+    if (selectedSession && isCustomerViewOnFor(selectedSession.id)) {
+      try {
+        await stopCustomerViewRealtime();
+      } catch {
+        // ignore
+      }
+    }
+    setSelectedSession(null);
+  };
+
   return (
     <IonPage>
-      {/* ✅ SAME BACKGROUND as other pages */}
-      <IonContent scrollY={false} className="staff-content">
+      <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR (same as Customer_Lists) */}
+          {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Reservations</h2>
               <div className="customer-subtext">
                 Showing records for: <strong>{selectedDate}</strong>
               </div>
+
+              <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
+                Customer View: <strong>{viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}</strong>
+              </div>
             </div>
 
             <div className="customer-topbar-right">
-              <label className="date-pill">
-                <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
-                <span className="date-pill-icon" aria-hidden="true">
-                  📅
-                </span>
-              </label>
+              {/* SEARCH */}
+              <div className="customer-searchbar-inline">
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    value={searchName}
+                    onChange={(e) => setSearchName(e.currentTarget.value)}
+                    placeholder="Search by Full Name..."
+                  />
+                  {searchName.trim() && (
+                    <button className="customer-search-clear" onClick={() => setSearchName("")}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* DATE + REFRESH (katabi) */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="date-pill">
+                  <span className="date-pill-label">Date</span>
+                  <input
+                    className="date-pill-input"
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                  />
+                  <span className="date-pill-icon" aria-hidden="true">
+                    📅
+                  </span>
+                </label>
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void refreshAll()}
+                  disabled={loading || refreshing}
+                  title="Refresh list"
+                >
+                  {refreshing ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -656,7 +924,7 @@ const Customer_Reservations: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
-            <p className="customer-note">No reservation records found for this date</p>
+            <p className="customer-note">No reservation data found for this date</p>
           ) : (
             <div className="customer-table-wrap" key={selectedDate}>
               <table className="customer-table">
@@ -664,15 +932,18 @@ const Customer_Reservations: React.FC = () => {
                   <tr>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
+                    <th>Phone #</th>
+                    <th>Type</th>
                     <th>Field</th>
                     <th>Has ID</th>
                     <th>Specific ID</th>
                     <th>Hours</th>
                     <th>Time In</th>
                     <th>Time Out</th>
-                    <th>Total Time</th>
+                    <th>Total Hours</th>
                     <th>Total Balance / Change</th>
                     <th>Discount</th>
+                    <th>Down Payment</th>
                     <th>Payment</th>
                     <th>Paid?</th>
                     <th>Seat</th>
@@ -684,23 +955,28 @@ const Customer_Reservations: React.FC = () => {
                 <tbody>
                   {filteredSessions.map((session) => {
                     const open = isOpenTimeSession(session);
+
                     const disp = getDisplayAmount(session);
 
-                    const due = getSessionBalance(session);
+                    const systemCost = getSessionSystemCost(session);
                     const pi = getPaidInfo(session);
+                    const remainingPay = round2(systemCost - pi.totalPaid); // ✅ can be negative (change)
+
+                    const dp = getDownPayment(session);
 
                     return (
                       <tr key={session.id}>
-                        <td>{session.reservation_date ?? "N/A"}</td>
+                        <td>{session.reservation_date}</td>
                         <td>{session.full_name}</td>
+                        <td>{phoneText(session)}</td>
+                        <td>{session.customer_type}</td>
                         <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
                         <td>{session.id_number ?? "N/A"}</td>
                         <td>{session.hour_avail}</td>
                         <td>{formatTimeText(session.time_started)}</td>
-                        <td>{renderTimeOut(session)}</td>
-
-                        <td>{formatMinutesToTime(getDisplayedTotalMinutes(session))}</td>
+                        <td>{open ? "OPEN" : renderTimeOut(session)}</td>
+                        <td>{session.total_time}</td>
 
                         <td>
                           <div className="cell-stack">
@@ -720,14 +996,30 @@ const Customer_Reservations: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
+                            <span className="cell-strong">₱{dp.toFixed(2)}</span>
+                            <button className="receipt-btn" onClick={() => openDpModal(session)}>
+                              Edit DP
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* PAYMENT */}
+                        <td>
+                          <div className="cell-stack cell-center">
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              {remainingPay >= 0
+                                ? `Remaining ₱${remainingPay.toFixed(2)}`
+                                : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
+                            </span>
+
                             <button
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
-                              disabled={due <= 0}
-                              title={due <= 0 ? "No balance due" : "Set GCash/Cash payment"}
+                              disabled={systemCost <= 0}
+                              title={systemCost <= 0 ? "No due" : "Set GCash/Cash payment (FREE INPUTS, can exceed due)"}
                             >
                               Payment
                             </button>
@@ -746,16 +1038,12 @@ const Customer_Reservations: React.FC = () => {
                         </td>
 
                         <td>{session.seat_number}</td>
-                        <td>{getStatus(session)}</td>
+                        <td>{renderStatus(session)}</td>
 
                         <td>
                           <div className="action-stack">
-                            {open && canShowStopButton(session) && (
-                              <button
-                                className="receipt-btn"
-                                disabled={stoppingId === session.id}
-                                onClick={() => void stopReservationTime(session)}
-                              >
+                            {open && (
+                              <button className="receipt-btn" disabled={stoppingId === session.id} onClick={() => void stopOpenTime(session)}>
                                 {stoppingId === session.id ? "Stopping..." : "Stop Time"}
                               </button>
                             )}
@@ -763,6 +1051,16 @@ const Customer_Reservations: React.FC = () => {
                             <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
                               View Receipt
                             </button>
+
+                            <button className="receipt-btn admin-danger" onClick={() => openCancelModal(session)} title="Cancel requires description">
+                              Cancel
+                            </button>
+
+                            {isCustomerViewOnFor(session.id) ? (
+                              <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span>
+                            ) : (
+                              <span style={{ fontSize: 11, opacity: 0.45 }}>—</span>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -773,7 +1071,94 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* DISCOUNT MODAL (same as Customer_Lists) */}
+          {/* ✅ CANCEL MODAL (REQUIRES DESCRIPTION) */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL RESERVATION</h3>
+                <p className="receipt-subtitle">{cancelTarget.full_name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Reservation Date</span>
+                  <span>{cancelTarget.reservation_date ?? "N/A"}</span>
+                </div>
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{cancelTarget.seat_number}</span>
+                </div>
+
+                <hr />
+
+                <div className="receipt-row" style={{ display: "grid", gap: 8 }}>
+                  <span style={{ fontWeight: 800 }}>Description / Reason (required)</span>
+                  <textarea
+                    className="reason-input"
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.currentTarget.value)}
+                    placeholder="e.g. Customer changed mind, wrong input, staff mistake..."
+                    rows={4}
+                    style={{ width: "100%", resize: "vertical" }}
+                    disabled={cancellingBusy}
+                  />
+                  <div style={{ fontSize: 12, opacity: 0.85 }}>
+                    ⚠️ This record will be moved to <strong>customer_sessions_cancelled</strong>.
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancellingBusy}>
+                    Back
+                  </button>
+
+                  <button
+                    className="receipt-btn admin-danger"
+                    onClick={() => void submitCancel()}
+                    disabled={cancellingBusy || cancelReason.trim().length === 0}
+                    title={cancelReason.trim().length === 0 ? "Reason required" : "Submit cancel"}
+                  >
+                    {cancellingBusy ? "Cancelling..." : "Submit Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ✅ DOWN PAYMENT MODAL */}
+          {dpTarget && (
+            <div className="receipt-overlay" onClick={() => setDpTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DOWN PAYMENT</h3>
+                <p className="receipt-subtitle">{dpTarget.full_name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Down Payment (₱)</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={dpInput}
+                    onChange={(e) => setDpInput(e.currentTarget.value)}
+                  />
+                </div>
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setDpTarget(null)}>
+                    Cancel
+                  </button>
+                  <button className="receipt-btn" onClick={() => void saveDownPayment()} disabled={savingDp}>
+                    {savingDp ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* DISCOUNT MODAL */}
           {discountTarget && (
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -794,9 +1179,7 @@ const Customer_Reservations: React.FC = () => {
                 <div className="receipt-row">
                   <span>Value</span>
                   <div className="inline-input">
-                    <span className="inline-input-prefix">
-                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
-                    </span>
+                    <span className="inline-input-prefix">{discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}</span>
                     <input
                       className="small-input"
                       type="number"
@@ -826,38 +1209,34 @@ const Customer_Reservations: React.FC = () => {
                   const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-                  const due = round2(Math.max(0, discountedCost - DOWN_PAYMENT));
+                  const dueForPayment = round2(Math.max(0, discountedCost));
 
                   const prevPay = getPaidInfo(discountTarget);
-                  const adjPay = recalcPaymentsToDue(due, prevPay.gcash);
+                  const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
 
                   return (
                     <>
                       <hr />
-
                       <div className="receipt-row">
                         <span>System Cost (Before)</span>
                         <span>₱{base.toFixed(2)}</span>
                       </div>
-
                       <div className="receipt-row">
                         <span>Discount</span>
                         <span>{getDiscountTextFrom(discountKind, appliedVal)}</span>
                       </div>
-
                       <div className="receipt-row">
                         <span>Discount Amount</span>
                         <span>₱{discountAmount.toFixed(2)}</span>
                       </div>
-
                       <div className="receipt-row">
-                        <span>Final System Cost</span>
+                        <span>Final System Cost (Payment Basis)</span>
                         <span>₱{discountedCost.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-total">
-                        <span>NEW TOTAL BALANCE</span>
-                        <span>₱{due.toFixed(2)}</span>
+                        <span>NEW PAYMENT DUE</span>
+                        <span>₱{dueForPayment.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -865,6 +1244,11 @@ const Customer_Reservations: React.FC = () => {
                         <span>
                           GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
                         </span>
+                      </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
+                        <span>Note</span>
+                        <span>Payment basis is System Cost after discount (DP not deducted)</span>
                       </div>
                     </>
                   );
@@ -882,7 +1266,7 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* PAYMENT MODAL (same as Customer_Lists) */}
+          {/* ✅ PAYMENT MODAL (FREE INPUTS — NO LIMIT) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -892,18 +1276,26 @@ const Customer_Reservations: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const due = getSessionBalance(paymentTarget);
-                  const gcIn = Math.max(0, toMoney(gcashInput));
-                  const adj = recalcPaymentsToDue(due, gcIn);
+                  const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-                  const totalPaid = round2(adj.gcash + adj.cash);
-                  const remaining = round2(Math.max(0, due - totalPaid));
+                  const gc = round2(Math.max(0, toMoney(gcashInput)));
+                  const ca = round2(Math.max(0, toMoney(cashInput)));
+                  const totalPaid = round2(gc + ca);
+
+                  const diff = round2(due - totalPaid);
+                  const label = diff > 0 ? "Remaining" : "Change";
+                  const value = diff > 0 ? diff : Math.abs(diff);
 
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>Total Balance (Due)</span>
+                        <span>Payment Due (System Cost)</span>
                         <span>₱{due.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
+                        <span>Mode</span>
+                        <span>FREE INPUTS (Cash/GCash can exceed due)</span>
                       </div>
 
                       <div className="receipt-row">
@@ -914,7 +1306,7 @@ const Customer_Reservations: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={gcashInput}
-                          onChange={(e) => setGcashAndAutoCash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setGcashFree(e.currentTarget.value)}
                         />
                       </div>
 
@@ -926,7 +1318,7 @@ const Customer_Reservations: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={cashInput}
-                          onChange={(e) => setCashAndAutoGcash(paymentTarget, e.currentTarget.value)}
+                          onChange={(e) => setCashFree(e.currentTarget.value)}
                         />
                       </div>
 
@@ -938,8 +1330,13 @@ const Customer_Reservations: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining</span>
-                        <span>₱{remaining.toFixed(2)}</span>
+                        <span>{label}</span>
+                        <span>₱{value.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Will be marked</span>
+                        <span className="receipt-status">{due <= 0 ? "PAID" : totalPaid >= due ? "PAID" : "UNPAID"}</span>
                       </div>
 
                       <div className="modal-actions">
@@ -957,14 +1354,14 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL (same classnames as Customer_Lists) */}
+          {/* RECEIPT MODAL */}
           {selectedSession && (
-            <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
+            <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
 
                 <h3 className="receipt-title">ME TYME LOUNGE</h3>
-                <p className="receipt-subtitle">RESERVATION RECEIPT</p>
+                <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
 
                 <hr />
 
@@ -976,6 +1373,21 @@ const Customer_Reservations: React.FC = () => {
                 <div className="receipt-row">
                   <span>Customer</span>
                   <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Phone</span>
+                  <span>{phoneText(selectedSession)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Type</span>
+                  <span>{selectedSession.customer_type}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Field</span>
+                  <span>{selectedSession.customer_field ?? ""}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -1005,13 +1417,9 @@ const Customer_Reservations: React.FC = () => {
                   <span>{getChargeMinutesForReceipt(selectedSession)} min</span>
                 </div>
 
-                {isOpenTimeSession(selectedSession) && canShowStopButton(selectedSession) && (
+                {isOpenTimeSession(selectedSession) && (
                   <div className="block-top">
-                    <button
-                      className="receipt-btn btn-full"
-                      disabled={stoppingId === selectedSession.id}
-                      onClick={() => void stopReservationTime(selectedSession)}
-                    >
+                    <button className="receipt-btn btn-full" disabled={stoppingId === selectedSession.id} onClick={() => void stopOpenTime(selectedSession)}>
                       {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
@@ -1020,26 +1428,36 @@ const Customer_Reservations: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const disp = getDisplayAmount(selectedSession);
+                  const dp = getDownPayment(selectedSession);
 
                   const baseCost = getBaseSystemCost(selectedSession);
                   const di = getDiscountInfo(selectedSession);
                   const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
+                  const dueForPayment = round2(Math.max(0, discountCalc.discountedCost));
                   const pi = getPaidInfo(selectedSession);
-                  const due = getSessionBalance(selectedSession);
-                  const remaining = round2(Math.max(0, due - pi.totalPaid));
+
+                  const dpBalance = round2(Math.max(0, dueForPayment - dp));
+                  const dpChange = round2(Math.max(0, dp - dueForPayment));
+
+                  const dpDisp =
+                    dpBalance > 0
+                      ? ({ label: "Total Balance", value: dpBalance } as const)
+                      : ({ label: "Total Change", value: dpChange } as const);
+
+                  const bottomLabel = dpBalance > 0 ? "PAYMENT DUE" : "TOTAL CHANGE";
+                  const bottomValue = dpBalance > 0 ? dpBalance : dpChange;
 
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>{disp.label}</span>
-                        <span>₱{disp.value.toFixed(2)}</span>
+                        <span>{dpDisp.label}</span>
+                        <span>₱{dpDisp.value.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Down Payment</span>
-                        <span>₱{DOWN_PAYMENT.toFixed(2)}</span>
+                        <span>₱{dp.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1053,8 +1471,8 @@ const Customer_Reservations: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>System Cost</span>
-                        <span>₱{discountCalc.discountedCost.toFixed(2)}</span>
+                        <span>System Cost (Payment Basis)</span>
+                        <span>₱{dueForPayment.toFixed(2)}</span>
                       </div>
 
                       <hr />
@@ -1075,8 +1493,8 @@ const Customer_Reservations: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Remaining Balance</span>
-                        <span>₱{remaining.toFixed(2)}</span>
+                        <span>Remaining Balance (After DP)</span>
+                        <span>₱{dpBalance.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1085,8 +1503,8 @@ const Customer_Reservations: React.FC = () => {
                       </div>
 
                       <div className="receipt-total">
-                        <span>{disp.label.toUpperCase()}</span>
-                        <span>₱{disp.value.toFixed(2)}</span>
+                        <span>{bottomLabel}</span>
+                        <span>₱{bottomValue.toFixed(2)}</span>
                       </div>
                     </>
                   );
@@ -1097,9 +1515,27 @@ const Customer_Reservations: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <button className="close-btn" onClick={() => setSelectedSession(null)}>
-                  Close
-                </button>
+                <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    className="receipt-btn"
+                    disabled={!selectedSession}
+                    onClick={() => {
+                      if (!selectedSession) return;
+                      const on = isCustomerViewOnFor(selectedSession.id);
+                      void setCustomerViewRealtime(!on, !on ? selectedSession.id : null);
+                    }}
+                  >
+                    {selectedSession && isCustomerViewOnFor(selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
+                  </button>
+
+                  <button className="receipt-btn admin-danger" onClick={() => openCancelModal(selectedSession)} disabled={cancellingBusy} title="Cancel requires description">
+                    Cancel
+                  </button>
+
+                  <button className="close-btn" onClick={() => void closeReceipt()} disabled={cancellingBusy}>
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           )}
