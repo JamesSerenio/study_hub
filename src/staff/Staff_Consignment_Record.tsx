@@ -2,8 +2,9 @@
 // ✅ NO DATE FILTER (shows ALL records)
 // ✅ Date/Time shown in PH
 // ✅ Overall Sales shown is NET (gross - 15%)
-// ✅ Remaining = NET Overall Sales - Cashouts
-// ✅ Cash Out modal (per Full Name) + cashout history (ALL TIME)
+// ✅ Remaining = NET Overall Sales - Cashouts (CASH+GCASH)
+// ✅ Cash Out modal now supports CASH + GCASH + history breakdown
+// ✅ Cash Out history shows payment_method (CASH/GCASH)
 // ✅ SAME classnames as Customer_Add_ons.tsx (customer-* / receipt-btn)
 // ✅ Category column (from consignment.category)
 // ✅ Grouping can be by CATEGORY (toggle)
@@ -19,6 +20,7 @@ import { supabase } from "../utils/supabaseClient";
 
 type NumericLike = number | string;
 type GroupBy = "full_name" | "category";
+type PayMethod = "cash" | "gcash";
 
 interface ConsignmentRow {
   id: string;
@@ -46,6 +48,7 @@ interface CashOutRow {
   full_name: string;
   category: string | null;
   cashout_amount: NumericLike;
+  payment_method: PayMethod;
   note: string | null;
 }
 
@@ -54,12 +57,22 @@ interface CashOutRowNoCategory {
   created_at: string;
   full_name: string;
   cashout_amount: NumericLike;
+  payment_method: PayMethod;
+  note: string | null;
+}
+
+interface CashOutRowNoMethod {
+  id: string;
+  created_at: string;
+  full_name: string;
+  category: string | null;
+  cashout_amount: NumericLike;
   note: string | null;
 }
 
 /* ---------------- helpers ---------------- */
 
-const CONSIGNMENT_BUCKET = "consignment"; // 🔧 CHANGE if your bucket name differs
+const CONSIGNMENT_BUCKET = "consignment";
 
 const toNumber = (v: NumericLike | null | undefined): number => {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
@@ -129,11 +142,10 @@ const deleteStorageByUrl = async (url: string | null, bucket: string): Promise<v
   if (!url) return;
 
   const path = extractPathFromPublicUrl(url, bucket);
-  if (!path) return; // if it's not from this bucket, skip (maybe external URL)
+  if (!path) return;
 
   const { error } = await supabase.storage.from(bucket).remove([path]);
   if (error) {
-    // do not hard-fail (still allow DB ops)
     // eslint-disable-next-line no-console
     console.error("Storage delete error:", error);
   }
@@ -157,6 +169,8 @@ const uploadConsignmentImage = async (file: File, bucket: string): Promise<strin
   return publicUrl;
 };
 
+const labelPay = (m: PayMethod): string => (m === "gcash" ? "GCASH" : "CASH");
+
 /* ---------------- money rules ---------------- */
 
 type PersonAgg = {
@@ -170,7 +184,10 @@ type PersonAgg = {
   gross_total: number;
   net_total: number;
 
+  cashout_cash: number;
+  cashout_gcash: number;
   cashout_total: number;
+
   remaining: number; // net_total - cashouts
 };
 
@@ -193,7 +210,11 @@ const Staff_Consignment_Record: React.FC = () => {
   // cashout modal
   const [cashoutTargetKey, setCashoutTargetKey] = useState<string | null>(null);
   const [cashoutTargetLabel, setCashoutTargetLabel] = useState<string>("");
-  const [cashoutAmount, setCashoutAmount] = useState<string>("");
+
+  // ✅ new: two inputs
+  const [cashAmount, setCashAmount] = useState<string>("");
+  const [gcashAmount, setGcashAmount] = useState<string>("");
+
   const [cashoutNote, setCashoutNote] = useState<string>("");
   const [savingCashout, setSavingCashout] = useState<boolean>(false);
 
@@ -211,7 +232,7 @@ const Staff_Consignment_Record: React.FC = () => {
   // image upload state
   const [newImageFile, setNewImageFile] = useState<File | null>(null);
   const [newImagePreview, setNewImagePreview] = useState<string>("");
-  const [removeImage, setRemoveImage] = useState<boolean>(false); // user wants to remove image
+  const [removeImage, setRemoveImage] = useState<boolean>(false);
 
   const [restockTarget, setRestockTarget] = useState<ConsignmentRow | null>(null);
   const [restockQty, setRestockQty] = useState<string>("");
@@ -266,45 +287,75 @@ const Staff_Consignment_Record: React.FC = () => {
       return;
     }
 
-    const withCat = await supabase
+    // 1) try: has category + payment_method
+    const withCatMethod = await supabase
       .from("consignment_cash_outs")
-      .select("id, created_at, full_name, category, cashout_amount, note")
+      .select("id, created_at, full_name, category, cashout_amount, payment_method, note")
       .order("created_at", { ascending: false })
       .returns<CashOutRow[]>();
 
-    if (withCat.error) {
-      const noCat = await supabase
-        .from("consignment_cash_outs")
-        .select("id, created_at, full_name, cashout_amount, note")
-        .order("created_at", { ascending: false })
-        .returns<CashOutRowNoCategory[]>();
-
-      if (noCat.error) {
-        // eslint-disable-next-line no-console
-        console.error("FETCH CASH OUTS ERROR:", noCat.error);
-        setSalesRows(sales ?? []);
-        setCashouts([]);
-        setLoading(false);
-        return;
-      }
-
-      const mapped: CashOutRow[] = (noCat.data ?? []).map((r) => ({
-        id: r.id,
-        created_at: r.created_at,
-        full_name: r.full_name,
-        category: null,
-        cashout_amount: r.cashout_amount,
-        note: r.note,
+    if (!withCatMethod.error) {
+      const mapped = (withCatMethod.data ?? []).map((r) => ({
+        ...r,
+        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash" ? "gcash" : "cash") as PayMethod,
       }));
-
       setSalesRows(sales ?? []);
       setCashouts(mapped);
       setLoading(false);
       return;
     }
 
+    // 2) fallback: no category but has payment_method
+    const noCatMethod = await supabase
+      .from("consignment_cash_outs")
+      .select("id, created_at, full_name, cashout_amount, payment_method, note")
+      .order("created_at", { ascending: false })
+      .returns<CashOutRowNoCategory[]>();
+
+    if (!noCatMethod.error) {
+      const mapped: CashOutRow[] = (noCatMethod.data ?? []).map((r) => ({
+        id: r.id,
+        created_at: r.created_at,
+        full_name: r.full_name,
+        category: null,
+        cashout_amount: r.cashout_amount,
+        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash" ? "gcash" : "cash") as PayMethod,
+        note: r.note,
+      }));
+      setSalesRows(sales ?? []);
+      setCashouts(mapped);
+      setLoading(false);
+      return;
+    }
+
+    // 3) last fallback: old table (no payment_method) -> treat as CASH
+    const old = await supabase
+      .from("consignment_cash_outs")
+      .select("id, created_at, full_name, category, cashout_amount, note")
+      .order("created_at", { ascending: false })
+      .returns<CashOutRowNoMethod[]>();
+
+    if (old.error) {
+      // eslint-disable-next-line no-console
+      console.error("FETCH CASH OUTS ERROR:", old.error);
+      setSalesRows(sales ?? []);
+      setCashouts([]);
+      setLoading(false);
+      return;
+    }
+
+    const mapped: CashOutRow[] = (old.data ?? []).map((r) => ({
+      id: r.id,
+      created_at: r.created_at,
+      full_name: r.full_name,
+      category: r.category ?? null,
+      cashout_amount: r.cashout_amount,
+      payment_method: "cash",
+      note: r.note,
+    }));
+
     setSalesRows(sales ?? []);
-    setCashouts(withCat.data ?? []);
+    setCashouts(mapped);
     setLoading(false);
   };
 
@@ -334,6 +385,8 @@ const Staff_Consignment_Record: React.FC = () => {
         expected_total: 0,
         gross_total: 0,
         net_total: 0,
+        cashout_cash: 0,
+        cashout_gcash: 0,
         cashout_total: 0,
         remaining: 0,
       };
@@ -365,7 +418,12 @@ const Staff_Consignment_Record: React.FC = () => {
       const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
       const key = norm(label);
       const a = getOrCreate(key, label);
-      a.cashout_total = round2(a.cashout_total + round2(toNumber(c.cashout_amount)));
+
+      const amt = round2(toNumber(c.cashout_amount));
+      if (c.payment_method === "gcash") a.cashout_gcash = round2(a.cashout_gcash + amt);
+      else a.cashout_cash = round2(a.cashout_cash + amt);
+
+      a.cashout_total = round2(a.cashout_cash + a.cashout_gcash);
     }
 
     for (const a of map.values()) {
@@ -401,7 +459,10 @@ const Staff_Consignment_Record: React.FC = () => {
   const openCashout = (agg: PersonAgg): void => {
     setCashoutTargetKey(agg.key);
     setCashoutTargetLabel(agg.label);
-    setCashoutAmount("");
+
+    setCashAmount("");
+    setGcashAmount("");
+
     setCashoutNote("");
   };
 
@@ -416,16 +477,19 @@ const Staff_Consignment_Record: React.FC = () => {
   const submitCashout = async (): Promise<void> => {
     if (!cashoutTargetKey) return;
 
-    const amt = round2(Math.max(0, Number(cashoutAmount) || 0));
-    if (amt <= 0) {
-      alert("Cashout amount must be > 0");
+    const cash = round2(Math.max(0, Number(cashAmount) || 0));
+    const gcash = round2(Math.max(0, Number(gcashAmount) || 0));
+    const total = round2(cash + gcash);
+
+    if (total <= 0) {
+      alert("Please enter CASH or GCASH amount (must be > 0).");
       return;
     }
 
     const target = perKeyAggAll.find((p) => p.key === cashoutTargetKey);
     const remaining = round2(target?.remaining ?? 0);
 
-    if (amt > remaining) {
+    if (total > remaining) {
       alert(`Insufficient remaining. Remaining: ${moneyText(remaining)}`);
       return;
     }
@@ -434,8 +498,9 @@ const Staff_Consignment_Record: React.FC = () => {
       setSavingCashout(true);
 
       const { error } = await supabase.rpc("cashout_consignment_oversale", {
-        p_cashout_amount: amt,
         p_full_name: cashoutTargetLabel,
+        p_cash_amount: cash,
+        p_gcash_amount: gcash,
         p_note: cashoutNote.trim() || null,
       });
 
@@ -468,7 +533,6 @@ const Staff_Consignment_Record: React.FC = () => {
       price: String(toNumber(r.price) || ""),
     });
 
-    // reset image editing state
     setNewImageFile(null);
     if (newImagePreview.startsWith("blob:")) URL.revokeObjectURL(newImagePreview);
     setNewImagePreview("");
@@ -501,10 +565,8 @@ const Staff_Consignment_Record: React.FC = () => {
 
       const oldUrl = editTarget.image_url ?? null;
 
-      // Decide new image_url
       let nextImageUrl: string | null = oldUrl;
 
-      // if user picked a new file, upload first
       if (newImageFile) {
         const uploadedUrl = await uploadConsignmentImage(newImageFile, CONSIGNMENT_BUCKET);
         nextImageUrl = uploadedUrl;
@@ -535,7 +597,6 @@ const Staff_Consignment_Record: React.FC = () => {
         return;
       }
 
-      // ✅ If image was replaced or removed, delete OLD image from storage
       const changedImage = (oldUrl ?? null) !== (nextImageUrl ?? null);
       if (changedImage && oldUrl) {
         await deleteStorageByUrl(oldUrl, CONSIGNMENT_BUCKET);
@@ -543,7 +604,6 @@ const Staff_Consignment_Record: React.FC = () => {
 
       setEditTarget(null);
 
-      // cleanup preview
       if (newImagePreview.startsWith("blob:")) URL.revokeObjectURL(newImagePreview);
       setNewImagePreview("");
       setNewImageFile(null);
@@ -601,10 +661,8 @@ const Staff_Consignment_Record: React.FC = () => {
     try {
       setDeleting(true);
 
-      // ✅ delete image first (if stored in our bucket)
       await deleteStorageByUrl(deleteTarget.image_url ?? null, CONSIGNMENT_BUCKET);
 
-      // ✅ then delete DB row
       const { error } = await supabase.from("consignment").delete().eq("id", deleteTarget.id);
 
       if (error) {
@@ -631,7 +689,6 @@ const Staff_Consignment_Record: React.FC = () => {
                 Showing: <strong>ALL</strong> • Rows: <strong>{rowsCount}</strong> • Groups: <strong>{perKeyAgg.length}</strong>
               </div>
 
-              {/* group toggle */}
               <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button className="receipt-btn" onClick={() => setGroupBy("full_name")} style={{ opacity: groupBy === "full_name" ? 1 : 0.6 }}>
                   Group by Full Name
@@ -704,7 +761,12 @@ const Staff_Consignment_Record: React.FC = () => {
                         <td style={{ fontWeight: 900 }}>{p.total_sold}</td>
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.expected_total)}</td>
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.net_total)}</td>
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{moneyText(p.cashout_total)}</td>
+                        <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>
+                          {moneyText(p.cashout_total)}
+                          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+                            Cash: {moneyText(p.cashout_cash)} • GCash: {moneyText(p.cashout_gcash)}
+                          </div>
+                        </td>
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1100 }}>{moneyText(p.remaining)}</td>
 
                         <td>
@@ -852,7 +914,9 @@ const Staff_Consignment_Record: React.FC = () => {
                   const net = grossToNet(gross);
 
                   const remaining = round2(p?.remaining ?? 0);
-                  const cashout = round2(p?.cashout_total ?? 0);
+                  const cash = round2(p?.cashout_cash ?? 0);
+                  const gcash = round2(p?.cashout_gcash ?? 0);
+                  const totalCashouts = round2(p?.cashout_total ?? 0);
                   const expected = round2(p?.expected_total ?? 0);
 
                   return (
@@ -868,8 +932,17 @@ const Staff_Consignment_Record: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Cash Outs</span>
-                        <span>{moneyText(cashout)}</span>
+                        <span>Cash Outs (Total)</span>
+                        <span>{moneyText(totalCashouts)}</span>
+                      </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ Cash</span>
+                        <span>{moneyText(cash)}</span>
+                      </div>
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ GCash</span>
+                        <span>{moneyText(gcash)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -879,18 +952,40 @@ const Staff_Consignment_Record: React.FC = () => {
 
                       <hr />
 
+                      {/* ✅ NEW: Cash + GCash inputs */}
                       <div className="receipt-row">
-                        <span>Cashout Amount</span>
+                        <span>Cash Amount</span>
                         <input
                           className="money-input"
                           type="number"
                           min="0"
                           step="0.01"
-                          value={cashoutAmount}
-                          onChange={(e) => setCashoutAmount(e.currentTarget.value)}
+                          value={cashAmount}
+                          onChange={(e) => setCashAmount(e.currentTarget.value)}
                           placeholder="0.00"
                           disabled={savingCashout}
                         />
+                      </div>
+
+                      <div className="receipt-row" style={{ marginTop: 8 }}>
+                        <span>GCash Amount</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashAmount}
+                          onChange={(e) => setGcashAmount(e.currentTarget.value)}
+                          placeholder="0.00"
+                          disabled={savingCashout}
+                        />
+                      </div>
+
+                      <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+                        Total Cashout:{" "}
+                        <b>
+                          {moneyText(round2((Number(cashAmount) || 0) + (Number(gcashAmount) || 0)))}
+                        </b>
                       </div>
 
                       <div style={{ marginTop: 10 }}>
@@ -931,7 +1026,9 @@ const Staff_Consignment_Record: React.FC = () => {
                               }}
                             >
                               <div style={{ minWidth: 0 }}>
-                                <div style={{ fontWeight: 900 }}>{formatPHDateTime(h.created_at)}</div>
+                                <div style={{ fontWeight: 900 }}>
+                                  {formatPHDateTime(h.created_at)} • {labelPay(h.payment_method)}
+                                </div>
                                 {h.note ? <div style={{ fontSize: 12, opacity: 0.8 }}>{h.note}</div> : null}
                               </div>
                               <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>{moneyText(round2(toNumber(h.cashout_amount)))}</div>
@@ -998,7 +1095,6 @@ const Staff_Consignment_Record: React.FC = () => {
                         onChange={(e) => {
                           const f = e.currentTarget.files?.[0] ?? null;
                           onPickImage(f);
-                          // reset input so choosing same file again works
                           e.currentTarget.value = "";
                         }}
                       />

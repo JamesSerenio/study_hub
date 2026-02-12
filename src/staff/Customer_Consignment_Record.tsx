@@ -5,8 +5,10 @@
 // ✅ Payment modal (Cash + GCash, FREE INPUTS, NO LIMIT) -> RPC set_consignment_payment
 // ✅ Manual PAID toggle -> RPC set_consignment_paid_status
 // ✅ VOID (required reason) -> returns stock by RPC void_customer_consignment
+// ✅ NEW: DELETE (hard delete) -> removes row from database (customer_session_consignment)
 // ✅ STRICT TS: NO any
 // ✅ Same "customer-*" + "receipt-btn" vibe
+// ✅ Date filter: DEFAULT TODAY (PH) + query filtered by PH day range (like your screenshot)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
@@ -39,8 +41,6 @@ type CustomerConsignmentRow = {
   cash_amount: NumericLike;
   is_paid: boolean | number | string | null;
 
-  // ✅ if you don't have these cols yet, keep them in types; your SELECT may fail.
-  // If your table DOES NOT have these columns, remove them from select + type.
   voided: boolean | number | string | null;
   voided_at: string | null;
   void_note: string | null;
@@ -130,6 +130,23 @@ const sizeText = (s: string | null | undefined): string => {
   return v.length ? v : "—";
 };
 
+// ✅ today key in PH (YYYY-MM-DD)
+const todayPHKey = (): string => {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+};
+
+// ✅ PH day range -> UTC ISO bounds for timestamptz filtering
+const phDayRange = (dateKey: string): { startISO: string; endISO: string } => {
+  const startPH = new Date(`${dateKey}T00:00:00.000+08:00`);
+  const endPH = new Date(`${dateKey}T23:59:59.999+08:00`);
+  return { startISO: startPH.toISOString(), endISO: endPH.toISOString() };
+};
+
 /* ---------------- component ---------------- */
 
 const Customer_Consignment_Record: React.FC = () => {
@@ -137,6 +154,9 @@ const Customer_Consignment_Record: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
 
   const [searchText, setSearchText] = useState<string>("");
+
+  // ✅ DEFAULT TODAY (PH)
+  const [selectedDate, setSelectedDate] = useState<string>(() => todayPHKey()); // YYYY-MM-DD
 
   // receipt modal
   const [selectedOrder, setSelectedOrder] = useState<ReceiptGroup | null>(null);
@@ -155,13 +175,20 @@ const Customer_Consignment_Record: React.FC = () => {
   const [voidReason, setVoidReason] = useState<string>("");
   const [voiding, setVoiding] = useState<boolean>(false);
 
-  useEffect(() => {
-    void fetchAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // DELETE modal
+  const [deleteTarget, setDeleteTarget] = useState<CustomerConsignmentRow | null>(null);
+  const [deleting, setDeleting] = useState<boolean>(false);
 
-  const fetchAll = async (): Promise<void> => {
+  // ✅ fetch whenever date changes
+  useEffect(() => {
+    void fetchByDate(selectedDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
+
+  const fetchByDate = async (dateKey: string): Promise<void> => {
     setLoading(true);
+
+    const { startISO, endISO } = phDayRange(dateKey);
 
     const { data, error } = await supabase
       .from("customer_session_consignment")
@@ -190,6 +217,8 @@ const Customer_Consignment_Record: React.FC = () => {
         )
       `
       )
+      .gte("created_at", startISO)
+      .lte("created_at", endISO)
       .order("created_at", { ascending: false })
       .returns<CustomerConsignmentRow[]>();
 
@@ -205,6 +234,7 @@ const Customer_Consignment_Record: React.FC = () => {
     setLoading(false);
   };
 
+  // ✅ now only SEARCH locally (date is already filtered server-side)
   const filtered = useMemo(() => {
     const q = norm(searchText);
     if (!q) return rows;
@@ -252,7 +282,7 @@ const Customer_Consignment_Record: React.FC = () => {
     const paid = toBool(r.is_paid);
     const isVoided = toBool(r.voided);
 
-    const group: ReceiptGroup = {
+    return {
       id: r.id,
       created_at: r.created_at,
       full_name: r.full_name,
@@ -278,11 +308,9 @@ const Customer_Consignment_Record: React.FC = () => {
       voided_at: r.voided_at ?? null,
       void_note: r.void_note ?? null,
     };
-
-    return group;
   };
 
-  /* ---------------- actions (receipt/payment/paid/void) ---------------- */
+  /* ---------------- actions ---------------- */
 
   const openReceipt = (r: CustomerConsignmentRow): void => {
     setSelectedOrder(makeReceiptGroup(r));
@@ -299,8 +327,6 @@ const Customer_Consignment_Record: React.FC = () => {
     setCashInput(String(round2(Math.max(0, g.cash_amount))));
   };
 
-  // ✅ RPC needed on your DB:
-  // set_consignment_payment(p_row_id uuid, p_gcash numeric, p_cash numeric)
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
@@ -322,7 +348,7 @@ const Customer_Consignment_Record: React.FC = () => {
       }
 
       setPaymentTarget(null);
-      await fetchAll();
+      await fetchByDate(selectedDate);
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -332,8 +358,6 @@ const Customer_Consignment_Record: React.FC = () => {
     }
   };
 
-  // ✅ RPC needed on your DB:
-  // set_consignment_paid_status(p_row_id uuid, p_is_paid boolean)
   const togglePaid = async (r: CustomerConsignmentRow): Promise<void> => {
     if (toBool(r.voided)) {
       alert("Cannot change paid status for VOIDED record.");
@@ -355,7 +379,7 @@ const Customer_Consignment_Record: React.FC = () => {
         return;
       }
 
-      await fetchAll();
+      await fetchByDate(selectedDate);
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -401,13 +425,54 @@ const Customer_Consignment_Record: React.FC = () => {
       setVoidReason("");
       setSelectedOrder(null);
       setPaymentTarget(null);
-      await fetchAll();
+      await fetchByDate(selectedDate);
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
       alert("Void failed.");
     } finally {
       setVoiding(false);
+    }
+  };
+
+  const openDelete = (r: CustomerConsignmentRow): void => {
+    setDeleteTarget(r);
+  };
+
+  const confirmDelete = async (): Promise<void> => {
+    if (!deleteTarget) return;
+
+    // ⚠️ Recommend: delete only if VOIDED (para hindi magulo sold/stock)
+    // If gusto mo allow kahit hindi voided, remove this check.
+    if (!toBool(deleteTarget.voided)) {
+      const ok = window.confirm(
+        "This record is NOT voided.\nDeleting it will NOT return stock automatically.\n\nRecommended: VOID first then DELETE.\n\nContinue delete anyway?"
+      );
+      if (!ok) return;
+    }
+
+    try {
+      setDeleting(true);
+
+      const { error } = await supabase.from("customer_session_consignment").delete().eq("id", deleteTarget.id);
+
+      if (error) {
+        alert(`Delete failed: ${error.message}`);
+        return;
+      }
+
+      setDeleteTarget(null);
+      setSelectedOrder(null);
+      setPaymentTarget(null);
+      setVoidTarget(null);
+
+      await fetchByDate(selectedDate);
+    } catch (e: unknown) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Delete failed.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -419,6 +484,10 @@ const Customer_Consignment_Record: React.FC = () => {
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Consignment Records</h2>
+              <div className="customer-subtext">
+                Showing records for: <strong>{selectedDate}</strong>
+              </div>
+
               <div className="customer-subtext">
                 Rows: <strong>{filtered.length}</strong> • Total: <strong>{moneyText(totals.totalAmount)}</strong> • Cash:{" "}
                 <strong>{moneyText(totals.totalCash)}</strong> • GCash: <strong>{moneyText(totals.totalGcash)}</strong>
@@ -449,8 +518,26 @@ const Customer_Consignment_Record: React.FC = () => {
                 </div>
               </div>
 
-              <div className="admin-tools-row">
-                <button className="receipt-btn" onClick={() => void fetchAll()} disabled={loading}>
+              {/* DATE + REFRESH */}
+              <div className="admin-tools-row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <div className="date-pill" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ fontWeight: 900 }}>Date</span>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.currentTarget.value)}
+                    style={{
+                      border: "1px solid rgba(0,0,0,0.12)",
+                      borderRadius: 12,
+                      padding: "8px 10px",
+                      fontWeight: 800,
+                      outline: "none",
+                      background: "rgba(255,255,255,0.85)",
+                    }}
+                  />
+                </div>
+
+                <button className="receipt-btn" onClick={() => void fetchByDate(selectedDate)} disabled={loading}>
                   Refresh
                 </button>
               </div>
@@ -460,7 +547,7 @@ const Customer_Consignment_Record: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filtered.length === 0 ? (
-            <p className="customer-note">No consignment records found.</p>
+            <p className="customer-note">No data found for this date</p>
           ) : (
             <div className="customer-table-wrap">
               <table className="customer-table">
@@ -544,7 +631,6 @@ const Customer_Consignment_Record: React.FC = () => {
                         <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{moneyText(price)}</td>
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(total)}</td>
 
-                        {/* ✅ PAYMENT like Add-ons */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">
@@ -562,7 +648,6 @@ const Customer_Consignment_Record: React.FC = () => {
                           </div>
                         </td>
 
-                        {/* ✅ PAID badge toggle like Add-ons */}
                         <td>
                           <button
                             className={`receipt-btn pay-badge ${isPaid ? "pay-badge--paid" : "pay-badge--unpaid"}`}
@@ -588,6 +673,15 @@ const Customer_Consignment_Record: React.FC = () => {
                             >
                               Void
                             </button>
+
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openDelete(r)}
+                              title="Delete this record from database"
+                              disabled={deleting}
+                            >
+                              Delete
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -595,6 +689,44 @@ const Customer_Consignment_Record: React.FC = () => {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* ✅ DELETE CONFIRM MODAL */}
+          {deleteTarget && (
+            <div className="receipt-overlay" onClick={() => (deleting ? null : setDeleteTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DELETE RECORD</h3>
+                <p className="receipt-subtitle">
+                  {show(deleteTarget.consignment?.item_name)} • Qty: <b>{deleteTarget.quantity}</b> • Seat:{" "}
+                  <b>{show(deleteTarget.seat_number)}</b>
+                </p>
+
+                <hr />
+
+                <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.4 }}>
+                  This will permanently remove the record from <b>customer_session_consignment</b>.
+                  <br />
+                  {toBool(deleteTarget.voided) ? (
+                    <>
+                      Status: <b>VOIDED</b> (safe to delete)
+                    </>
+                  ) : (
+                    <>
+                      Status: <b>NOT VOIDED</b> — recommended: <b>Void first</b> so stock is returned.
+                    </>
+                  )}
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                    Cancel
+                  </button>
+                  <button className="receipt-btn" onClick={() => void confirmDelete()} disabled={deleting}>
+                    {deleting ? "Deleting..." : "Confirm Delete"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -684,7 +816,7 @@ const Customer_Consignment_Record: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ RECEIPT MODAL (same vibe) */}
+          {/* ✅ RECEIPT MODAL */}
           {selectedOrder && (
             <div className="receipt-overlay" onClick={() => setSelectedOrder(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
