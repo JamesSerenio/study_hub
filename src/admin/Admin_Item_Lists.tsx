@@ -834,7 +834,7 @@ const Admin_Item_Lists: React.FC = () => {
                     <th>Sold</th>
                     <th>Expired</th>
                     <th>Inventory Loss</th>
-                    <th>Bilin</th>
+                    <th>Bale</th>
                     <th>Stocks</th>
                     <th>Expenses</th>
                     <th>Overall</th>

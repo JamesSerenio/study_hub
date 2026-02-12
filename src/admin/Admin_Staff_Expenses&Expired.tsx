@@ -754,7 +754,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
                   <option value="damage_expired">Damage/Expired</option>
                   <option value="inventory_loss">Inventory Loss</option>
                   <option value="cash_outs">Cash Outs</option>
-                  <option value="bilin">Bilin (Utang)</option>
+                  <option value="bilin">Bale (Utang)</option>
                 </select>
                 <span className="date-pill-icon" aria-hidden="true">
                   ▾

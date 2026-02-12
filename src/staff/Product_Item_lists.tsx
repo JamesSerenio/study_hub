@@ -535,7 +535,7 @@ const Product_Item_Lists: React.FC = () => {
                   <IonCol className="pil-col">Sold</IonCol>
                   <IonCol className="pil-col">Expired</IonCol>
                   <IonCol className="pil-col">Inventory Loss</IonCol>
-                  <IonCol className="pil-col">Bilin</IonCol>
+                  <IonCol className="pil-col">Bale</IonCol>
                   <IonCol className="pil-col">Stocks</IonCol>
                   <IonCol className="pil-col">Expenses (qty)</IonCol>
                   <IonCol className="pil-col">Overall</IonCol>
@@ -626,7 +626,7 @@ const Product_Item_Lists: React.FC = () => {
                   >
                     <IonSelectOption value="expired">Expired / Damaged</IonSelectOption>
                     <IonSelectOption value="inventory_loss">Inventory Loss</IonSelectOption>
-                    <IonSelectOption value="bilin">Bilin (Utang / Bought)</IonSelectOption>
+                    <IonSelectOption value="bilin">Bale (Utang / Bought)</IonSelectOption>
                   </IonSelect>
                 </IonItem>
 

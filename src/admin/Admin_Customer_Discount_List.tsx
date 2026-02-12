@@ -1,14 +1,15 @@
 // src/pages/Admin_Customer_Discount_List.tsx
 // ✅ SAME classnames as Customer_Lists.tsx (one CSS)
 // ✅ Full code + Export to Excel (.xlsx) by selected date
-// ✅ strict TS (NO "any")
+// ✅ strict TS (NO any)
 // ✅ ADD Phone # in table + receipt + excel
 // ✅ Refresh button (reload list)
 // ✅ Payment modal is FREE INPUTS (Cash & GCash can exceed due)
 // ✅ Action "Delete" replaced with "Cancel"
-// ✅ NEW: Show Attendance records (promo_attendance) per booking
+// ✅ NEW: Show Attendance records (promo_booking_attendance) per booking
 // ✅ NEW: Admin/Staff can edit attempts_left + max_attempts + validity_end_at per booking
 // ✅ FIX: totals/status auto-refresh every 10s using tick properly
+// ✅ Attendance button shows IN/OUT based on latest attendance row (out_at null => IN, else OUT)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -22,15 +23,15 @@ type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
 type DiscountKind = "none" | "percent" | "amount";
 
-type AttendanceAction = "in" | "out";
-
-type PromoAttendanceRow = {
+type PromoBookingAttendanceRow = {
   id: string;
   created_at: string;
   promo_booking_id: string;
-  promo_code: string;
-  action: AttendanceAction;
-  staff_id: string | null;
+
+  local_day: string; // date as ISO "YYYY-MM-DD"
+  in_at: string; // timestamptz ISO
+  out_at: string | null; // timestamptz ISO or null
+  auto_out: boolean;
   note: string | null;
 };
 
@@ -311,6 +312,14 @@ const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
   }
 };
 
+/* ================= Attendance helpers ================= */
+
+const attStatus = (r: PromoBookingAttendanceRow): "IN" | "OUT" => (r.out_at ? "OUT" : "IN");
+
+const attStamp = (r: PromoBookingAttendanceRow): string => (r.out_at ? r.out_at : r.in_at);
+
+const fmtPH = (iso: string): string => new Date(iso).toLocaleString("en-PH");
+
 const Admin_Customer_Discount_List: React.FC = () => {
   const [rows, setRows] = useState<PromoBookingRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -350,8 +359,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const [cancelling, setCancelling] = useState<boolean>(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
-  // Attendance
-  const [attMap, setAttMap] = useState<Record<string, PromoAttendanceRow[]>>({});
+  // Attendance (NEW TABLE)
+  const [attMap, setAttMap] = useState<Record<string, PromoBookingAttendanceRow[]>>({});
   const [attModalTarget, setAttModalTarget] = useState<PromoBookingRow | null>(null);
 
   // ✅ Admin/Staff edit attempts/validity modal
@@ -405,27 +414,31 @@ const Admin_Customer_Discount_List: React.FC = () => {
     const safeIds = bookingIds.slice(0, 500);
 
     const { data, error } = await supabase
-      .from("promo_attendance")
-      .select("id, created_at, promo_booking_id, promo_code, action, staff_id, note")
+      .from("promo_booking_attendance")
+      .select("id, created_at, promo_booking_id, local_day, in_at, out_at, auto_out, note")
       .in("promo_booking_id", safeIds)
-      .order("created_at", { ascending: false })
-      .limit(2000);
+      .order("local_day", { ascending: false })
+      .order("in_at", { ascending: false })
+      .limit(3000);
 
     if (error) {
       setAttMap({});
       return;
     }
 
-    const aRows = (data ?? []) as PromoAttendanceRow[];
-    const map: Record<string, PromoAttendanceRow[]> = {};
+    const aRows = (data ?? []) as PromoBookingAttendanceRow[];
+
+    // group
+    const map: Record<string, PromoBookingAttendanceRow[]> = {};
     for (const r of aRows) {
       const k = String(r.promo_booking_id);
       if (!map[k]) map[k] = [];
       map[k].push(r);
     }
 
+    // keep recent per booking
     Object.keys(map).forEach((k) => {
-      map[k] = map[k].slice(0, 20);
+      map[k] = map[k].slice(0, 30);
     });
 
     setAttMap(map);
@@ -549,15 +562,16 @@ const Admin_Customer_Discount_List: React.FC = () => {
       { header: "Attempts Left", key: "attempts_left", width: 12 },
       { header: "Max Attempts", key: "max_attempts", width: 12 },
       { header: "Validity End", key: "validity", width: 20 },
+      { header: "Last Attendance", key: "att_last", width: 18 },
     ];
 
-    ws.mergeCells("A1", "S1");
+    ws.mergeCells("A1", "T1");
     ws.getCell("A1").value = "ME TYME LOUNGE — DISCOUNT / PROMO REPORT";
     ws.getCell("A1").font = { bold: true, size: 16 };
     ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
     ws.getRow(1).height = 26;
 
-    ws.mergeCells("A2", "S2");
+    ws.mergeCells("A2", "T2");
     ws.getCell("A2").value = `Date: ${selectedDate}`;
     ws.getCell("A2").font = { size: 11 };
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
@@ -569,7 +583,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       if (ab) {
         const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
         const imgId = wb.addImage({ buffer: ab, extension: ext });
-        ws.addImage(imgId, { tl: { col: 14.8, row: 0.2 }, ext: { width: 170, height: 60 } });
+        ws.addImage(imgId, { tl: { col: 15.5, row: 0.2 }, ext: { width: 170, height: 60 } });
       }
     }
 
@@ -601,6 +615,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
       const pi = getPaidInfo(r);
       const remaining = round2(due - pi.totalPaid); // can be negative (change)
 
+      const lastAtt = (attMap[r.id] ?? [])[0] ?? null;
+      const attText = lastAtt ? `${attStatus(lastAtt)} • ${new Date(attStamp(lastAtt)).toLocaleString("en-PH")}` : "—";
+
       const row = ws.addRow({
         created_at: new Date(r.created_at).toLocaleString("en-PH"),
         customer: r.full_name,
@@ -622,6 +639,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
         attempts_left: r.attempts_left,
         max_attempts: r.max_attempts,
         validity: r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—",
+        att_last: attText,
       });
 
       const rowIndex = row.number;
@@ -976,9 +994,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
   /* ================= Attendance UI helpers ================= */
 
-  const logsFor = (bookingId: string): PromoAttendanceRow[] => attMap[bookingId] ?? [];
+  const logsFor = (bookingId: string): PromoBookingAttendanceRow[] => attMap[bookingId] ?? [];
 
-  const lastLogFor = (bookingId: string): PromoAttendanceRow | null => {
+  const lastLogFor = (bookingId: string): PromoBookingAttendanceRow | null => {
     const logs = logsFor(bookingId);
     return logs.length ? logs[0] : null;
   };
@@ -1124,7 +1142,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
                     const { due, discountAmount } = getDueAfterDiscount(r);
                     const pi = getPaidInfo(r);
                     const remaining = round2(due - pi.totalPaid);
+
                     const last = lastLogFor(r.id);
+                    const lastState = last ? attStatus(last) : null;
+                    const lastTime = last ? fmtPH(attStamp(last)) : "No logs";
 
                     return (
                       <tr key={r.id}>
@@ -1186,8 +1207,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                               Attempts Left: <b>{r.attempts_left}</b> / Max: <b>{r.max_attempts}</b>
                             </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              Validity:{" "}
-                              <b>{r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—"}</b>
+                              Validity: <b>{r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—"}</b>
                               {r.validity_end_at && isExpired(r.validity_end_at) ? (
                                 <span style={{ marginLeft: 6, color: "#b00020", fontWeight: 900 }}>EXPIRED</span>
                               ) : null}
@@ -1200,8 +1220,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
-                            <span className="cell-strong">{last ? `${String(last.action).toUpperCase()}` : "—"}</span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>{last ? new Date(last.created_at).toLocaleString("en-PH") : "No logs"}</span>
+                            <span className="cell-strong">{lastState ? lastState : "—"}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>{lastTime}</span>
                             <button className="receipt-btn" onClick={() => setAttModalTarget(r)}>
                               Attendance
                             </button>
@@ -1229,7 +1249,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ ATTENDANCE MODAL */}
+          {/* ✅ ATTENDANCE MODAL (promo_booking_attendance) */}
           {attModalTarget && (
             <div className="receipt-overlay" onClick={() => setAttModalTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1240,38 +1260,44 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                 <hr />
 
-                <div style={{ fontWeight: 900, marginBottom: 10 }}>Recent Logs</div>
+                <div style={{ fontWeight: 900, marginBottom: 10 }}>Recent Days</div>
 
                 {logsFor(attModalTarget.id).length === 0 ? (
                   <div style={{ opacity: 0.8, fontSize: 13 }}>No attendance logs.</div>
                 ) : (
                   <div style={{ display: "grid", gap: 8 }}>
-                    {logsFor(attModalTarget.id).map((h) => (
-                      <div
-                        key={h.id}
-                        style={{
-                          border: "1px solid rgba(0,0,0,0.10)",
-                          borderRadius: 12,
-                          padding: 10,
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 10,
-                          alignItems: "flex-start",
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 1000 }}>
-                            {String(h.action).toUpperCase()} • {new Date(h.created_at).toLocaleString("en-PH")}
+                    {logsFor(attModalTarget.id).map((h) => {
+                      const status = attStatus(h);
+                      return (
+                        <div
+                          key={h.id}
+                          style={{
+                            border: "1px solid rgba(0,0,0,0.10)",
+                            borderRadius: 12,
+                            padding: 10,
+                            display: "grid",
+                            gap: 6,
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                            <div style={{ fontWeight: 1000 }}>
+                              {status} • {h.local_day}
+                            </div>
+                            <div style={{ fontWeight: 900, opacity: 0.8, whiteSpace: "nowrap" }}>{h.auto_out ? "AUTO OUT" : "—"}</div>
                           </div>
-                          <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-                            Code: <b>{h.promo_code}</b>
-                          </div>
-                          {h.note ? <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>{h.note}</div> : null}
-                        </div>
 
-                        <div style={{ fontWeight: 900, opacity: 0.8, whiteSpace: "nowrap" }}>{h.staff_id ? "STAFF" : "—"}</div>
-                      </div>
-                    ))}
+                          <div style={{ fontSize: 12, opacity: 0.9 }}>
+                            <b>IN:</b> {fmtPH(h.in_at)}
+                          </div>
+
+                          <div style={{ fontSize: 12, opacity: 0.9 }}>
+                            <b>OUT:</b> {h.out_at ? fmtPH(h.out_at) : "—"}
+                          </div>
+
+                          {h.note ? <div style={{ fontSize: 12, opacity: 0.85 }}>{h.note}</div> : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -1327,7 +1353,13 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                 <div className="receipt-row" style={{ marginTop: 10 }}>
                   <span>Validity End</span>
-                  <input className="money-input" type="datetime-local" value={ruleValidityInput} onChange={(e) => setRuleValidityInput(e.currentTarget.value)} disabled={savingRule} />
+                  <input
+                    className="money-input"
+                    type="datetime-local"
+                    value={ruleValidityInput}
+                    onChange={(e) => setRuleValidityInput(e.currentTarget.value)}
+                    disabled={savingRule}
+                  />
                 </div>
 
                 <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>If blank = no expiry.</div>
@@ -1628,29 +1660,32 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 <hr />
 
                 <div style={{ fontWeight: 900, marginBottom: 8 }}>Attendance Logs</div>
+
                 {logsFor(selected.id).length === 0 ? (
                   <div style={{ opacity: 0.8, fontSize: 13 }}>No attendance logs.</div>
                 ) : (
                   <div style={{ display: "grid", gap: 8 }}>
-                    {logsFor(selected.id).slice(0, 8).map((h) => (
+                    {logsFor(selected.id).slice(0, 10).map((h) => (
                       <div
                         key={h.id}
                         style={{
                           border: "1px solid rgba(0,0,0,0.10)",
                           borderRadius: 12,
                           padding: 10,
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 10,
+                          display: "grid",
+                          gap: 4,
                         }}
                       >
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 1000 }}>
-                            {String(h.action).toUpperCase()} • {new Date(h.created_at).toLocaleString("en-PH")}
-                          </div>
-                          {h.note ? <div style={{ fontSize: 12, opacity: 0.85 }}>{h.note}</div> : null}
+                        <div style={{ fontWeight: 1000 }}>
+                          {attStatus(h)} • {h.local_day} {h.auto_out ? "• AUTO OUT" : ""}
                         </div>
-                        <div style={{ fontWeight: 900, opacity: 0.8 }}>{h.staff_id ? "STAFF" : "—"}</div>
+                        <div style={{ fontSize: 12, opacity: 0.9 }}>
+                          <b>IN:</b> {fmtPH(h.in_at)}
+                        </div>
+                        <div style={{ fontSize: 12, opacity: 0.9 }}>
+                          <b>OUT:</b> {h.out_at ? fmtPH(h.out_at) : "—"}
+                        </div>
+                        {h.note ? <div style={{ fontSize: 12, opacity: 0.85 }}>{h.note}</div> : null}
                       </div>
                     ))}
                   </div>
