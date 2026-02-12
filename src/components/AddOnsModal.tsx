@@ -65,7 +65,8 @@ type AddOnRow = {
 
 type ConsignmentRow = {
   id: string;
-  full_name: string;
+  full_name: string; // owner name (old)
+  category?: string | null; // ✅ if you already have consignment.category, use it
   item_name: string;
   size: string | null;
   image_url: string | null;
@@ -100,7 +101,7 @@ interface AddOn {
 interface ConsignmentItem {
   kind: "consignment";
   id: string;
-  category: string; // owner full_name
+  category: string; // ✅ show as CATEGORY in UI
   size: string | null;
   name: string; // item_name
   price: number;
@@ -226,7 +227,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
       // ✅ Remove "Consignment" category rows from Add-Ons list
       const mapped = mappedAll.filter((a) => !isConsignmentCategory(a.category));
-
       setItems(mapped);
       return;
     }
@@ -234,8 +234,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     // consignment
     const { data, error } = await supabase
       .from("consignment")
-      .select("id, full_name, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks")
+      .select("id, full_name, category, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks")
       .gt("stocks", 0)
+      .order("category", { ascending: true })
       .order("full_name", { ascending: true })
       .order("size", { ascending: true })
       .order("item_name", { ascending: true })
@@ -249,20 +250,27 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       return;
     }
 
-    const mapped: ConsignmentItem[] = (data ?? []).map((r) => ({
-      kind: "consignment",
-      id: r.id,
-      category: String(r.full_name ?? "").trim() || "Consignment",
-      name: String(r.item_name ?? "").trim() || "-",
-      size: r.size ?? null,
-      image_url: r.image_url ?? null,
-      price: toNum(r.price),
-      restocked: toInt(r.restocked),
-      sold: toInt(r.sold),
-      stocks: toInt(r.stocks),
-      overall_sales: toNum(r.overall_sales),
-      expected_sales: toNum(r.expected_sales),
-    }));
+    const mapped: ConsignmentItem[] = (data ?? []).map((r) => {
+      // ✅ CATEGORY VALUE:
+      // priority: consignment.category (if you already have it)
+      // fallback: full_name (old owner)
+      const categoryLabel = String((r.category ?? r.full_name) ?? "").trim() || "Consignment";
+
+      return {
+        kind: "consignment",
+        id: r.id,
+        category: categoryLabel,
+        name: String(r.item_name ?? "").trim() || "-",
+        size: r.size ?? null,
+        image_url: r.image_url ?? null,
+        price: toNum(r.price),
+        restocked: toInt(r.restocked),
+        sold: toInt(r.sold),
+        stocks: toInt(r.stocks),
+        overall_sales: toNum(r.overall_sales),
+        expected_sales: toNum(r.expected_sales),
+      };
+    });
 
     setItems(mapped);
   };
@@ -270,7 +278,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
   // ✅ categories list (also hide "consignment" when mode is add_ons)
   const categories = useMemo(() => {
     const base = items.map((a) => a.category).filter((c) => c.trim().length > 0);
-
     const filtered = mode === "add_ons" ? base.filter((c) => !isConsignmentCategory(c)) : base;
 
     const uniq = Array.from(new Set(filtered));
@@ -322,7 +329,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? item.stocks)));
       const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
 
-      const chosenTotalSameId = prev.filter((s) => s.id === id).reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
+      const chosenTotalSameId = prev
+        .filter((s) => s.id === id)
+        .reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
 
       const chosenOtherSameId = Math.max(0, chosenTotalSameId - currentQty);
       const maxAllowedForThis = Math.max(0, stocks - chosenOtherSameId);
@@ -544,6 +553,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     }
   };
 
+  const blockLabel = mode === "add_ons" ? "Category" : "Category";
+  const blockPlaceholder = mode === "add_ons" ? "Choose a category" : "Choose a category";
+
   return (
     <>
       <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
@@ -620,10 +632,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                 <div key={`cat-${index}`} className="addon-block">
                   <div className="addon-row">
                     <IonItem className="form-item addon-flex">
-                      <IonLabel position="stacked">{mode === "add_ons" ? `Select Category ${index + 1}` : `Select Owner ${index + 1}`}</IonLabel>
+                      <IonLabel position="stacked">{`Select ${blockLabel} ${index + 1}`}</IonLabel>
                       <IonSelect
                         value={category}
-                        placeholder={mode === "add_ons" ? "Choose a category" : "Choose an owner"}
+                        placeholder={blockPlaceholder}
                         onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}
                       >
                         {categories.map((cat) => (
@@ -796,7 +808,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     <IonLabel>
                       <div style={{ fontWeight: 800 }}>
                         {a.name}
-                        {isConsignmentItem(a) ? <span style={{ marginLeft: 8, opacity: 0.7, fontWeight: 700 }}>• Owner</span> : null}
+                        {isConsignmentItem(a) ? <span style={{ marginLeft: 8, opacity: 0.7, fontWeight: 700 }}>• Category</span> : null}
                       </div>
                       {cleanSize(a.size) ? <div style={{ opacity: 0.85 }}>Size: {cleanSize(a.size)}</div> : null}
                       <div style={{ marginTop: 4 }}>
