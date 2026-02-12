@@ -4,9 +4,12 @@
 // ✅ Required/errors/success = IonAlert modal only
 // ✅ Uses seat_blocked_times (EXCLUDE overlap) to block seats/conference after saving promo
 // ✅ Friendly overlap modal when seat_blocked_times_no_overlap hit
-// ✅ After success OK: closes THIS promo modal only (does NOT trigger parent "Thank you" unless your parent onSaved() shows it)
-// ✅ THEMED: className="booking-modal" + bookadd-card + form-item (same as Booking)
-// ✅ NEW: Phone Number required + modal validation (must start 09 + exactly 11 digits)
+// ✅ After success OK: closes THIS promo modal only
+// ✅ THEMED: className="booking-modal" + bookadd-card + form-item
+// ✅ NEW: Phone Number required + 09 + exactly 11 digits
+// ✅ NEW: If promo duration >= 7 days => auto-generate PROMO CODE
+// ✅ NEW: Save promo_code + created_by_staff_id (if staff/admin logged in)
+// ✅ NEW: Attendance IN/OUT by input code (same modal) => insert to promo_attendance
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -78,13 +81,29 @@ type SeatBlockedInsert = {
   note: string | null;
 };
 
+type PromoBookingCodeLookupRow = {
+  id: string;
+  promo_code: string | null;
+  full_name: string;
+  phone_number: string | null;
+};
+
+type PromoAttendanceRow = {
+  id: string;
+  created_at: string;
+  promo_code: string;
+  action: "in" | "out";
+  staff_id: string | null;
+  note: string | null;
+};
+
 const isPackageArea = (v: unknown): v is PackageArea =>
   v === "common_area" || v === "conference_room";
 
 /* ================= HELPERS ================= */
 
 const toNum = (v: number | string | null | undefined): number => {
-  if (typeof v === "number") return v;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "string") {
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
@@ -92,10 +111,6 @@ const toNum = (v: number | string | null | undefined): number => {
   return 0;
 };
 
-/**
- * datetime-local gives "YYYY-MM-DDTHH:mm" (no timezone)
- * We want to store timestamptz accurately -> interpret as local time then toISOString()
- */
 const localToIso = (v: string): string => new Date(v).toISOString();
 
 const isoToLocal = (iso: string): string => {
@@ -169,10 +184,14 @@ const normalizePhone = (raw: string): string => String(raw).replace(/\D/g, "");
 const isValidPHPhone09 = (digits: string): boolean => /^09\d{9}$/.test(digits);
 const phoneErrorMessage = (digits: string): string | null => {
   if (!digits) return "Phone number is required.";
-  if (!digits.startsWith("09")) return "Phone number must start with 09.\n\nExample: 09123456789";
-  if (digits.length < 11) return "Phone number is too short. It must be exactly 11 digits.\n\nExample: 09123456789";
-  if (digits.length > 11) return "Phone number is too long. It must be exactly 11 digits.\n\nExample: 09123456789";
-  if (!isValidPHPhone09(digits)) return "Invalid phone number.\n\nExample: 09123456789";
+  if (!digits.startsWith("09"))
+    return "Phone number must start with 09.\n\nExample: 09123456789";
+  if (digits.length < 11)
+    return "Phone number is too short. It must be exactly 11 digits.\n\nExample: 09123456789";
+  if (digits.length > 11)
+    return "Phone number is too long. It must be exactly 11 digits.\n\nExample: 09123456789";
+  if (!isValidPHPhone09(digits))
+    return "Invalid phone number.\n\nExample: 09123456789";
   return null;
 };
 
@@ -185,7 +204,6 @@ const checkPromoAvailability = async (params: {
 }): Promise<{ ok: boolean; message?: string }> => {
   const { area, seatNumber, startIso, endIso } = params;
 
-  // promo_bookings conflicts
   let q1 = supabase
     .from("promo_bookings")
     .select("id", { count: "exact", head: true })
@@ -209,7 +227,6 @@ const checkPromoAvailability = async (params: {
     };
   }
 
-  // customer_sessions conflicts
   const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
 
   const r2 = await supabase
@@ -246,6 +263,30 @@ const isSeatBlockedOverlap = (msg: string): boolean => {
   );
 };
 
+/** convert option duration to "approx days" for threshold check */
+const approxDaysFromOption = (opt: PackageOptionRow | null): number => {
+  if (!opt) return 0;
+  const v = Number(opt.duration_value || 0);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  if (opt.duration_unit === "hour") return 0;
+  if (opt.duration_unit === "day") return v;
+  if (opt.duration_unit === "month") return v * 30;
+  return v * 365; // year
+};
+
+const randomCode = (len: number): string => {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no confusing O/0/I/1
+  let out = "";
+  for (let i = 0; i < len; i += 1) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+};
+
+const normalizeCode = (v: string): string =>
+  String(v || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .trim();
+
 /* ================= COMPONENT ================= */
 
 const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatGroups }) => {
@@ -264,8 +305,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     setAlertOpen(true);
   };
 
+  // ================= NEW: role/staff detection (no extra props) =================
+  const localRole = useMemo(() => String(localStorage.getItem("role") ?? "").toLowerCase(), []);
+  const isStaffLike = useMemo(() => localRole === "staff" || localRole === "admin", [localRole]);
+
   const [fullName, setFullName] = useState<string>("");
-  const [phoneNumber, setPhoneNumber] = useState<string>(""); // ✅ NEW
+  const [phoneNumber, setPhoneNumber] = useState<string>("");
   const [area, setArea] = useState<PackageArea>("common_area");
   const [packageId, setPackageId] = useState<string>("");
   const [optionId, setOptionId] = useState<string>("");
@@ -277,6 +322,18 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
   const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
   const [conferenceBlocked, setConferenceBlocked] = useState<boolean>(false);
+
+  // ✅ NEW: promo code state (generated if >= 7 days)
+  const [promoCode, setPromoCode] = useState<string>("");
+  const [codeBusy, setCodeBusy] = useState<boolean>(false);
+
+  // ✅ NEW: Attendance UI state
+  const [codeInput, setCodeInput] = useState<string>("");
+  const [attAction, setAttAction] = useState<"in" | "out">("in");
+  const [attNote, setAttNote] = useState<string>("");
+  const [attBusy, setAttBusy] = useState<boolean>(false);
+  const [attHistory, setAttHistory] = useState<PromoAttendanceRow[]>([]);
+  const [attLookupBusy, setAttLookupBusy] = useState<boolean>(false);
 
   const allSeats = useMemo<{ label: string; value: string }[]>(() => {
     const list: { label: string; value: string }[] = [];
@@ -342,6 +399,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       .gt("end_at", start);
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error(error);
       setOccupiedSeats([]);
       setConferenceBlocked(false);
@@ -355,6 +413,46 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     setConferenceBlocked(blockedSeats.includes("CONFERENCE_ROOM"));
   };
 
+  // ================= NEW: generate unique promo code =================
+  const ensureUniquePromoCode = async (): Promise<string> => {
+    // try few times
+    for (let i = 0; i < 10; i += 1) {
+      const candidate = randomCode(8);
+      const { count, error } = await supabase
+        .from("promo_bookings")
+        .select("id", { count: "exact", head: true })
+        .eq("promo_code", candidate);
+
+      if (error) {
+        // if table/column not found, surface it cleanly
+        throw new Error(error.message);
+      }
+      if ((count ?? 0) === 0) return candidate;
+    }
+    // fallback: longer
+    return `${randomCode(10)}`;
+  };
+
+  const maybeGenerateCode = async (): Promise<void> => {
+    const days = approxDaysFromOption(selectedOption);
+    if (days < 7) {
+      setPromoCode("");
+      return;
+    }
+    if (promoCode) return; // already generated
+    try {
+      setCodeBusy(true);
+      const c = await ensureUniquePromoCode();
+      setPromoCode(c);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Code generation failed.";
+      showAlert("Error", msg);
+      setPromoCode("");
+    } finally {
+      setCodeBusy(false);
+    }
+  };
+
   // load packages/options + reset fields on open
   useEffect(() => {
     if (!isOpen) return;
@@ -363,7 +461,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setLoading(true);
 
       setFullName("");
-      setPhoneNumber(""); // ✅ NEW reset
+      setPhoneNumber("");
       setArea("common_area");
       setPackageId("");
       setOptionId("");
@@ -371,6 +469,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setStartIso("");
       setOccupiedSeats([]);
       setConferenceBlocked(false);
+
+      setPromoCode("");
+      setCodeInput("");
+      setAttAction("in");
+      setAttNote("");
+      setAttHistory([]);
 
       const pkRes = await supabase
         .from("packages")
@@ -412,23 +516,23 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     setPackageId("");
     setOptionId("");
     setSeatNumber("");
+    setPromoCode("");
   }, [area]);
 
   useEffect(() => {
     setOptionId("");
     setSeatNumber("");
+    setPromoCode("");
   }, [packageId]);
 
   // update blocked seats when schedule changes
   useEffect(() => {
     if (!isOpen) return;
-
     if (!startIso || !endIso) {
       setOccupiedSeats([]);
       setConferenceBlocked(false);
       return;
     }
-
     void fetchBlocked(startIso, endIso);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, startIso, endIso, allSeatValues.join("|")]);
@@ -449,6 +553,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     showAlert("Not Available", "Conference room is not available for the selected schedule.");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, area, startIso, endIso, conferenceBlocked]);
+
+  // ✅ NEW: when option changes, if >=7 days generate code
+  useEffect(() => {
+    if (!isOpen) return;
+    void maybeGenerateCode();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, optionId]);
 
   // ✅ create seat block row(s) after promo save
   const createSeatBlock = async (params: {
@@ -490,13 +601,21 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     return { ok: true };
   };
 
+  const copyText = async (text: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showAlert("Copied", "Code copied to clipboard.");
+    } catch {
+      showAlert("Copy Failed", "Your browser blocked clipboard. You can manually copy the code.");
+    }
+  };
+
   const submitPromo = async (): Promise<void> => {
     const name = fullName.trim();
     const phoneDigits = normalizePhone(phoneNumber);
 
     if (!name) return showAlert("Required", "Full name is required.");
 
-    // ✅ Phone validation -> IonAlert
     const pErr = phoneErrorMessage(phoneDigits);
     if (pErr) return showAlert("Invalid Phone Number", pErr);
 
@@ -521,62 +640,180 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       }
     }
 
-    setLoading(true);
+    // ✅ ensure code if >= 7 days
+    const needCode = approxDaysFromOption(selectedOption) >= 7;
+    let finalCode: string | null = null;
 
-    // extra safety: promo_bookings + sessions check
-    const availability = await checkPromoAvailability({ area, seatNumber, startIso, endIso });
-    if (!availability.ok) {
-      setLoading(false);
-      return showAlert("Not Available", availability.message ?? "Not available.");
-    }
+    try {
+      setLoading(true);
 
-    const userRes = await supabase.auth.getUser();
-    const userId = userRes.data.user?.id ?? null;
-
-    const payload = {
-      user_id: userId,
-      full_name: name,
-      phone_number: phoneDigits, // ✅ NEW saved to DB
-      area,
-      package_id: selectedPackage.id,
-      package_option_id: selectedOption.id,
-      seat_number: area === "common_area" ? seatNumber : null,
-      start_at: startIso,
-      end_at: endIso,
-      price: toNum(selectedOption.price),
-      status: computeStatus(startIso, endIso),
-    };
-
-    const ins = await supabase.from("promo_bookings").insert(payload);
-
-    if (ins.error) {
-      setLoading(false);
-
-      if (isConferenceOverlapConstraint(ins.error.message)) {
-        return showAlert("Not Available", "Conference room is not available for the selected schedule.");
+      if (needCode) {
+        if (!promoCode) {
+          setCodeBusy(true);
+          finalCode = await ensureUniquePromoCode();
+          setPromoCode(finalCode);
+        } else {
+          finalCode = promoCode;
+        }
       }
 
-      return showAlert("Error", ins.error.message);
-    }
+      const availability = await checkPromoAvailability({ area, seatNumber, startIso, endIso });
+      if (!availability.ok) {
+        setLoading(false);
+        return showAlert("Not Available", availability.message ?? "Not available.");
+      }
 
-    // ✅ NOW block the seat/conference in seat_blocked_times
-    const blockRes = await createSeatBlock({
-      userId,
-      area,
-      seatNumber,
-      startIso,
-      endIso,
-    });
+      const userRes = await supabase.auth.getUser();
+      const userId = userRes.data.user?.id ?? null;
 
-    if (!blockRes.ok) {
+      // ✅ created_by_staff_id only if staff/admin logged in
+      const createdByStaffId = isStaffLike ? userId : null;
+
+      const payload = {
+        user_id: userId, // can be null for anon
+        full_name: name,
+        phone_number: phoneDigits,
+        area,
+        package_id: selectedPackage.id,
+        package_option_id: selectedOption.id,
+        seat_number: area === "common_area" ? seatNumber : null,
+        start_at: startIso,
+        end_at: endIso,
+        price: toNum(selectedOption.price),
+        status: computeStatus(startIso, endIso),
+
+        // ✅ NEW
+        promo_code: needCode ? (finalCode ?? promoCode) : null,
+        created_by_staff_id: createdByStaffId,
+      };
+
+      const ins = await supabase.from("promo_bookings").insert(payload);
+
+      if (ins.error) {
+        if (isConferenceOverlapConstraint(ins.error.message)) {
+          setLoading(false);
+          return showAlert("Not Available", "Conference room is not available for the selected schedule.");
+        }
+        setLoading(false);
+        return showAlert("Error", ins.error.message);
+      }
+
+      const blockRes = await createSeatBlock({
+        userId,
+        area,
+        seatNumber,
+        startIso,
+        endIso,
+      });
+
+      if (!blockRes.ok) {
+        setLoading(false);
+        return showAlert("Not Available", blockRes.message ?? "Not available.");
+      }
+
       setLoading(false);
-      return showAlert("Not Available", blockRes.message ?? "Not available.");
+
+      // show success with code if any
+      if (needCode && (finalCode ?? promoCode)) {
+        showAlert(
+          "Saved",
+          `Promo booking saved successfully.\n\nCODE: ${(finalCode ?? promoCode) as string}\n\nUse this code for attendance IN/OUT.`,
+          "close_after_save"
+        );
+      } else {
+        showAlert("Saved", "Promo booking saved successfully.", "close_after_save");
+      }
+
+      onSaved();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Save failed.";
+      setLoading(false);
+      showAlert("Error", msg);
+    } finally {
+      setCodeBusy(false);
     }
+  };
 
-    setLoading(false);
+  // ================= NEW: Attendance by code =================
 
-    onSaved(); // refresh only
-    showAlert("Saved", "Promo booking saved successfully.", "close_after_save");
+  const loadAttendanceHistory = async (code: string): Promise<void> => {
+    const c = normalizeCode(code);
+    if (!c) {
+      setAttHistory([]);
+      return;
+    }
+    try {
+      setAttLookupBusy(true);
+      const { data, error } = await supabase
+        .from("promo_attendance")
+        .select("id, created_at, promo_code, action, staff_id, note")
+        .eq("promo_code", c)
+        .order("created_at", { ascending: false })
+        .limit(8);
+
+      if (error) {
+        setAttHistory([]);
+        return;
+      }
+      setAttHistory((data ?? []) as PromoAttendanceRow[]);
+    } finally {
+      setAttLookupBusy(false);
+    }
+  };
+
+  const submitAttendance = async (): Promise<void> => {
+    const c = normalizeCode(codeInput);
+    if (!c) return showAlert("Required", "Input promo code first.");
+
+    try {
+      setAttBusy(true);
+
+      // find booking by code
+      const { data: booking, error: bErr } = await supabase
+        .from("promo_bookings")
+        .select("id, promo_code, full_name, phone_number")
+        .eq("promo_code", c)
+        .maybeSingle();
+
+      if (bErr) {
+        setAttBusy(false);
+        return showAlert("Error", bErr.message);
+      }
+      if (!booking) {
+        setAttBusy(false);
+        return showAlert("Not Found", "No promo booking found for that code.");
+      }
+
+      const userRes = await supabase.auth.getUser();
+      const staffId = userRes.data.user?.id ?? null; // if staff logged in, it will be set; else null
+
+      const payload = {
+        promo_booking_id: (booking as PromoBookingCodeLookupRow).id,
+        promo_code: c,
+        action: attAction,
+        staff_id: staffId,
+        note: attNote.trim() || null,
+      };
+
+      const { error: insErr } = await supabase.from("promo_attendance").insert(payload);
+      if (insErr) {
+        setAttBusy(false);
+        return showAlert("Error", insErr.message);
+      }
+
+      setAttBusy(false);
+      setAttNote("");
+      showAlert(
+        "Saved",
+        `Attendance "${attAction.toUpperCase()}" saved.\n\nCustomer: ${(booking as PromoBookingCodeLookupRow).full_name}`
+      );
+
+      void loadAttendanceHistory(c);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Attendance save failed.";
+      setAttBusy(false);
+      showAlert("Error", msg);
+    }
   };
 
   return (
@@ -585,7 +822,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         <IonToolbar>
           <IonTitle>Promo</IonTitle>
           <IonButtons slot="end">
-            <IonButton onClick={onClose} disabled={loading}>
+            <IonButton onClick={onClose} disabled={loading || attBusy}>
               <IonIcon icon={closeOutline} />
             </IonButton>
           </IonButtons>
@@ -600,7 +837,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           buttons={["OK"]}
           onDidDismiss={() => {
             setAlertOpen(false);
-
             if (afterAlert === "close_after_save") {
               setAfterAlert("none");
               onClose();
@@ -609,10 +845,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         />
 
         <div className="bookadd-card">
-          {loading && (
+          {(loading || codeBusy) && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
               <IonSpinner />
-              <span style={{ fontWeight: 800, color: "rgba(31,41,55,0.85)" }}>Loading...</span>
+              <span style={{ fontWeight: 800, color: "rgba(31,41,55,0.85)" }}>
+                {codeBusy ? "Generating code..." : "Loading..."}
+              </span>
             </div>
           )}
 
@@ -622,7 +860,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             <IonInput value={fullName} onIonInput={(e) => setFullName(String(e.detail.value ?? ""))} />
           </IonItem>
 
-          {/* ✅ Phone Number (katabi/sunod ng Full Name) */}
+          {/* ✅ Phone Number */}
           <IonItem className="form-item">
             <IonLabel position="stacked">Phone Number *</IonLabel>
             <IonInput
@@ -691,11 +929,70 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             >
               {packageOptions.map((o) => (
                 <IonSelectOption key={o.id} value={o.id}>
-                  {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
+                  {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱
+                  {toNum(o.price).toFixed(2)}
                 </IonSelectOption>
               ))}
             </IonSelect>
           </IonItem>
+
+          {/* ✅ SHOW GENERATED CODE if >= 7 days */}
+          {approxDaysFromOption(selectedOption) >= 7 ? (
+            <IonCard className="promo-card" style={{ marginTop: 10 }}>
+              <IonCardContent>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontWeight: 900, letterSpacing: 0.5 }}>PROMO CODE</div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      Use this code for Attendance IN/OUT (customer/anon).
+                    </div>
+                  </div>
+
+                  <button
+                    className="receipt-btn"
+                    disabled={!promoCode}
+                    onClick={() => void copyText(promoCode)}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    Copy
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <input
+                    className="reason-input"
+                    value={promoCode}
+                    readOnly
+                    placeholder={codeBusy ? "Generating..." : "Code will appear here"}
+                    style={{
+                      width: "100%",
+                      fontWeight: 900,
+                      letterSpacing: 2,
+                      textAlign: "center",
+                      fontSize: 18,
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    className="receipt-btn"
+                    onClick={() => {
+                      setPromoCode("");
+                      void maybeGenerateCode();
+                    }}
+                    disabled={codeBusy}
+                  >
+                    Regenerate
+                  </button>
+
+                  <div style={{ fontSize: 12, opacity: 0.8, alignSelf: "center" }}>
+                    {isStaffLike ? "Created by Staff/Admin" : "Anonymous/Customer Mode"}
+                  </div>
+                </div>
+              </IonCardContent>
+            </IonCard>
+          ) : null}
 
           <IonItem className="form-item">
             <IonLabel position="stacked">Start Date & Time</IonLabel>
@@ -765,11 +1062,127 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             expand="block"
             className="promo-save-btn"
             style={{ marginTop: 12 }}
-            disabled={loading}
+            disabled={loading || codeBusy}
             onClick={() => void submitPromo()}
           >
             Save Promo Booking
           </IonButton>
+
+          {/* =========================
+              ✅ ATTENDANCE SECTION
+              - input code
+              - IN / OUT
+              - insert promo_attendance
+            ========================= */}
+          <IonCard className="promo-card" style={{ marginTop: 14 }}>
+            <IonCardContent>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>ATTENDANCE (IN / OUT)</div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10 }}>
+                Enter promo code then select IN/OUT. This will log attendance.
+              </div>
+
+              <IonItem className="form-item">
+                <IonLabel position="stacked">Input Code</IonLabel>
+                <IonInput
+                  value={codeInput}
+                  placeholder="e.g. AB23CD45"
+                  onIonInput={(e) => {
+                    const v = normalizeCode(String(e.detail.value ?? ""));
+                    setCodeInput(v);
+                  }}
+                  onIonBlur={() => void loadAttendanceHistory(codeInput)}
+                />
+              </IonItem>
+
+              <IonItem className="form-item">
+                <IonLabel position="stacked">Action</IonLabel>
+                <IonSelect
+                  value={attAction}
+                  onIonChange={(e) => setAttAction(String(e.detail.value ?? "in") === "out" ? "out" : "in")}
+                >
+                  <IonSelectOption value="in">IN</IonSelectOption>
+                  <IonSelectOption value="out">OUT</IonSelectOption>
+                </IonSelect>
+              </IonItem>
+
+              <IonItem className="form-item">
+                <IonLabel position="stacked">Note (optional)</IonLabel>
+                <IonInput
+                  value={attNote}
+                  placeholder="e.g. late / early out"
+                  onIonInput={(e) => setAttNote(String(e.detail.value ?? ""))}
+                />
+              </IonItem>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                <button
+                  className="receipt-btn"
+                  onClick={() => void submitAttendance()}
+                  disabled={attBusy}
+                >
+                  {attBusy ? "Saving..." : "Save Attendance"}
+                </button>
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void loadAttendanceHistory(codeInput)}
+                  disabled={attLookupBusy}
+                >
+                  {attLookupBusy ? "Loading..." : "Load History"}
+                </button>
+
+                {promoCode ? (
+                  <button
+                    className="receipt-btn"
+                    onClick={() => {
+                      setCodeInput(promoCode);
+                      void loadAttendanceHistory(promoCode);
+                    }}
+                  >
+                    Use Generated Code
+                  </button>
+                ) : null}
+              </div>
+
+              {/* history */}
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6, opacity: 0.9 }}>Recent Logs</div>
+                {attLookupBusy ? (
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>Loading...</div>
+                ) : attHistory.length === 0 ? (
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>No logs found.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {attHistory.map((h) => (
+                      <div
+                        key={h.id}
+                        style={{
+                          border: "1px solid rgba(0,0,0,0.08)",
+                          borderRadius: 10,
+                          padding: "8px 10px",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                          <strong>{String(h.action).toUpperCase()}</strong>
+                          <span style={{ fontSize: 12, opacity: 0.75 }}>
+                            {new Date(h.created_at).toLocaleString("en-PH")}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, opacity: 0.85, marginTop: 3 }}>
+                          Code: <strong>{h.promo_code}</strong>
+                        </div>
+                        {h.note ? (
+                          <div style={{ fontSize: 12, opacity: 0.85, marginTop: 3 }}>
+                            Note: {h.note}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </IonCardContent>
+          </IonCard>
         </div>
       </IonContent>
     </IonModal>
