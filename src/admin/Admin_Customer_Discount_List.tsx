@@ -7,8 +7,8 @@
 // ✅ Payment modal is FREE INPUTS (Cash & GCash can exceed due)
 // ✅ Action "Delete" replaced with "Cancel"
 // ✅ NEW: Show Attendance records (promo_attendance) per booking
-// ✅ NEW: Admin can edit attempts + validity_end_at per booking
-// ✅ FIX: removed `void tick` hack; totals/status auto-refresh every 10s using tick properly
+// ✅ NEW: Admin/Staff can edit attempts_left + max_attempts + validity_end_at per booking
+// ✅ FIX: totals/status auto-refresh every 10s using tick properly
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -55,9 +55,11 @@ interface PromoBookingRow {
   discount_value: number;
   discount_reason: string | null;
 
-  // ✅ NEW
   promo_code: string | null;
-  attempts: number; // remaining attempts (admin controlled)
+
+  // ✅ FIXED: real columns from promo_bookings
+  attempts_left: number; // remaining attempts
+  max_attempts: number; // max attempts
   validity_end_at: string | null;
 
   packages: { title: string | null } | null;
@@ -89,9 +91,11 @@ interface PromoBookingDBRow {
   discount_value: number | string | null;
   discount_reason: string | null;
 
-  // ✅ NEW
   promo_code?: string | null;
-  attempts?: number | string | null;
+
+  // ✅ FIXED: real columns
+  attempts_left?: number | string | null;
+  max_attempts?: number | string | null;
   validity_end_at?: string | null;
 
   packages: { title: string | null } | null;
@@ -162,20 +166,13 @@ const startEndIsoLocalDay = (yyyyMmDd: string): { startIso: string; endIso: stri
 
 const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
 
-const seatLabel = (r: PromoBookingRow): string =>
-  r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
+const seatLabel = (r: PromoBookingRow): string => (r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A");
 
 const safePhone = (v: string | null | undefined): string => (String(v ?? "").trim() ? String(v ?? "").trim() : "—");
 
-// ✅ FIXED: accepts nowMs (we'll pass tick)
-const getStatus = (
-  startIso: string,
-  endIso: string,
-  nowMs: number = Date.now()
-): "UPCOMING" | "ONGOING" | "FINISHED" => {
+const getStatus = (startIso: string, endIso: string, nowMs: number = Date.now()): "UPCOMING" | "ONGOING" | "FINISHED" => {
   const s = new Date(startIso).getTime();
   const e = new Date(endIso).getTime();
-
   if (!Number.isFinite(s) || !Number.isFinite(e)) return "FINISHED";
   if (nowMs < s) return "UPCOMING";
   if (nowMs >= s && nowMs <= e) return "ONGOING";
@@ -216,11 +213,7 @@ const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
   return "—";
 };
 
-const applyDiscount = (
-  baseCost: number,
-  kind: DiscountKind,
-  value: number
-): { discountedCost: number; discountAmount: number } => {
+const applyDiscount = (baseCost: number, kind: DiscountKind, value: number): { discountedCost: number; discountAmount: number } => {
   const cost = Number.isFinite(baseCost) ? Math.max(0, baseCost) : 0;
   const v = Number.isFinite(value) ? Math.max(0, value) : 0;
 
@@ -268,7 +261,8 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
   const kind = normalizeDiscountKind(row.discount_kind);
   const value = round2(toNumber(row.discount_value));
 
-  const attempts = Math.max(0, Math.floor(toNumber(row.attempts ?? 0)));
+  const attempts_left = Math.max(0, Math.floor(toNumber(row.attempts_left ?? 0)));
+  const max_attempts = Math.max(0, Math.floor(toNumber(row.max_attempts ?? 0)));
   const validity_end_at = row.validity_end_at ?? null;
 
   return {
@@ -293,7 +287,9 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
     discount_reason: row.discount_reason ?? null,
 
     promo_code: (row.promo_code ?? null) ? String(row.promo_code ?? "").trim() : null,
-    attempts,
+
+    attempts_left,
+    max_attempts,
     validity_end_at,
 
     packages: row.packages ?? null,
@@ -354,16 +350,21 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const [cancelling, setCancelling] = useState<boolean>(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
-  // ✅ Attendance map + modals
+  // Attendance
   const [attMap, setAttMap] = useState<Record<string, PromoAttendanceRow[]>>({});
   const [attModalTarget, setAttModalTarget] = useState<PromoBookingRow | null>(null);
 
-  // ✅ Admin edit attempts/validity modal
+  // ✅ Admin/Staff edit attempts/validity modal
   const [ruleTarget, setRuleTarget] = useState<PromoBookingRow | null>(null);
-  const [ruleAttemptsInput, setRuleAttemptsInput] = useState<string>("0");
+  const [ruleAttemptsLeftInput, setRuleAttemptsLeftInput] = useState<string>("0");
+  const [ruleMaxAttemptsInput, setRuleMaxAttemptsInput] = useState<string>("0");
   const [ruleValidityInput, setRuleValidityInput] = useState<string>(""); // datetime-local
   const [savingRule, setSavingRule] = useState<boolean>(false);
 
+  const localRole = useMemo(() => String(localStorage.getItem("role") ?? "").toLowerCase(), []);
+  const canEditRules = useMemo(() => localRole === "admin" || localRole === "staff", [localRole]);
+
+  // ✅ FIXED SELECT (real columns)
   const selectPromoBookings = `
     id,
     created_at,
@@ -383,7 +384,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
     discount_reason,
 
     promo_code,
-    attempts,
+    attempts_left,
+    max_attempts,
     validity_end_at,
 
     packages:package_id ( title ),
@@ -469,15 +471,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
     void fetchPromoBookings();
   }, []);
 
-  // ✅ FIX: no `void tick` here
   const filteredRows = useMemo(() => {
     return rows.filter((r) => getCreatedDateLocal(r.created_at) === selectedDate);
   }, [rows, selectedDate]);
 
-  // ✅ FIX: totals uses tick properly (recompute every 10s)
   const totals = useMemo(() => {
     const nowMs = tick;
-
     const total = filteredRows.reduce((sum, r) => sum + toNumber(r.price), 0);
 
     let upcoming = 0;
@@ -547,7 +546,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
       { header: "Paid?", key: "paid_status", width: 10 },
       { header: "Status", key: "status", width: 12 },
       { header: "Promo Code", key: "code", width: 14 },
-      { header: "Attempts", key: "attempts", width: 10 },
+      { header: "Attempts Left", key: "attempts_left", width: 12 },
+      { header: "Max Attempts", key: "max_attempts", width: 12 },
       { header: "Validity End", key: "validity", width: 20 },
     ];
 
@@ -599,7 +599,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
       const { due } = getDueAfterDiscount(r);
       const pi = getPaidInfo(r);
-      const remaining = round2(Math.max(0, due - pi.totalPaid));
+      const remaining = round2(due - pi.totalPaid); // can be negative (change)
 
       const row = ws.addRow({
         created_at: new Date(r.created_at).toLocaleString("en-PH"),
@@ -619,7 +619,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
         paid_status: toBool(r.is_paid) ? "PAID" : "UNPAID",
         status: getStatus(r.start_at, r.end_at, tick),
         code: r.promo_code || "—",
-        attempts: r.attempts,
+        attempts_left: r.attempts_left,
+        max_attempts: r.max_attempts,
         validity: r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—",
       });
 
@@ -693,9 +694,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       setRows((prev) => prev.map((x) => (x.id === paymentTarget.id ? updated : x)));
       setSelected((prev) => (prev?.id === paymentTarget.id ? updated : prev));
       setPaymentTarget(null);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+    } catch {
       alert("Save payment failed.");
     } finally {
       setSavingPayment(false);
@@ -759,9 +758,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       setRows((prev) => prev.map((x) => (x.id === discountTarget.id ? updated : x)));
       setSelected((prev) => (prev?.id === discountTarget.id ? updated : prev));
       setDiscountTarget(null);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+    } catch {
       alert("Save discount failed.");
     } finally {
       setSavingDiscount(false);
@@ -771,7 +768,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
   const togglePaid = async (r: PromoBookingRow): Promise<void> => {
     try {
       setTogglingPaidId(r.id);
-
       const nextPaid = !toBool(r.is_paid);
 
       const { data, error } = await supabase
@@ -816,9 +812,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             }
           : prev
       );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+    } catch {
       alert("Toggle paid failed.");
     } finally {
       setTogglingPaidId(null);
@@ -872,7 +866,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
           discount_kind,
           discount_value,
           promo_code,
-          attempts,
+          attempts_left,
+          max_attempts,
           validity_end_at
         `
         )
@@ -889,33 +884,34 @@ const Admin_Customer_Discount_List: React.FC = () => {
         description: desc,
 
         created_at: fullRow.created_at,
-        user_id: fullRow.user_id ?? null,
-        full_name: fullRow.full_name,
-        phone_number: fullRow.phone_number ?? null,
+        user_id: (fullRow as { user_id?: string | null }).user_id ?? null,
+        full_name: (fullRow as { full_name: string }).full_name,
+        phone_number: (fullRow as { phone_number?: string | null }).phone_number ?? null,
 
-        area: fullRow.area,
-        package_id: fullRow.package_id,
-        package_option_id: fullRow.package_option_id,
+        area: (fullRow as { area: PackageArea }).area,
+        package_id: (fullRow as { package_id: string }).package_id,
+        package_option_id: (fullRow as { package_option_id: string }).package_option_id,
 
-        seat_number: fullRow.seat_number ?? null,
-        start_at: fullRow.start_at,
-        end_at: fullRow.end_at,
+        seat_number: (fullRow as { seat_number?: string | null }).seat_number ?? null,
+        start_at: (fullRow as { start_at: string }).start_at,
+        end_at: (fullRow as { end_at: string }).end_at,
 
-        price: fullRow.price ?? 0,
-        status: fullRow.status ?? "pending",
+        price: (fullRow as { price?: number | string | null }).price ?? 0,
+        status: (fullRow as { status?: string | null }).status ?? "pending",
 
-        gcash_amount: fullRow.gcash_amount ?? 0,
-        cash_amount: fullRow.cash_amount ?? 0,
-        is_paid: Boolean(fullRow.is_paid),
-        paid_at: fullRow.paid_at ?? null,
+        gcash_amount: (fullRow as { gcash_amount?: number | string | null }).gcash_amount ?? 0,
+        cash_amount: (fullRow as { cash_amount?: number | string | null }).cash_amount ?? 0,
+        is_paid: Boolean((fullRow as { is_paid?: unknown }).is_paid),
+        paid_at: (fullRow as { paid_at?: string | null }).paid_at ?? null,
 
-        discount_reason: fullRow.discount_reason ?? null,
-        discount_kind: String(fullRow.discount_kind ?? "none"),
-        discount_value: fullRow.discount_value ?? 0,
+        discount_reason: (fullRow as { discount_reason?: string | null }).discount_reason ?? null,
+        discount_kind: String((fullRow as { discount_kind?: unknown }).discount_kind ?? "none"),
+        discount_value: (fullRow as { discount_value?: number | string | null }).discount_value ?? 0,
 
-        promo_code: fullRow.promo_code ?? null,
-        attempts: Number(fullRow.attempts ?? 0) || 0,
-        validity_end_at: fullRow.validity_end_at ?? null,
+        promo_code: (fullRow as { promo_code?: string | null }).promo_code ?? null,
+        attempts_left: Number((fullRow as { attempts_left?: unknown }).attempts_left ?? 0) || 0,
+        max_attempts: Number((fullRow as { max_attempts?: unknown }).max_attempts ?? 0) || 0,
+        validity_end_at: (fullRow as { validity_end_at?: string | null }).validity_end_at ?? null,
       });
 
       if (insErr) {
@@ -925,9 +921,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
       const { error: delErr } = await supabase.from("promo_bookings").delete().eq("id", cancelTarget.id);
       if (delErr) {
-        setCancelError(
-          `Inserted to cancelled, but delete failed: ${delErr.message}. (You may now have duplicate if you retry.)`
-        );
+        setCancelError(`Inserted to cancelled, but delete failed: ${delErr.message}. (You may now have duplicate if you retry.)`);
         return;
       }
 
@@ -940,9 +934,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
         delete next[cancelTarget.id];
         return next;
       });
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+    } catch {
       setCancelError("Cancel failed (unexpected error).");
     } finally {
       setCancelling(false);
@@ -965,11 +957,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
     try {
       setDeletingDate(selectedDate);
 
-      const { error } = await supabase
-        .from("promo_bookings")
-        .delete()
-        .gte("created_at", range.startIso)
-        .lt("created_at", range.endIso);
+      const { error } = await supabase.from("promo_bookings").delete().gte("created_at", range.startIso).lt("created_at", range.endIso);
 
       if (error) {
         alert(`Delete by date error: ${error.message}`);
@@ -979,9 +967,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       setRows((prev) => prev.filter((r) => getCreatedDateLocal(r.created_at) !== selectedDate));
       setSelected((prev) => (prev && getCreatedDateLocal(prev.created_at) === selectedDate ? null : prev));
       setAttMap({});
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+    } catch {
       alert("Delete by date failed.");
     } finally {
       setDeletingDate(null);
@@ -997,18 +983,30 @@ const Admin_Customer_Discount_List: React.FC = () => {
     return logs.length ? logs[0] : null;
   };
 
-  /* ================= Admin edit attempts/validity ================= */
+  /* ================= Admin/Staff edit attempts/validity ================= */
 
   const openRuleModal = (r: PromoBookingRow): void => {
+    if (!canEditRules) return;
     setRuleTarget(r);
-    setRuleAttemptsInput(String(Math.max(0, Math.floor(toNumber(r.attempts)))));
+    setRuleAttemptsLeftInput(String(Math.max(0, Math.floor(toNumber(r.attempts_left)))));
+    setRuleMaxAttemptsInput(String(Math.max(0, Math.floor(toNumber(r.max_attempts)))));
     setRuleValidityInput(r.validity_end_at ? isoToLocalDateTimeInput(r.validity_end_at) : "");
   };
 
   const saveRule = async (): Promise<void> => {
     if (!ruleTarget) return;
+    if (!canEditRules) {
+      alert("Only staff/admin can edit attempts/validity.");
+      return;
+    }
 
-    const attempts = Math.max(0, Math.floor(toNumber(ruleAttemptsInput)));
+    const attemptsLeft = Math.max(0, Math.floor(toNumber(ruleAttemptsLeftInput)));
+    const maxAttempts = Math.max(0, Math.floor(toNumber(ruleMaxAttemptsInput)));
+
+    // optional: keep attempts_left <= max_attempts (if max_attempts > 0)
+    const fixedMax = maxAttempts;
+    const fixedLeft = fixedMax > 0 ? Math.min(attemptsLeft, fixedMax) : attemptsLeft;
+
     const validityIso = ruleValidityInput.trim() ? localDateTimeInputToIso(ruleValidityInput.trim()) : null;
 
     try {
@@ -1017,7 +1015,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
       const { data, error } = await supabase
         .from("promo_bookings")
         .update({
-          attempts,
+          attempts_left: fixedLeft,
+          max_attempts: fixedMax,
           validity_end_at: validityIso,
         })
         .eq("id", ruleTarget.id)
@@ -1033,9 +1032,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       setRows((prev) => prev.map((x) => (x.id === ruleTarget.id ? updated : x)));
       setSelected((prev) => (prev?.id === ruleTarget.id ? updated : prev));
       setRuleTarget(null);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+    } catch {
       alert("Save rule failed.");
     } finally {
       setSavingRule(false);
@@ -1053,22 +1050,16 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 Showing records for: <strong>{selectedDate}</strong>
               </div>
 
-              {/* OPTIONAL: show totals (if you want to display) */}
               <div className="customer-subtext" style={{ marginTop: 6 }}>
-                Total: <strong>₱{round2(totals.total).toFixed(2)}</strong> • Upcoming: <strong>{totals.upcoming}</strong> •
-                Ongoing: <strong>{totals.ongoing}</strong> • Finished: <strong>{totals.finished}</strong>
+                Total: <strong>₱{round2(totals.total).toFixed(2)}</strong> • Upcoming: <strong>{totals.upcoming}</strong> • Ongoing:{" "}
+                <strong>{totals.ongoing}</strong> • Finished: <strong>{totals.finished}</strong>
               </div>
             </div>
 
             <div className="customer-topbar-right">
               <label className="date-pill">
                 <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
+                <input className="date-pill-input" type="date" value={selectedDate} onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))} />
                 <span className="date-pill-icon" aria-hidden="true">
                   📅
                 </span>
@@ -1130,12 +1121,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
                         : opt?.option_name || "—";
 
                     const paid = toBool(r.is_paid);
-
                     const { due, discountAmount } = getDueAfterDiscount(r);
-
                     const pi = getPaidInfo(r);
-                    const remaining = round2(Math.max(0, due - pi.totalPaid));
-
+                    const remaining = round2(due - pi.totalPaid);
                     const last = lastLogFor(r.id);
 
                     return (
@@ -1182,40 +1170,38 @@ const Admin_Customer_Discount_List: React.FC = () => {
                             <span className="cell-strong">
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>Remaining ₱{remaining.toFixed(2)}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              {remaining < 0 ? "Change" : "Remaining"} ₱{Math.abs(remaining).toFixed(2)}
+                            </span>
                             <button className="receipt-btn" onClick={() => openPaymentModal(r)} disabled={due <= 0}>
                               Payment
                             </button>
                           </div>
                         </td>
 
-                        {/* ✅ Code/attempts/validity */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">{r.promo_code || "—"}</span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              Attempts: <b>{r.attempts}</b>
+                              Attempts Left: <b>{r.attempts_left}</b> / Max: <b>{r.max_attempts}</b>
                             </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
                               Validity:{" "}
-                              <b>{r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—"}</b>{" "}
+                              <b>{r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—"}</b>
                               {r.validity_end_at && isExpired(r.validity_end_at) ? (
                                 <span style={{ marginLeft: 6, color: "#b00020", fontWeight: 900 }}>EXPIRED</span>
                               ) : null}
                             </span>
-                            <button className="receipt-btn" onClick={() => openRuleModal(r)}>
+                            <button className="receipt-btn" onClick={() => openRuleModal(r)} disabled={!canEditRules}>
                               Edit
                             </button>
                           </div>
                         </td>
 
-                        {/* ✅ Attendance */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">{last ? `${String(last.action).toUpperCase()}` : "—"}</span>
-                            <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              {last ? new Date(last.created_at).toLocaleString("en-PH") : "No logs"}
-                            </span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>{last ? new Date(last.created_at).toLocaleString("en-PH") : "No logs"}</span>
                             <button className="receipt-btn" onClick={() => setAttModalTarget(r)}>
                               Attendance
                             </button>
@@ -1230,11 +1216,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                               View Receipt
                             </button>
 
-                            <button
-                              className="receipt-btn"
-                              disabled={cancelling || cancellingId === r.id}
-                              onClick={() => openCancelModal(r)}
-                            >
+                            <button className="receipt-btn" disabled={cancelling || cancellingId === r.id} onClick={() => openCancelModal(r)}>
                               {cancellingId === r.id ? "Cancelling..." : "Cancel"}
                             </button>
                           </div>
@@ -1247,7 +1229,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ ATTENDANCE MODAL (read-only) */}
+          {/* ✅ ATTENDANCE MODAL */}
           {attModalTarget && (
             <div className="receipt-overlay" onClick={() => setAttModalTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1302,7 +1284,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ ADMIN EDIT RULES MODAL */}
+          {/* ✅ ADMIN/STAFF EDIT RULES MODAL */}
           {ruleTarget && (
             <div className="receipt-overlay" onClick={() => (savingRule ? null : setRuleTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1314,30 +1296,38 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 <hr />
 
                 <div className="receipt-row">
-                  <span>Attempts</span>
+                  <span>Attempts Left</span>
                   <input
                     className="money-input"
                     type="number"
                     min="0"
                     step="1"
-                    value={ruleAttemptsInput}
-                    onChange={(e) => setRuleAttemptsInput(e.currentTarget.value)}
+                    value={ruleAttemptsLeftInput}
+                    onChange={(e) => setRuleAttemptsLeftInput(e.currentTarget.value)}
                     disabled={savingRule}
                     placeholder="0"
                   />
                 </div>
 
-                <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>Tip: attempts = remaining uses. If you want unlimited, set to 0.</div>
+                <div className="receipt-row" style={{ marginTop: 10 }}>
+                  <span>Max Attempts</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={ruleMaxAttemptsInput}
+                    onChange={(e) => setRuleMaxAttemptsInput(e.currentTarget.value)}
+                    disabled={savingRule}
+                    placeholder="0"
+                  />
+                </div>
+
+                <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>If max = 0, it will be treated as "no limit".</div>
 
                 <div className="receipt-row" style={{ marginTop: 10 }}>
                   <span>Validity End</span>
-                  <input
-                    className="money-input"
-                    type="datetime-local"
-                    value={ruleValidityInput}
-                    onChange={(e) => setRuleValidityInput(e.currentTarget.value)}
-                    disabled={savingRule}
-                  />
+                  <input className="money-input" type="datetime-local" value={ruleValidityInput} onChange={(e) => setRuleValidityInput(e.currentTarget.value)} disabled={savingRule} />
                 </div>
 
                 <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>If blank = no expiry.</div>
@@ -1427,26 +1417,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={gcashInput}
-                          onChange={(e) => setGcashInput(e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={gcashInput} onChange={(e) => setGcashInput(e.currentTarget.value)} />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={cashInput}
-                          onChange={(e) => setCashInput(e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={cashInput} onChange={(e) => setCashInput(e.currentTarget.value)} />
                       </div>
 
                       <hr />
@@ -1494,7 +1470,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Discount Type</span>
-                  <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
+                  <select value={discountKind} onChange={(e) => setDiscountKind((e.currentTarget.value as DiscountKind) || "none")}>
                     <option value="none">None</option>
                     <option value="percent">Percent (%)</option>
                     <option value="amount">Peso (₱)</option>
@@ -1519,13 +1495,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Reason</span>
-                  <input
-                    className="reason-input"
-                    type="text"
-                    value={discountReasonInput}
-                    onChange={(e) => setDiscountReasonInput(e.currentTarget.value)}
-                    placeholder="e.g. loyalty card"
-                  />
+                  <input className="reason-input" type="text" value={discountReasonInput} onChange={(e) => setDiscountReasonInput(e.currentTarget.value)} placeholder="e.g. loyalty card" />
                 </div>
 
                 {(() => {
@@ -1567,12 +1537,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Final System Cost</span>
-                        <span>₱{round2(due).toFixed(2)}</span>
+                        <span>₱{due.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-total">
                         <span>NEW TOTAL BALANCE</span>
-                        <span>₱{round2(due).toFixed(2)}</span>
+                        <span>₱{due.toFixed(2)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1607,7 +1577,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT (added attendance + rules display) */}
+          {/* RECEIPT */}
           {selected && (
             <div className="receipt-overlay" onClick={() => setSelected(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1639,8 +1609,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Attempts</span>
-                  <span>{selected.attempts}</span>
+                  <span>Attempts Left</span>
+                  <span>
+                    {selected.attempts_left} / {selected.max_attempts}
+                  </span>
                 </div>
 
                 <div className="receipt-row">
@@ -1648,9 +1620,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                   <span>
                     {selected.validity_end_at ? new Date(selected.validity_end_at).toLocaleString("en-PH") : "—"}
                     {selected.validity_end_at && isExpired(selected.validity_end_at) ? (
-                      <span style={{ marginLeft: 8, color: "#b00020", fontWeight: 900 }}>
-                        EXPIRED
-                      </span>
+                      <span style={{ marginLeft: 8, color: "#b00020", fontWeight: 900 }}>EXPIRED</span>
                     ) : null}
                   </span>
                 </div>

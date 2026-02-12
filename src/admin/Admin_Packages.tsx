@@ -57,9 +57,9 @@ interface PackageOptionRow {
   duration_unit: DurationUnit;
   price: number | string;
 
-  // ✅ NEW
-  max_attempts: number | string | null;
-  validity_days: number | string | null;
+  // ✅ PROMO config (matches your DB)
+  promo_max_attempts: number | string | null;
+  promo_validity_days: number | string | null;
 }
 
 const toNum = (v: number | string | null | undefined): number => {
@@ -107,9 +107,9 @@ const Admin_Packages: React.FC = () => {
   const [optDurationUnit, setOptDurationUnit] = useState<DurationUnit>("hour");
   const [optPrice, setOptPrice] = useState<number>(0);
 
-  // ✅ NEW: attempts + validity
-  const [optMaxAttempts, setOptMaxAttempts] = useState<number>(1);
-  const [optValidityDays, setOptValidityDays] = useState<number>(1);
+  // ✅ PROMO attempts + validity
+  const [optPromoMaxAttempts, setOptPromoMaxAttempts] = useState<number>(7);
+  const [optPromoValidityDays, setOptPromoValidityDays] = useState<number>(14);
 
   const selectedOptions = useMemo(() => {
     if (!activePackage) return [];
@@ -152,9 +152,9 @@ const Admin_Packages: React.FC = () => {
     setOptDurationUnit("hour");
     setOptPrice(0);
 
-    // ✅ NEW defaults
-    setOptMaxAttempts(1);
-    setOptValidityDays(1);
+    // ✅ defaults
+    setOptPromoMaxAttempts(7);
+    setOptPromoValidityDays(14);
   };
 
   const fetchOptionsForPackage = async (packageId: string): Promise<void> => {
@@ -194,9 +194,9 @@ const Admin_Packages: React.FC = () => {
     setOptDurationUnit(o.duration_unit);
     setOptPrice(toNum(o.price));
 
-    // ✅ load attempts + validity (fallback to 1)
-    setOptMaxAttempts(clampInt(toNum(o.max_attempts), 1, 9999));
-    setOptValidityDays(clampInt(toNum(o.validity_days), 1, 3650));
+    // ✅ promo config from DB
+    setOptPromoMaxAttempts(clampInt(toNum(o.promo_max_attempts), 1, 9999));
+    setOptPromoValidityDays(clampInt(toNum(o.promo_validity_days), 1, 3650));
   };
 
   const fetchPackages = async (): Promise<void> => {
@@ -333,9 +333,8 @@ const Admin_Packages: React.FC = () => {
     if (!Number.isFinite(optDurationValue) || optDurationValue <= 0) return showToast("Duration value must be > 0.");
     if (!Number.isFinite(optPrice) || optPrice < 0) return showToast("Price must be >= 0.");
 
-    // ✅ NEW validation
-    const maxAttempts = clampInt(optMaxAttempts, 1, 9999);
-    const validityDays = clampInt(optValidityDays, 1, 3650);
+    const promoMaxAttempts = clampInt(optPromoMaxAttempts, 1, 9999);
+    const promoValidityDays = clampInt(optPromoValidityDays, 1, 3650);
 
     setSaving(true);
     try {
@@ -346,9 +345,9 @@ const Admin_Packages: React.FC = () => {
         duration_unit: optDurationUnit,
         price: Number(optPrice),
 
-        // ✅ NEW
-        max_attempts: maxAttempts,
-        validity_days: validityDays,
+        // ✅ PROMO config
+        promo_max_attempts: promoMaxAttempts,
+        promo_validity_days: promoValidityDays,
       };
 
       if (!editingOption) {
@@ -507,8 +506,8 @@ const Admin_Packages: React.FC = () => {
 
                               <div className="adminpkg__optionGrid">
                                 {opts.slice(0, 6).map((o) => {
-                                  const attempts = clampInt(toNum(o.max_attempts), 1, 9999);
-                                  const validity = clampInt(toNum(o.validity_days), 1, 3650);
+                                  const attempts = clampInt(toNum(o.promo_max_attempts), 1, 9999);
+                                  const validity = clampInt(toNum(o.promo_validity_days), 1, 3650);
 
                                   return (
                                     <div className="adminpkg__optionRow" key={o.id}>
@@ -518,7 +517,7 @@ const Admin_Packages: React.FC = () => {
                                           {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
                                         </small>
                                         <small className="adminpkg__muted">
-                                          Attempts: {attempts} • Validity: {validity} day(s)
+                                          Promo Attempts: {attempts} • Promo Validity: {validity} day(s)
                                         </small>
                                       </div>
 
@@ -698,22 +697,22 @@ const Admin_Packages: React.FC = () => {
                             <IonInput type="number" value={String(optPrice)} onIonChange={(e) => setOptPrice(Number(e.detail.value ?? 0))} />
                           </IonItem>
 
-                          {/* ✅ NEW */}
+                          {/* ✅ PROMO CONFIG */}
                           <IonItem>
-                            <IonLabel position="stacked">Max Attempts (IN/OUT)</IonLabel>
+                            <IonLabel position="stacked">Promo Max Attempts (attendance IN)</IonLabel>
                             <IonInput
                               type="number"
-                              value={String(optMaxAttempts)}
-                              onIonChange={(e) => setOptMaxAttempts(clampInt(Number(e.detail.value ?? 1), 1, 9999))}
+                              value={String(optPromoMaxAttempts)}
+                              onIonChange={(e) => setOptPromoMaxAttempts(clampInt(Number(e.detail.value ?? 7), 1, 9999))}
                             />
                           </IonItem>
 
                           <IonItem>
-                            <IonLabel position="stacked">Validity Days</IonLabel>
+                            <IonLabel position="stacked">Promo Validity Days</IonLabel>
                             <IonInput
                               type="number"
-                              value={String(optValidityDays)}
-                              onIonChange={(e) => setOptValidityDays(clampInt(Number(e.detail.value ?? 1), 1, 3650))}
+                              value={String(optPromoValidityDays)}
+                              onIonChange={(e) => setOptPromoValidityDays(clampInt(Number(e.detail.value ?? 14), 1, 3650))}
                             />
                           </IonItem>
                         </IonList>
@@ -741,8 +740,8 @@ const Admin_Packages: React.FC = () => {
                         </IonItem>
                       ) : (
                         selectedOptions.map((o) => {
-                          const attempts = clampInt(toNum(o.max_attempts), 1, 9999);
-                          const validity = clampInt(toNum(o.validity_days), 1, 3650);
+                          const attempts = clampInt(toNum(o.promo_max_attempts), 1, 9999);
+                          const validity = clampInt(toNum(o.promo_validity_days), 1, 3650);
 
                           return (
                             <IonItem key={o.id}>
@@ -752,7 +751,7 @@ const Admin_Packages: React.FC = () => {
                                   {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
                                 </div>
                                 <div className="adminpkg__muted" style={{ fontSize: 12 }}>
-                                  Attempts: {attempts} • Validity: {validity} day(s)
+                                  Promo Attempts: {attempts} • Promo Validity: {validity} day(s)
                                 </div>
                               </IonLabel>
 
