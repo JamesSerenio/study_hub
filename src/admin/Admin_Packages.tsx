@@ -34,7 +34,6 @@ import {
 import { addOutline, closeOutline, trashOutline, createOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
-
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
 
@@ -57,15 +56,24 @@ interface PackageOptionRow {
   duration_value: number;
   duration_unit: DurationUnit;
   price: number | string;
+
+  // ✅ NEW
+  max_attempts: number | string | null;
+  validity_days: number | string | null;
 }
 
 const toNum = (v: number | string | null | undefined): number => {
-  if (typeof v === "number") return v;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "string") {
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
   }
   return 0;
+};
+
+const clampInt = (n: number, min: number, max: number): number => {
+  const x = Math.floor(Number.isFinite(n) ? n : 0);
+  return Math.min(max, Math.max(min, x));
 };
 
 const Admin_Packages: React.FC = () => {
@@ -98,6 +106,10 @@ const Admin_Packages: React.FC = () => {
   const [optDurationValue, setOptDurationValue] = useState<number>(1);
   const [optDurationUnit, setOptDurationUnit] = useState<DurationUnit>("hour");
   const [optPrice, setOptPrice] = useState<number>(0);
+
+  // ✅ NEW: attempts + validity
+  const [optMaxAttempts, setOptMaxAttempts] = useState<number>(1);
+  const [optValidityDays, setOptValidityDays] = useState<number>(1);
 
   const selectedOptions = useMemo(() => {
     if (!activePackage) return [];
@@ -139,6 +151,10 @@ const Admin_Packages: React.FC = () => {
     setOptDurationValue(1);
     setOptDurationUnit("hour");
     setOptPrice(0);
+
+    // ✅ NEW defaults
+    setOptMaxAttempts(1);
+    setOptValidityDays(1);
   };
 
   const fetchOptionsForPackage = async (packageId: string): Promise<void> => {
@@ -149,6 +165,7 @@ const Admin_Packages: React.FC = () => {
       .order("created_at", { ascending: true });
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error(error);
       showToast(`Load options failed: ${error.message}`);
       return;
@@ -176,17 +193,19 @@ const Admin_Packages: React.FC = () => {
     setOptDurationValue(Number(o.duration_value || 1));
     setOptDurationUnit(o.duration_unit);
     setOptPrice(toNum(o.price));
+
+    // ✅ load attempts + validity (fallback to 1)
+    setOptMaxAttempts(clampInt(toNum(o.max_attempts), 1, 9999));
+    setOptValidityDays(clampInt(toNum(o.validity_days), 1, 3650));
   };
 
   const fetchPackages = async (): Promise<void> => {
     setLoading(true);
 
-    const { data, error } = await supabase
-      .from("packages")
-      .select("*")
-      .order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("packages").select("*").order("created_at", { ascending: false });
 
     if (error) {
+      // eslint-disable-next-line no-console
       console.error(error);
       showToast(`Load failed: ${error.message}`);
       setPackages([]);
@@ -207,6 +226,7 @@ const Admin_Packages: React.FC = () => {
         .order("created_at", { ascending: true });
 
       if (optErr) {
+        // eslint-disable-next-line no-console
         console.error(optErr);
         showToast(`Options load failed: ${optErr.message}`);
         setOptionsByPackage({});
@@ -313,6 +333,10 @@ const Admin_Packages: React.FC = () => {
     if (!Number.isFinite(optDurationValue) || optDurationValue <= 0) return showToast("Duration value must be > 0.");
     if (!Number.isFinite(optPrice) || optPrice < 0) return showToast("Price must be >= 0.");
 
+    // ✅ NEW validation
+    const maxAttempts = clampInt(optMaxAttempts, 1, 9999);
+    const validityDays = clampInt(optValidityDays, 1, 3650);
+
     setSaving(true);
     try {
       const payload = {
@@ -321,6 +345,10 @@ const Admin_Packages: React.FC = () => {
         duration_value: Math.floor(optDurationValue),
         duration_unit: optDurationUnit,
         price: Number(optPrice),
+
+        // ✅ NEW
+        max_attempts: maxAttempts,
+        validity_days: validityDays,
       };
 
       if (!editingOption) {
@@ -388,13 +416,10 @@ const Admin_Packages: React.FC = () => {
 
   return (
     <IonPage>
-      <IonHeader>
-      </IonHeader>
+      <IonHeader></IonHeader>
 
-      {/* ✅ SAME BACKGROUND AS OTHER PAGES */}
       <IonContent className="staff-content">
         <div className="customer-lists-container adminpkg adminpkg__wrap">
-          {/* ✅ SAME TOP BAR VIBE */}
           <div className="customer-topbar adminpkg__topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Packages</h2>
@@ -418,7 +443,9 @@ const Admin_Packages: React.FC = () => {
           {loading ? (
             <div className="adminpkg__loading">
               <IonSpinner />
-              <p className="customer-note" style={{ marginTop: 10 }}>Loading packages...</p>
+              <p className="customer-note" style={{ marginTop: 10 }}>
+                Loading packages...
+              </p>
             </div>
           ) : packages.length === 0 ? (
             <p className="customer-note">No packages yet. Click “New Package”.</p>
@@ -479,20 +506,26 @@ const Admin_Packages: React.FC = () => {
                               </IonText>
 
                               <div className="adminpkg__optionGrid">
-                                {opts.slice(0, 6).map((o) => (
-                                  <div className="adminpkg__optionRow" key={o.id}>
-                                    <div className="adminpkg__optionLeft">
-                                      <strong>{o.option_name}</strong>
-                                      <small className="adminpkg__muted">
-                                        {formatDuration(Number(o.duration_value), o.duration_unit)}
-                                      </small>
-                                    </div>
+                                {opts.slice(0, 6).map((o) => {
+                                  const attempts = clampInt(toNum(o.max_attempts), 1, 9999);
+                                  const validity = clampInt(toNum(o.validity_days), 1, 3650);
 
-                                    <div className="adminpkg__optionRight">
-                                      ₱{toNum(o.price).toFixed(2)}
+                                  return (
+                                    <div className="adminpkg__optionRow" key={o.id}>
+                                      <div className="adminpkg__optionLeft">
+                                        <strong>{o.option_name}</strong>
+                                        <small className="adminpkg__muted">
+                                          {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
+                                        </small>
+                                        <small className="adminpkg__muted">
+                                          Attempts: {attempts} • Validity: {validity} day(s)
+                                        </small>
+                                      </div>
+
+                                      <div className="adminpkg__optionRight"></div>
                                     </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
 
                                 {opts.length > 6 ? (
                                   <IonText color="medium">
@@ -525,9 +558,7 @@ const Admin_Packages: React.FC = () => {
                               onClick={() => void deletePackage(p)}
                             >
                               <IonIcon icon={trashOutline} />
-                              <span style={{ marginLeft: 8 }}>
-                                {deletingId === p.id ? "Deleting..." : "Delete"}
-                              </span>
+                              <span style={{ marginLeft: 8 }}>{deletingId === p.id ? "Deleting..." : "Delete"}</span>
                             </button>
                           </div>
                         </IonCardContent>
@@ -539,13 +570,8 @@ const Admin_Packages: React.FC = () => {
             </IonGrid>
           )}
 
-          {/* =========================
-              PACKAGE MODAL
-          ========================= */}
-          <IonModal
-            isOpen={openPackageModal}
-            onDidDismiss={() => setOpenPackageModal(false)}
-          >
+          {/* PACKAGE MODAL */}
+          <IonModal isOpen={openPackageModal} onDidDismiss={() => setOpenPackageModal(false)}>
             <IonHeader>
               <IonToolbar>
                 <IonTitle>{activePackage ? "Edit Package" : "New Package"}</IonTitle>
@@ -590,10 +616,7 @@ const Admin_Packages: React.FC = () => {
 
                   <IonItem>
                     <IonLabel position="stacked">Active?</IonLabel>
-                    <IonSelect
-                      value={pkgActive ? "yes" : "no"}
-                      onIonChange={(e) => setPkgActive(e.detail.value === "yes")}
-                    >
+                    <IonSelect value={pkgActive ? "yes" : "no"} onIonChange={(e) => setPkgActive(e.detail.value === "yes")}>
                       <IonSelectOption value="yes">Active</IonSelectOption>
                       <IonSelectOption value="no">Inactive</IonSelectOption>
                     </IonSelect>
@@ -620,9 +643,7 @@ const Admin_Packages: React.FC = () => {
             </IonContent>
           </IonModal>
 
-          {/* =========================
-              OPTIONS MODAL
-          ========================= */}
+          {/* OPTIONS MODAL */}
           <IonModal isOpen={openOptionsModal} onDidDismiss={() => setOpenOptionsModal(false)}>
             <IonHeader>
               <IonToolbar>
@@ -664,10 +685,7 @@ const Admin_Packages: React.FC = () => {
 
                           <IonItem>
                             <IonLabel position="stacked">Duration Unit</IonLabel>
-                            <IonSelect
-                              value={optDurationUnit}
-                              onIonChange={(e) => setOptDurationUnit(e.detail.value as DurationUnit)}
-                            >
+                            <IonSelect value={optDurationUnit} onIonChange={(e) => setOptDurationUnit(e.detail.value as DurationUnit)}>
                               <IonSelectOption value="hour">Hour(s)</IonSelectOption>
                               <IonSelectOption value="day">Day(s)</IonSelectOption>
                               <IonSelectOption value="month">Month(s)</IonSelectOption>
@@ -677,10 +695,25 @@ const Admin_Packages: React.FC = () => {
 
                           <IonItem>
                             <IonLabel position="stacked">Price (PHP)</IonLabel>
+                            <IonInput type="number" value={String(optPrice)} onIonChange={(e) => setOptPrice(Number(e.detail.value ?? 0))} />
+                          </IonItem>
+
+                          {/* ✅ NEW */}
+                          <IonItem>
+                            <IonLabel position="stacked">Max Attempts (IN/OUT)</IonLabel>
                             <IonInput
                               type="number"
-                              value={String(optPrice)}
-                              onIonChange={(e) => setOptPrice(Number(e.detail.value ?? 0))}
+                              value={String(optMaxAttempts)}
+                              onIonChange={(e) => setOptMaxAttempts(clampInt(Number(e.detail.value ?? 1), 1, 9999))}
+                            />
+                          </IonItem>
+
+                          <IonItem>
+                            <IonLabel position="stacked">Validity Days</IonLabel>
+                            <IonInput
+                              type="number"
+                              value={String(optValidityDays)}
+                              onIonChange={(e) => setOptValidityDays(clampInt(Number(e.detail.value ?? 1), 1, 3650))}
                             />
                           </IonItem>
                         </IonList>
@@ -707,36 +740,32 @@ const Admin_Packages: React.FC = () => {
                           <IonLabel>No options yet.</IonLabel>
                         </IonItem>
                       ) : (
-                        selectedOptions.map((o) => (
-                          <IonItem key={o.id}>
-                            <IonLabel>
-                              <strong>{o.option_name}</strong>
-                              <div className="adminpkg__muted" style={{ fontSize: 12 }}>
-                                {formatDuration(Number(o.duration_value), o.duration_unit)}
-                              </div>
-                            </IonLabel>
+                        selectedOptions.map((o) => {
+                          const attempts = clampInt(toNum(o.max_attempts), 1, 9999);
+                          const validity = clampInt(toNum(o.validity_days), 1, 3650);
 
-                            <IonText className="adminpkg__price">₱{toNum(o.price).toFixed(2)}</IonText>
+                          return (
+                            <IonItem key={o.id}>
+                              <IonLabel>
+                                <strong>{o.option_name}</strong>
+                                <div className="adminpkg__muted" style={{ fontSize: 12 }}>
+                                  {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
+                                </div>
+                                <div className="adminpkg__muted" style={{ fontSize: 12 }}>
+                                  Attempts: {attempts} • Validity: {validity} day(s)
+                                </div>
+                              </IonLabel>
 
-                            <IonButton
-                              size="small"
-                              fill="outline"
-                              onClick={() => openEditOption(o)}
-                              style={{ marginRight: 8 }}
-                            >
-                              Edit
-                            </IonButton>
+                              <IonButton size="small" fill="outline" onClick={() => openEditOption(o)} style={{ marginRight: 8 }}>
+                                Edit
+                              </IonButton>
 
-                            <IonButton
-                              size="small"
-                              color="danger"
-                              disabled={deletingId === o.id}
-                              onClick={() => void deleteOption(o)}
-                            >
-                              {deletingId === o.id ? "..." : "Delete"}
-                            </IonButton>
-                          </IonItem>
-                        ))
+                              <IonButton size="small" color="danger" disabled={deletingId === o.id} onClick={() => void deleteOption(o)}>
+                                {deletingId === o.id ? "..." : "Delete"}
+                              </IonButton>
+                            </IonItem>
+                          );
+                        })
                       )}
                     </IonList>
                   </>
@@ -745,12 +774,7 @@ const Admin_Packages: React.FC = () => {
             </IonContent>
           </IonModal>
 
-          <IonToast
-            isOpen={toastOpen}
-            message={toastMsg}
-            duration={2200}
-            onDidDismiss={() => setToastOpen(false)}
-          />
+          <IonToast isOpen={toastOpen} message={toastMsg} duration={2200} onDidDismiss={() => setToastOpen(false)} />
         </div>
       </IonContent>
     </IonPage>
