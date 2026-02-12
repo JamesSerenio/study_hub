@@ -3,15 +3,15 @@
 // ✅ Date/Time shown in PH
 // ✅ Overall Sales shown is NET (gross - 15%)
 // ✅ Remaining = NET Overall Sales - Cashouts (CASH+GCASH)
-// ✅ Cash Out modal now supports CASH + GCASH + history breakdown
+// ✅ Cash Out modal supports CASH + GCASH + history breakdown
+// ✅ History modal (read-only) shows ALL cashouts
 // ✅ Cash Out history shows payment_method (CASH/GCASH)
 // ✅ SAME classnames as Customer_Add_ons.tsx (customer-* / receipt-btn)
 // ✅ Category column (from consignment.category)
-// ✅ Grouping can be by CATEGORY (toggle)
-// ✅ NEW: Action column in DETAILS: Edit / Restock / Delete
-// ✅ NEW: Edit supports IMAGE UPLOAD (Supabase Storage)
-// ✅ NEW: Replacing image auto-deletes OLD image in Storage
-// ✅ NEW: Deleting row also deletes image in Storage + DB row
+// ✅ Grouping: FULL NAME / CATEGORY (toggle)
+// ✅ Action column in DETAILS: Edit / Restock / Delete
+// ✅ Edit supports IMAGE UPLOAD (Supabase Storage) + replacing auto deletes old image
+// ✅ Deleting row deletes image in Storage + DB row
 // ✅ STRICT TS: NO any
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -45,8 +45,10 @@ interface ConsignmentRow {
 interface CashOutRow {
   id: string;
   created_at: string;
+
   full_name: string;
   category: string | null;
+
   cashout_amount: NumericLike;
   payment_method: PayMethod;
   note: string | null;
@@ -55,7 +57,9 @@ interface CashOutRow {
 interface CashOutRowNoCategory {
   id: string;
   created_at: string;
+
   full_name: string;
+
   cashout_amount: NumericLike;
   payment_method: PayMethod;
   note: string | null;
@@ -64,8 +68,10 @@ interface CashOutRowNoCategory {
 interface CashOutRowNoMethod {
   id: string;
   created_at: string;
+
   full_name: string;
   category: string | null;
+
   cashout_amount: NumericLike;
   note: string | null;
 }
@@ -211,12 +217,15 @@ const Staff_Consignment_Record: React.FC = () => {
   const [cashoutTargetKey, setCashoutTargetKey] = useState<string | null>(null);
   const [cashoutTargetLabel, setCashoutTargetLabel] = useState<string>("");
 
-  // ✅ new: two inputs
   const [cashAmount, setCashAmount] = useState<string>("");
   const [gcashAmount, setGcashAmount] = useState<string>("");
 
   const [cashoutNote, setCashoutNote] = useState<string>("");
   const [savingCashout, setSavingCashout] = useState<boolean>(false);
+
+  // history modal
+  const [historyTargetKey, setHistoryTargetKey] = useState<string | null>(null);
+  const [historyTargetLabel, setHistoryTargetLabel] = useState<string>("");
 
   // actions: edit/restock/delete
   const [editTarget, setEditTarget] = useState<ConsignmentRow | null>(null);
@@ -297,7 +306,9 @@ const Staff_Consignment_Record: React.FC = () => {
     if (!withCatMethod.error) {
       const mapped = (withCatMethod.data ?? []).map((r) => ({
         ...r,
-        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash" ? "gcash" : "cash") as PayMethod,
+        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash"
+          ? "gcash"
+          : "cash") as PayMethod,
       }));
       setSalesRows(sales ?? []);
       setCashouts(mapped);
@@ -319,7 +330,9 @@ const Staff_Consignment_Record: React.FC = () => {
         full_name: r.full_name,
         category: null,
         cashout_amount: r.cashout_amount,
-        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash" ? "gcash" : "cash") as PayMethod,
+        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash"
+          ? "gcash"
+          : "cash") as PayMethod,
         note: r.note,
       }));
       setSalesRows(sales ?? []);
@@ -395,6 +408,7 @@ const Staff_Consignment_Record: React.FC = () => {
       return fresh;
     };
 
+    // sales => expected/gross
     for (const r of salesRows) {
       const { key, label } = getKeyAndLabel(r);
       const a = getOrCreate(key, label);
@@ -412,8 +426,10 @@ const Staff_Consignment_Record: React.FC = () => {
       a.gross_total = round2(a.gross_total + gross);
     }
 
+    // net totals
     for (const a of map.values()) a.net_total = grossToNet(a.gross_total);
 
+    // cashouts
     for (const c of cashouts) {
       const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
       const key = norm(label);
@@ -426,9 +442,8 @@ const Staff_Consignment_Record: React.FC = () => {
       a.cashout_total = round2(a.cashout_cash + a.cashout_gcash);
     }
 
-    for (const a of map.values()) {
-      a.remaining = round2(Math.max(0, a.net_total - a.cashout_total));
-    }
+    // remaining
+    for (const a of map.values()) a.remaining = round2(Math.max(0, a.net_total - a.cashout_total));
 
     return Array.from(map.values()).sort((x, y) => norm(x.label).localeCompare(norm(y.label)));
   }, [salesRows, cashouts, groupBy]);
@@ -454,7 +469,7 @@ const Staff_Consignment_Record: React.FC = () => {
 
   const rowsCount = filteredRows.length;
 
-  /* ---------------- cashout ---------------- */
+  /* ---------------- cashout + history ---------------- */
 
   const openCashout = (agg: PersonAgg): void => {
     setCashoutTargetKey(agg.key);
@@ -462,8 +477,12 @@ const Staff_Consignment_Record: React.FC = () => {
 
     setCashAmount("");
     setGcashAmount("");
-
     setCashoutNote("");
+  };
+
+  const openHistory = (agg: PersonAgg): void => {
+    setHistoryTargetKey(agg.key);
+    setHistoryTargetLabel(agg.label);
   };
 
   const cashoutHistoryForTarget = useMemo(() => {
@@ -473,6 +492,21 @@ const Staff_Consignment_Record: React.FC = () => {
       return norm(label) === cashoutTargetKey;
     });
   }, [cashoutTargetKey, cashouts, groupBy]);
+
+  const historyForTarget = useMemo(() => {
+    if (!historyTargetKey) return [];
+    return cashouts.filter((c) => {
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      return norm(label) === historyTargetKey;
+    });
+  }, [historyTargetKey, cashouts, groupBy]);
+
+  const groupHasAnyHistory = (aggKey: string): boolean => {
+    return cashouts.some((c) => {
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      return norm(label) === aggKey;
+    });
+  };
 
   const submitCashout = async (): Promise<void> => {
     if (!cashoutTargetKey) return;
@@ -497,16 +531,44 @@ const Staff_Consignment_Record: React.FC = () => {
     try {
       setSavingCashout(true);
 
-      const { error } = await supabase.rpc("cashout_consignment_oversale", {
-        p_full_name: cashoutTargetLabel,
-        p_cash_amount: cash,
-        p_gcash_amount: gcash,
-        p_note: cashoutNote.trim() || null,
-      });
+      const note = cashoutNote.trim() || null;
 
-      if (error) {
-        alert(`Cash out error: ${error.message}`);
-        return;
+      // ✅ If grouping by category, try passing category too (best),
+      // then fallback to old RPC signature if your function doesn't accept p_category.
+      if (groupBy === "category") {
+        const try1 = await supabase.rpc("cashout_consignment_oversale", {
+          p_full_name: "CATEGORY",
+          p_cash_amount: cash,
+          p_gcash_amount: gcash,
+          p_note: note,
+          p_category: cashoutTargetLabel,
+        });
+
+        if (try1.error) {
+          const try2 = await supabase.rpc("cashout_consignment_oversale", {
+            p_full_name: cashoutTargetLabel,
+            p_cash_amount: cash,
+            p_gcash_amount: gcash,
+            p_note: note,
+          });
+
+          if (try2.error) {
+            alert(`Cash out error: ${try2.error.message}`);
+            return;
+          }
+        }
+      } else {
+        const { error } = await supabase.rpc("cashout_consignment_oversale", {
+          p_full_name: cashoutTargetLabel,
+          p_cash_amount: cash,
+          p_gcash_amount: gcash,
+          p_note: note,
+        });
+
+        if (error) {
+          alert(`Cash out error: ${error.message}`);
+          return;
+        }
       }
 
       setCashoutTargetKey(null);
@@ -564,7 +626,6 @@ const Staff_Consignment_Record: React.FC = () => {
       setSavingEdit(true);
 
       const oldUrl = editTarget.image_url ?? null;
-
       let nextImageUrl: string | null = oldUrl;
 
       if (newImageFile) {
@@ -598,9 +659,7 @@ const Staff_Consignment_Record: React.FC = () => {
       }
 
       const changedImage = (oldUrl ?? null) !== (nextImageUrl ?? null);
-      if (changedImage && oldUrl) {
-        await deleteStorageByUrl(oldUrl, CONSIGNMENT_BUCKET);
-      }
+      if (changedImage && oldUrl) await deleteStorageByUrl(oldUrl, CONSIGNMENT_BUCKET);
 
       setEditTarget(null);
 
@@ -743,7 +802,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       <th>Total Restock</th>
                       <th>Total Sold</th>
                       <th>Expected Sales</th>
-                      <th>Overall Sales</th>
+                      <th>Overall Sales (NET)</th>
                       <th>Cash Outs</th>
                       <th>Remaining</th>
                       <th>Action</th>
@@ -751,41 +810,52 @@ const Staff_Consignment_Record: React.FC = () => {
                   </thead>
 
                   <tbody>
-                    {perKeyAgg.map((p) => (
-                      <tr key={p.key}>
-                        <td style={{ fontWeight: 1000 }}>{p.label}</td>
-                        <td style={{ fontWeight: 900 }}>{p.total_restock}</td>
-                        <td style={{ fontWeight: 900 }}>{p.total_sold}</td>
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.expected_total)}</td>
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.net_total)}</td>
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>
-                          {moneyText(p.cashout_total)}
-                          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
-                            Cash: {moneyText(p.cashout_cash)} • GCash: {moneyText(p.cashout_gcash)}
-                          </div>
-                        </td>
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 1100 }}>{moneyText(p.remaining)}</td>
+                    {perKeyAgg.map((p) => {
+                      const hasHistory = groupHasAnyHistory(p.key);
 
-                        <td>
-                          <div className="action-stack">
-                            <button
-                              className="receipt-btn"
-                              onClick={() => openCashout(p)}
-                              disabled={p.remaining <= 0}
-                              title={p.remaining <= 0 ? "No remaining" : "Cash out"}
-                            >
-                              Cash Out
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                      return (
+                        <tr key={p.key}>
+                          <td style={{ fontWeight: 1000 }}>{p.label}</td>
+                          <td style={{ fontWeight: 900 }}>{p.total_restock}</td>
+                          <td style={{ fontWeight: 900 }}>{p.total_sold}</td>
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.expected_total)}</td>
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.net_total)}</td>
+
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>
+                            {moneyText(p.cashout_total)}
+                            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+                              Cash: {moneyText(p.cashout_cash)} • GCash: {moneyText(p.cashout_gcash)}
+                            </div>
+                          </td>
+
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1100 }}>{moneyText(p.remaining)}</td>
+
+                          <td>
+                            <div className="action-stack" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <button className="receipt-btn" onClick={() => openCashout(p)} disabled={p.remaining <= 0} title={p.remaining <= 0 ? "No remaining" : "Cash out"}>
+                                Cash Out
+                              </button>
+
+                              <button
+                                className="receipt-btn"
+                                onClick={() => openHistory(p)}
+                                disabled={!hasHistory}
+                                title={!hasHistory ? "No history" : "View history"}
+                                style={{ opacity: !hasHistory ? 0.7 : 1 }}
+                              >
+                                History
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
 
                 {groupBy === "category" ? (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                    Note: If your cashout table has no <b>category</b> column, grouping by category can’t compute cashouts correctly unless you add it.
+                    Note: For accurate cashouts when grouping by <b>Category</b>, your <b>consignment_cash_outs</b> table should store the <b>category</b> value too.
                   </div>
                 ) : null}
               </div>
@@ -892,6 +962,107 @@ const Staff_Consignment_Record: React.FC = () => {
             </>
           )}
 
+          {/* ✅ HISTORY MODAL (read-only) */}
+          {historyTargetKey && (
+            <div className="receipt-overlay" onClick={() => setHistoryTargetKey(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">HISTORY</h3>
+                <p className="receipt-subtitle">
+                  {groupBy === "category" ? "Category: " : "Full Name: "}
+                  {historyTargetLabel}
+                </p>
+
+                <hr />
+
+                {(() => {
+                  const p = perKeyAggAll.find((x) => x.key === historyTargetKey);
+
+                  const gross = round2(p?.gross_total ?? 0);
+                  const net = grossToNet(gross);
+
+                  const remaining = round2(p?.remaining ?? 0);
+                  const cash = round2(p?.cashout_cash ?? 0);
+                  const gcash = round2(p?.cashout_gcash ?? 0);
+                  const totalCashouts = round2(p?.cashout_total ?? 0);
+                  const expected = round2(p?.expected_total ?? 0);
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>Expected Total</span>
+                        <span>{moneyText(expected)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Overall Sales (NET)</span>
+                        <span>{moneyText(net)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash Outs (Total)</span>
+                        <span>{moneyText(totalCashouts)}</span>
+                      </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ Cash</span>
+                        <span>{moneyText(cash)}</span>
+                      </div>
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ GCash</span>
+                        <span>{moneyText(gcash)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining</span>
+                        <span style={{ fontWeight: 1000 }}>{moneyText(remaining)}</span>
+                      </div>
+
+                      <hr />
+
+                      <div style={{ marginTop: 6, fontWeight: 900 }}>Cash Out History (all time)</div>
+
+                      <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                        {historyForTarget.length === 0 ? (
+                          <div style={{ opacity: 0.8, fontSize: 13 }}>No cash outs yet.</div>
+                        ) : (
+                          historyForTarget.map((h) => (
+                            <div
+                              key={h.id}
+                              style={{
+                                border: "1px solid rgba(0,0,0,0.10)",
+                                borderRadius: 12,
+                                padding: 10,
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 10,
+                                alignItems: "flex-start",
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontWeight: 1000 }}>
+                                  {formatPHDateTime(h.created_at)} • {labelPay(h.payment_method)}
+                                </div>
+                                {h.note ? <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>{h.note}</div> : null}
+                              </div>
+
+                              <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>{moneyText(round2(toNumber(h.cashout_amount)))}</div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="modal-actions" style={{ marginTop: 16 }}>
+                        <button className="receipt-btn" onClick={() => setHistoryTargetKey(null)}>
+                          Close
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
           {/* CASH OUT MODAL */}
           {cashoutTargetKey && (
             <div className="receipt-overlay" onClick={() => (savingCashout ? null : setCashoutTargetKey(null))}>
@@ -924,7 +1095,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Overall Sales</span>
+                        <span>Overall Sales (NET)</span>
                         <span>{moneyText(net)}</span>
                       </div>
 
@@ -949,7 +1120,6 @@ const Staff_Consignment_Record: React.FC = () => {
 
                       <hr />
 
-                      {/* ✅ NEW: Cash + GCash inputs */}
                       <div className="receipt-row">
                         <span>Cash Amount</span>
                         <input
@@ -979,10 +1149,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       </div>
 
                       <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
-                        Total Cashout:{" "}
-                        <b>
-                          {moneyText(round2((Number(cashAmount) || 0) + (Number(gcashAmount) || 0)))}
-                        </b>
+                        Total Cashout: <b>{moneyText(round2((Number(cashAmount) || 0) + (Number(gcashAmount) || 0)))}</b>
                       </div>
 
                       <div style={{ marginTop: 10 }}>
@@ -1117,60 +1284,27 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Full Name *</span>
-                  <input
-                    className="money-input"
-                    value={editForm.full_name}
-                    onChange={(e) => setEditForm((p) => ({ ...p, full_name: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Owner full name"
-                  />
+                  <input className="money-input" value={editForm.full_name} onChange={(e) => setEditForm((p) => ({ ...p, full_name: e.currentTarget.value }))} disabled={savingEdit} placeholder="Owner full name" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Category</span>
-                  <input
-                    className="money-input"
-                    value={editForm.category}
-                    onChange={(e) => setEditForm((p) => ({ ...p, category: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Optional category"
-                  />
+                  <input className="money-input" value={editForm.category} onChange={(e) => setEditForm((p) => ({ ...p, category: e.currentTarget.value }))} disabled={savingEdit} placeholder="Optional category" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Item Name *</span>
-                  <input
-                    className="money-input"
-                    value={editForm.item_name}
-                    onChange={(e) => setEditForm((p) => ({ ...p, item_name: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Item name"
-                  />
+                  <input className="money-input" value={editForm.item_name} onChange={(e) => setEditForm((p) => ({ ...p, item_name: e.currentTarget.value }))} disabled={savingEdit} placeholder="Item name" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Size</span>
-                  <input
-                    className="money-input"
-                    value={editForm.size}
-                    onChange={(e) => setEditForm((p) => ({ ...p, size: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Optional size"
-                  />
+                  <input className="money-input" value={editForm.size} onChange={(e) => setEditForm((p) => ({ ...p, size: e.currentTarget.value }))} disabled={savingEdit} placeholder="Optional size" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Price *</span>
-                  <input
-                    className="money-input"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={editForm.price}
-                    onChange={(e) => setEditForm((p) => ({ ...p, price: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="0.00"
-                  />
+                  <input className="money-input" type="number" min="0" step="0.01" value={editForm.price} onChange={(e) => setEditForm((p) => ({ ...p, price: e.currentTarget.value }))} disabled={savingEdit} placeholder="0.00" />
                 </div>
 
                 <div className="modal-actions" style={{ marginTop: 16 }}>
@@ -1198,16 +1332,7 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Add Qty</span>
-                  <input
-                    className="money-input"
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={restockQty}
-                    onChange={(e) => setRestockQty(e.currentTarget.value)}
-                    placeholder="0"
-                    disabled={savingRestock}
-                  />
+                  <input className="money-input" type="number" min="1" step="1" value={restockQty} onChange={(e) => setRestockQty(e.currentTarget.value)} placeholder="0" disabled={savingRestock} />
                 </div>
 
                 <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>Example: current 10 + input 5 = 15</div>

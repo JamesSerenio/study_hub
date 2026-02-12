@@ -3,7 +3,7 @@
 // ✅ Date/Time shown in PH
 // ✅ Overall Sales shown is NET (gross - 15%)
 // ✅ MeTyme Commission shown (15% of gross)
-// ✅ Remaining = NET Overall Sales - Cashouts (CASH+GCASH)  [VOIDED cashouts are ignored]
+// ✅ Remaining = NET Overall Sales - Cashouts (CASH+GCASH)  [VOIDED cashouts are ignored IF column exists]
 // ✅ Cash Out modal supports CASH + GCASH + history breakdown + payment_method
 // ✅ SAME classnames as Customer_Add_ons.tsx (customer-* / receipt-btn)
 // ✅ Category column (from consignment.category)
@@ -15,8 +15,8 @@
 // ✅ STRICT TS: NO any
 // ✅ NEW:
 //    - History button beside Cash Out
-//    - History shows ALL cashouts (including VOIDED)
-//    - VOID / UNVOID uses RPC if available, else update()
+//    - History shows ALL cashouts (including VOIDED if your table has those columns)
+// ✅ REMOVED: VOID / UNVOID buttons + logic
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
@@ -52,12 +52,15 @@ interface ConsignmentRow {
 interface CashOutRow {
   id: string;
   created_at: string;
+
   full_name: string;
   category: string | null;
+
   cashout_amount: NumericLike;
   payment_method: PayMethod;
   note: string | null;
 
+  // may exist in your DB; if not, fetchAll has fallbacks
   voided: boolean | null;
   voided_at: string | null;
   voided_by: string | null;
@@ -67,6 +70,7 @@ interface CashOutRowNoCategory {
   id: string;
   created_at: string;
   full_name: string;
+
   cashout_amount: NumericLike;
   payment_method: PayMethod;
   note: string | null;
@@ -79,8 +83,10 @@ interface CashOutRowNoCategory {
 interface CashOutRowNoMethod {
   id: string;
   created_at: string;
+
   full_name: string;
   category: string | null;
+
   cashout_amount: NumericLike;
   note: string | null;
 
@@ -231,7 +237,7 @@ const fetchImageAsBase64 = async (url: string): Promise<ImgData | null> => {
   }
 };
 
-/* ---------------- money rules ---------------- */
+/* ---------------- aggregates ---------------- */
 
 type PersonAgg = {
   key: string;
@@ -282,7 +288,6 @@ const Staff_Consignment_Record: React.FC = () => {
   // history modal
   const [historyTargetKey, setHistoryTargetKey] = useState<string | null>(null);
   const [historyTargetLabel, setHistoryTargetLabel] = useState<string>("");
-  const [voidingCashoutId, setVoidingCashoutId] = useState<string | null>(null);
 
   // actions
   const [editTarget, setEditTarget] = useState<ConsignmentRow | null>(null);
@@ -480,6 +485,7 @@ const Staff_Consignment_Record: React.FC = () => {
       return fresh;
     };
 
+    // sales => expected/gross
     for (const r of salesRows) {
       const { key, label } = getKeyAndLabel(r);
       const a = getOrCreate(key, label);
@@ -502,8 +508,8 @@ const Staff_Consignment_Record: React.FC = () => {
       a.commission_total = grossToCommission(a.gross_total);
     }
 
+    // cashouts => ignore voided (if voided exists)
     for (const c of cashouts) {
-      // ✅ ignore VOIDED
       if (c.voided === true) continue;
 
       const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
@@ -742,7 +748,6 @@ const Staff_Consignment_Record: React.FC = () => {
     setHistoryTargetLabel(agg.label);
   };
 
-  // list for CASHOUT modal (show all, including voided)
   const cashoutHistoryForTarget = useMemo(() => {
     if (!cashoutTargetKey) return [];
     return cashouts.filter((c) => {
@@ -751,7 +756,6 @@ const Staff_Consignment_Record: React.FC = () => {
     });
   }, [cashoutTargetKey, cashouts, groupBy]);
 
-  // list for HISTORY modal (show all, including voided)
   const historyForTarget = useMemo(() => {
     if (!historyTargetKey) return [];
     return cashouts.filter((c) => {
@@ -759,69 +763,6 @@ const Staff_Consignment_Record: React.FC = () => {
       return norm(label) === historyTargetKey;
     });
   }, [historyTargetKey, cashouts, groupBy]);
-
-  // ✅ VOID/UNVOID uses RPC if available, else update()
-  // ✅ IMPORTANT: we attempt RPCs, but ALSO handle "missing function" errors properly.
-  const toggleVoidCashout = async (row: CashOutRow): Promise<void> => {
-    const nextVoided = !(row.voided === true);
-
-    const ok = window.confirm(
-      nextVoided
-        ? "Void this cash out? It will be marked VOIDED and the remaining will return."
-        : "Unvoid this cash out? It will be active again and deduct from remaining."
-    );
-    if (!ok) return;
-
-    try {
-      setVoidingCashoutId(row.id);
-
-      // Try RPCs first (best if you created them)
-      if (nextVoided) {
-        const rpc = await supabase.rpc("void_consignment_cashout", { p_cashout_id: row.id });
-        if (!rpc.error) {
-          await fetchAll();
-          return;
-        }
-      } else {
-        const rpc = await supabase.rpc("unvoid_consignment_cashout", { p_cashout_id: row.id });
-        if (!rpc.error) {
-          await fetchAll();
-          return;
-        }
-      }
-
-      // Fallback UPDATE
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) {
-        alert(`Auth error: ${userErr.message}`);
-        return;
-      }
-
-      const uid = userData?.user?.id ?? null;
-
-      const { error } = await supabase
-        .from("consignment_cash_outs")
-        .update({
-          voided: nextVoided,
-          voided_at: nextVoided ? new Date().toISOString() : null,
-          voided_by: nextVoided ? uid : null,
-        })
-        .eq("id", row.id);
-
-      if (error) {
-        alert(`Void failed: ${error.message}`);
-        return;
-      }
-
-      await fetchAll();
-    } catch (e: unknown) {
-      // eslint-disable-next-line no-console
-      console.error(e);
-      alert("Void failed.");
-    } finally {
-      setVoidingCashoutId(null);
-    }
-  };
 
   const submitCashout = async (): Promise<void> => {
     if (!cashoutTargetKey) return;
@@ -846,9 +787,11 @@ const Staff_Consignment_Record: React.FC = () => {
     try {
       setSavingCashout(true);
 
+      // If grouping by category, pass p_category; otherwise null
       const p_category = groupBy === "category" ? cashoutTargetLabel : null;
 
-      const { error } = await supabase.rpc("cashout_consignment_oversale", {
+      // Try calling RPC with p_category (if your function signature has it)
+      const tryRpc = await supabase.rpc("cashout_consignment_oversale", {
         p_full_name: groupBy === "category" ? "CATEGORY" : cashoutTargetLabel,
         p_cash_amount: cash,
         p_gcash_amount: gcash,
@@ -856,9 +799,19 @@ const Staff_Consignment_Record: React.FC = () => {
         p_category,
       });
 
-      if (error) {
-        alert(`Cash out error: ${error.message}`);
-        return;
+      if (tryRpc.error) {
+        // fallback older signature without p_category
+        const fallbackRpc = await supabase.rpc("cashout_consignment_oversale", {
+          p_full_name: cashoutTargetLabel,
+          p_cash_amount: cash,
+          p_gcash_amount: gcash,
+          p_note: cashoutNote.trim() || null,
+        });
+
+        if (fallbackRpc.error) {
+          alert(`Cash out error: ${fallbackRpc.error.message}`);
+          return;
+        }
       }
 
       setCashoutTargetKey(null);
@@ -1026,7 +979,6 @@ const Staff_Consignment_Record: React.FC = () => {
     }
   };
 
-  // ✅ FIX: history button should check actual group cashouts (including voided)
   const groupHasAnyHistory = (aggKey: string): boolean => {
     return cashouts.some((c) => {
       const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
@@ -1084,7 +1036,12 @@ const Staff_Consignment_Record: React.FC = () => {
                 <button className="receipt-btn" onClick={() => void fetchAll()} disabled={loading || exporting}>
                   Refresh
                 </button>
-                <button className="receipt-btn" onClick={() => void exportToExcel()} disabled={loading || exporting || filteredRows.length === 0} title="Exports the current filtered list">
+                <button
+                  className="receipt-btn"
+                  onClick={() => void exportToExcel()}
+                  disabled={loading || exporting || filteredRows.length === 0}
+                  title="Exports the current filtered list"
+                >
                   {exporting ? "Exporting..." : "Export Excel"}
                 </button>
               </div>
@@ -1140,11 +1097,22 @@ const Staff_Consignment_Record: React.FC = () => {
 
                           <td>
                             <div className="action-stack" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                              <button className="receipt-btn" onClick={() => openCashout(p)} disabled={p.remaining <= 0} title={p.remaining <= 0 ? "No remaining" : "Cash out"}>
+                              <button
+                                className="receipt-btn"
+                                onClick={() => openCashout(p)}
+                                disabled={p.remaining <= 0}
+                                title={p.remaining <= 0 ? "No remaining" : "Cash out"}
+                              >
                                 Cash Out
                               </button>
 
-                              <button className="receipt-btn" onClick={() => openHistory(p)} disabled={!hasHistory} title={!hasHistory ? "No history" : "View history"} style={{ opacity: !hasHistory ? 0.7 : 1 }}>
+                              <button
+                                className="receipt-btn"
+                                onClick={() => openHistory(p)}
+                                disabled={!hasHistory}
+                                title={!hasHistory ? "No history" : "View history"}
+                                style={{ opacity: !hasHistory ? 0.7 : 1 }}
+                              >
                                 History
                               </button>
                             </div>
@@ -1264,9 +1232,9 @@ const Staff_Consignment_Record: React.FC = () => {
             </>
           )}
 
-          {/* ✅ HISTORY MODAL */}
+          {/* HISTORY MODAL (no void buttons) */}
           {historyTargetKey && (
-            <div className="receipt-overlay" onClick={() => (voidingCashoutId ? null : setHistoryTargetKey(null))}>
+            <div className="receipt-overlay" onClick={() => setHistoryTargetKey(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">HISTORY</h3>
                 <p className="receipt-subtitle">
@@ -1361,13 +1329,7 @@ const Staff_Consignment_Record: React.FC = () => {
                                   ) : null}
                                 </div>
 
-                                <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-                                  <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>{moneyText(round2(toNumber(h.cashout_amount)))}</div>
-
-                                  <button className="receipt-btn" onClick={() => void toggleVoidCashout(h)} disabled={voidingCashoutId === h.id} style={{ opacity: 0.98 }}>
-                                    {voidingCashoutId === h.id ? "Saving..." : isVoided ? "Unvoid" : "Void"}
-                                  </button>
-                                </div>
+                                <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>{moneyText(round2(toNumber(h.cashout_amount)))}</div>
                               </div>
                             );
                           })
@@ -1375,7 +1337,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       </div>
 
                       <div className="modal-actions" style={{ marginTop: 16 }}>
-                        <button className="receipt-btn" onClick={() => setHistoryTargetKey(null)} disabled={Boolean(voidingCashoutId)}>
+                        <button className="receipt-btn" onClick={() => setHistoryTargetKey(null)}>
                           Close
                         </button>
                       </div>
@@ -1451,12 +1413,30 @@ const Staff_Consignment_Record: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Cash Amount</span>
-                        <input className="money-input" type="number" min="0" step="0.01" value={cashAmount} onChange={(e) => setCashAmount(e.currentTarget.value)} placeholder="0.00" disabled={savingCashout} />
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={cashAmount}
+                          onChange={(e) => setCashAmount(e.currentTarget.value)}
+                          placeholder="0.00"
+                          disabled={savingCashout}
+                        />
                       </div>
 
                       <div className="receipt-row" style={{ marginTop: 8 }}>
                         <span>GCash Amount</span>
-                        <input className="money-input" type="number" min="0" step="0.01" value={gcashAmount} onChange={(e) => setGcashAmount(e.currentTarget.value)} placeholder="0.00" disabled={savingCashout} />
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashAmount}
+                          onChange={(e) => setGcashAmount(e.currentTarget.value)}
+                          placeholder="0.00"
+                          disabled={savingCashout}
+                        />
                       </div>
 
                       <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
@@ -1541,7 +1521,6 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 <hr />
 
-                {/* IMAGE PREVIEW + UPLOAD */}
                 <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
                   <div
                     style={{
@@ -1684,7 +1663,8 @@ const Staff_Consignment_Record: React.FC = () => {
                     Category: <b>{show(deleteTarget.category)}</b>
                   </div>
                   <div>
-                    Stocks: <b>{Math.max(0, Math.floor(Number(deleteTarget.stocks ?? 0) || 0))}</b> • Sold: <b>{Math.max(0, Math.floor(Number(deleteTarget.sold ?? 0) || 0))}</b>
+                    Stocks: <b>{Math.max(0, Math.floor(Number(deleteTarget.stocks ?? 0) || 0))}</b> • Sold:{" "}
+                    <b>{Math.max(0, Math.floor(Number(deleteTarget.sold ?? 0) || 0))}</b>
                   </div>
                   <div style={{ opacity: 0.85 }}>
                     Image: <b>{deleteTarget.image_url ? "will be deleted" : "none"}</b>
