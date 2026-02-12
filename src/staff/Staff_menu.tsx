@@ -58,8 +58,6 @@ import cancelledIcon from "../assets/cancelled.png";
 import bellIcon from "../assets/bell.png";
 import consignmentIcon from "../assets/consignment.png";
 import staff_consignmentIcon from "../assets/staff_consignment.png";
-
-/* ✅ NEW icon (put this file in src/assets/consignment_record.png) */
 import consignmentRecordIcon from "../assets/consignment_record.png";
 
 type FlowerStatic = {
@@ -91,12 +89,46 @@ type AddOnNotifRow = {
   read_at: string | null;
 };
 
+type ConsignmentNotifRow = {
+  id: string;
+  created_at: string;
+
+  consignment_row_id: string;
+
+  full_name: string;
+  seat_number: string;
+
+  consignment_id: string;
+  consignment_name: string;
+
+  quantity: number;
+  price: number;
+  total: number;
+
+  is_read: boolean;
+  read_at: string | null;
+};
+
+type UnifiedNotif = {
+  kind: "addon" | "consignment";
+  id: string;
+  created_at: string;
+  full_name: string;
+  seat_number: string;
+  item_name: string;
+  quantity: number;
+  price: number;
+  total: number;
+  is_read: boolean;
+  read_at: string | null;
+};
+
 const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
+const sleep = (msV: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, msV));
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
@@ -108,13 +140,14 @@ const Staff_menu: React.FC = () => {
   /* =========================
       🔔 Notifications
   ========================= */
-  const NOTIF_TABLE = "add_on_notifications";
+  const ADDON_NOTIF_TABLE = "add_on_notifications";
+  const CONSIGNMENT_NOTIF_TABLE = "consignment_notifications";
 
   const [notifOpen, setNotifOpen] = useState<boolean>(false);
   const notifOpenRef = useRef<boolean>(false);
 
   const [notifLoading, setNotifLoading] = useState<boolean>(false);
-  const [notifItems, setNotifItems] = useState<AddOnNotifRow[]>([]);
+  const [notifItems, setNotifItems] = useState<UnifiedNotif[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
   // refs
@@ -146,39 +179,85 @@ const Staff_menu: React.FC = () => {
     }).format(d);
   };
 
-  const fetchUnreadCount = async (): Promise<number> => {
-    const { count, error } = await supabase
-      .from(NOTIF_TABLE)
-      .select("id", { count: "exact", head: true })
-      .eq("is_read", false);
+  const mapAddOnToUnified = (r: AddOnNotifRow): UnifiedNotif => ({
+    kind: "addon",
+    id: r.id,
+    created_at: r.created_at,
+    full_name: r.full_name,
+    seat_number: r.seat_number,
+    item_name: r.add_on_name,
+    quantity: Number(r.quantity) || 0,
+    price: toMoney(r.price),
+    total: toMoney(r.total),
+    is_read: Boolean(r.is_read),
+    read_at: r.read_at ?? null,
+  });
 
-    if (error) return unreadCount;
-    const n = Number(count ?? 0);
-    setUnreadCount(n);
-    return n;
+  const mapConsignmentToUnified = (r: ConsignmentNotifRow): UnifiedNotif => ({
+    kind: "consignment",
+    id: r.id,
+    created_at: r.created_at,
+    full_name: r.full_name,
+    seat_number: r.seat_number,
+    item_name: r.consignment_name,
+    quantity: Number(r.quantity) || 0,
+    price: toMoney(r.price),
+    total: toMoney(r.total),
+    is_read: Boolean(r.is_read),
+    read_at: r.read_at ?? null,
+  });
+
+  const fetchUnreadCount = async (): Promise<number> => {
+    const [a, c] = await Promise.all([
+      supabase.from(ADDON_NOTIF_TABLE).select("id", { count: "exact", head: true }).eq("is_read", false),
+      supabase.from(CONSIGNMENT_NOTIF_TABLE).select("id", { count: "exact", head: true }).eq("is_read", false),
+    ]);
+
+    const aCount = a.error ? 0 : Number(a.count ?? 0);
+    const cCount = c.error ? 0 : Number(c.count ?? 0);
+
+    const total = aCount + cCount;
+    setUnreadCount(total);
+    return total;
   };
 
   const fetchNotifications = async (): Promise<void> => {
     setNotifLoading(true);
 
-    const { data, error } = await supabase
-      .from(NOTIF_TABLE)
-      .select(
-        "id, created_at, add_on_row_id, full_name, seat_number, add_on_id, add_on_name, quantity, price, total, is_read, read_at"
-      )
-      .order("created_at", { ascending: false })
-      .limit(30);
+    const [a, c] = await Promise.all([
+      supabase
+        .from(ADDON_NOTIF_TABLE)
+        .select("id, created_at, add_on_row_id, full_name, seat_number, add_on_id, add_on_name, quantity, price, total, is_read, read_at")
+        .order("created_at", { ascending: false })
+        .limit(30),
+      supabase
+        .from(CONSIGNMENT_NOTIF_TABLE)
+        .select(
+          "id, created_at, consignment_row_id, full_name, seat_number, consignment_id, consignment_name, quantity, price, total, is_read, read_at"
+        )
+        .order("created_at", { ascending: false })
+        .limit(30),
+    ]);
 
     setNotifLoading(false);
 
-    if (error) {
+    if (a.error) {
       // eslint-disable-next-line no-console
-      console.warn("fetchNotifications:", error.message);
-      setNotifItems([]);
-      return;
+      console.warn("fetch addon notifications:", a.error.message);
+    }
+    if (c.error) {
+      // eslint-disable-next-line no-console
+      console.warn("fetch consignment notifications:", c.error.message);
     }
 
-    setNotifItems((data as AddOnNotifRow[]) ?? []);
+    const merged = [
+      ...(((a.data as AddOnNotifRow[]) ?? []).map(mapAddOnToUnified)),
+      ...(((c.data as ConsignmentNotifRow[]) ?? []).map(mapConsignmentToUnified)),
+    ]
+      .sort((x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime())
+      .slice(0, 30);
+
+    setNotifItems(merged);
   };
 
   /* =========================
@@ -203,7 +282,7 @@ const Staff_menu: React.FC = () => {
   };
 
   /* =========================
-      ✅ AUTO-READ on open
+      ✅ AUTO-READ on open (BOTH TABLES)
   ========================= */
   const markAllAsReadSilent = async (): Promise<void> => {
     cancelScheduledRefresh();
@@ -214,12 +293,14 @@ const Staff_menu: React.FC = () => {
 
     const nowIso = new Date().toISOString();
 
-    // ✅ update only unread
-    const { error } = await supabase.from(NOTIF_TABLE).update({ is_read: true, read_at: nowIso }).eq("is_read", false);
+    const [a, c] = await Promise.all([
+      supabase.from(ADDON_NOTIF_TABLE).update({ is_read: true, read_at: nowIso }).eq("is_read", false),
+      supabase.from(CONSIGNMENT_NOTIF_TABLE).update({ is_read: true, read_at: nowIso }).eq("is_read", false),
+    ]);
 
-    if (error) {
+    if (a.error || c.error) {
       // eslint-disable-next-line no-console
-      console.warn("markAllAsReadSilent:", error.message);
+      console.warn("markAllAsReadSilent:", a.error?.message ?? "", c.error?.message ?? "");
       suspendRefreshRef.current = false;
       await fetchUnreadCount();
       return;
@@ -283,28 +364,32 @@ const Staff_menu: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ✅ REALTIME SUBSCRIBE ONCE (INSTANT BADGE) */
+  /* ✅ REALTIME SUBSCRIBE ONCE (BOTH TABLES) */
   useEffect(() => {
     void fetchUnreadCount();
     void fetchNotifications();
 
     const ch = supabase
-      .channel("realtime_add_on_notifications")
+      .channel("realtime_notifications_all")
+
+      // ---------- ADD-ONS ----------
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: NOTIF_TABLE },
+        { event: "INSERT", schema: "public", table: ADDON_NOTIF_TABLE },
         (payload: RealtimePostgresInsertPayload<AddOnNotifRow>) => {
           const newRow = payload.new;
+          const u = mapAddOnToUnified(newRow);
 
           setNotifItems((prev) => {
-            if (prev.some((x) => x.id === newRow.id)) return prev;
-            return [newRow, ...prev].slice(0, 30);
+            if (prev.some((x) => x.id === u.id && x.kind === "addon")) return prev;
+            const merged = [u, ...prev].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            return merged.slice(0, 30);
           });
 
           if (notifOpenRef.current) {
             void markAllAsReadSilent();
           } else {
-            if (!newRow.is_read) setUnreadCount((c) => c + 1);
+            if (!u.is_read) setUnreadCount((c) => c + 1);
           }
 
           scheduleRecount(600);
@@ -312,22 +397,24 @@ const Staff_menu: React.FC = () => {
       )
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: NOTIF_TABLE },
+        { event: "UPDATE", schema: "public", table: ADDON_NOTIF_TABLE },
         (payload: RealtimePostgresUpdatePayload<AddOnNotifRow>) => {
           const newRow = payload.new;
           const oldRow = payload.old;
 
+          const u = mapAddOnToUnified(newRow);
+
           setNotifItems((prev) => {
-            const idx = prev.findIndex((x) => x.id === newRow.id);
+            const idx = prev.findIndex((x) => x.kind === "addon" && x.id === u.id);
             if (idx === -1) return prev;
             const copy = [...prev];
-            copy[idx] = newRow;
+            copy[idx] = u;
             return copy;
           });
 
           if (!notifOpenRef.current) {
             const wasUnread = oldRow ? !(oldRow as Partial<AddOnNotifRow>).is_read : null;
-            const isUnreadNow = !newRow.is_read;
+            const isUnreadNow = !u.is_read;
 
             if (wasUnread === true && isUnreadNow === false) {
               setUnreadCount((c) => Math.max(0, c - 1));
@@ -341,9 +428,72 @@ const Staff_menu: React.FC = () => {
       )
       .on(
         "postgres_changes",
-        { event: "DELETE", schema: "public", table: NOTIF_TABLE },
+        { event: "DELETE", schema: "public", table: ADDON_NOTIF_TABLE },
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         (_payload: RealtimePostgresDeletePayload<AddOnNotifRow>) => {
+          scheduleRecount(250);
+        }
+      )
+
+      // ---------- CONSIGNMENT ----------
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
+        (payload: RealtimePostgresInsertPayload<ConsignmentNotifRow>) => {
+          const newRow = payload.new;
+          const u = mapConsignmentToUnified(newRow);
+
+          setNotifItems((prev) => {
+            if (prev.some((x) => x.id === u.id && x.kind === "consignment")) return prev;
+            const merged = [u, ...prev].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            return merged.slice(0, 30);
+          });
+
+          if (notifOpenRef.current) {
+            void markAllAsReadSilent();
+          } else {
+            if (!u.is_read) setUnreadCount((c) => c + 1);
+          }
+
+          scheduleRecount(600);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
+        (payload: RealtimePostgresUpdatePayload<ConsignmentNotifRow>) => {
+          const newRow = payload.new;
+          const oldRow = payload.old;
+
+          const u = mapConsignmentToUnified(newRow);
+
+          setNotifItems((prev) => {
+            const idx = prev.findIndex((x) => x.kind === "consignment" && x.id === u.id);
+            if (idx === -1) return prev;
+            const copy = [...prev];
+            copy[idx] = u;
+            return copy;
+          });
+
+          if (!notifOpenRef.current) {
+            const wasUnread = oldRow ? !(oldRow as Partial<ConsignmentNotifRow>).is_read : null;
+            const isUnreadNow = !u.is_read;
+
+            if (wasUnread === true && isUnreadNow === false) {
+              setUnreadCount((c) => Math.max(0, c - 1));
+            } else if (wasUnread === false && isUnreadNow === true) {
+              setUnreadCount((c) => c + 1);
+            } else {
+              scheduleRecount(350);
+            }
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        (_payload: RealtimePostgresDeletePayload<ConsignmentNotifRow>) => {
           scheduleRecount(250);
         }
       )
@@ -399,7 +549,7 @@ const Staff_menu: React.FC = () => {
       { name: "Add Consignment", key: "staff_consignment", icon: consignmentIcon },
       { name: "Consignment Record", key: "staff_consignment_record", icon: staff_consignmentIcon },
 
-      /* ✅ NEW: customer consignment record */
+      /* ✅ NEW */
       { name: "Customer Consignment Record", key: "customer_consignment_record", icon: consignmentRecordIcon },
     ],
     []
@@ -442,11 +592,8 @@ const Staff_menu: React.FC = () => {
         return <Staff_Consignment />;
       case "staff_consignment_record":
         return <Staff_Consignment_Record />;
-
-      /* ✅ NEW */
       case "customer_consignment_record":
         return <Customer_Consignment_Record />;
-
       default:
         return <Staff_Dashboard />;
     }
@@ -581,12 +728,12 @@ const Staff_menu: React.FC = () => {
               className="notif-popover notif-popover--fixed"
               style={{ top: `${popoverPos.top}px`, right: `${popoverPos.right}px` }}
               role="dialog"
-              aria-label="Add-ons notifications"
+              aria-label="Notifications"
             >
               <div className="notif-popover-head">
                 <div>
-                  <div className="notif-title">Add-Ons Notifications</div>
-                  <div className="notif-subtitle">Live updates • auto-read on open</div>
+                  <div className="notif-title">Notifications</div>
+                  <div className="notif-subtitle">Add-ons + Consignment • live • auto-read on open</div>
                 </div>
 
                 <div style={{ display: "flex", gap: 8 }}>
@@ -597,6 +744,7 @@ const Staff_menu: React.FC = () => {
               </div>
 
               <div className="notif-grid-head">
+                <div>Type</div>
                 <div>Fullname</div>
                 <div>Seat</div>
                 <div>Date/Time</div>
@@ -615,11 +763,15 @@ const Staff_menu: React.FC = () => {
                   <div className="notif-empty">No notifications yet.</div>
                 ) : (
                   notifItems.map((n) => (
-                    <div key={n.id} className={`notif-row ${n.is_read ? "" : "notif-row--unread"}`}>
+                    <div key={`${n.kind}-${n.id}`} className={`notif-row ${n.is_read ? "" : "notif-row--unread"}`}>
+                      <div className={`seat-pill ${n.kind === "consignment" ? "seat-pill--alt" : ""}`}>
+                        {n.kind === "addon" ? "ADD-ON" : "CONSIGN"}
+                      </div>
+
                       <div className="ellipsis">{n.full_name}</div>
                       <div className="seat-pill">{n.seat_number}</div>
                       <div className="dt">{formatPHDateTime(n.created_at)}</div>
-                      <div className="ellipsis">{n.add_on_name}</div>
+                      <div className="ellipsis">{n.item_name}</div>
                       <div className="t-right">{Number(n.quantity)}</div>
                       <div className="t-right">₱{toMoney(n.price).toFixed(2)}</div>
                       <div className="t-right total">₱{toMoney(n.total).toFixed(2)}</div>
