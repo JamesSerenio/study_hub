@@ -4,22 +4,27 @@
 // ✅ REMOVED Transactions column
 // ✅ Overall Sales shown is NET (gross - 15%)
 // ✅ REMOVED “Oversale (15%)” column everywhere
-// ✅ Remaining = (15% of gross overall) - cashouts (still works for cashout)
-// ✅ Cash Out modal (per Full Name) + cashout history (ALL TIME for that name)
+// ✅ Remaining = NET Overall Sales - Cashouts   ✅ FIXED
+// ✅ Cash Out modal (per Full Name) + cashout history (ALL TIME)
 // ✅ SAME classnames as Customer_Add_ons.tsx (customer-* / receipt-btn)
-// ✅ No "any"
+// ✅ NEW: Category column (from consignment.category)
+// ✅ NEW: Grouping can be by CATEGORY (toggle)
+// ✅ STRICT TS: NO any
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 
 type NumericLike = number | string;
+type GroupBy = "full_name" | "category";
 
 interface ConsignmentRow {
   id: string;
   created_at: string;
 
   full_name: string;
+  category: string | null;
+
   item_name: string;
   size: string | null;
   image_url: string | null;
@@ -28,12 +33,21 @@ interface ConsignmentRow {
   restocked: number | null;
   sold: number | null;
 
-  expected_sales: NumericLike | null; // should already be net (85%) in DB
-  overall_sales: NumericLike | null; // gross in DB
-  stocks: number | null; // generated
+  expected_sales: NumericLike | null; // net(85%) in DB (restocked*price*0.85)
+  overall_sales: NumericLike | null; // gross in DB (sold*price)
+  stocks: number | null;
 }
 
 interface CashOutRow {
+  id: string;
+  created_at: string;
+  full_name: string;
+  category: string | null; // if column exists; otherwise null
+  cashout_amount: NumericLike;
+  note: string | null;
+}
+
+interface CashOutRowNoCategory {
   id: string;
   created_at: string;
   full_name: string;
@@ -71,27 +85,33 @@ const formatPHDateTime = (iso: string): string => {
 };
 
 const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+
+const show = (s: string | null | undefined, fallback = "-"): string => {
+  const v = String(s ?? "").trim();
+  return v.length ? v : fallback;
+};
+
 const sizeText = (s: string | null | undefined): string => {
   const v = String(s ?? "").trim();
   return v.length ? v : "—";
 };
 
 // money rules
-const grossToNet = (gross: number): number => round2(gross * 0.85); // overall - 15%
-const grossOversale = (gross: number): number => round2(gross * 0.15); // used for remaining/cashout
+const grossToNet = (gross: number): number => round2(gross * 0.85);
 
 type PersonAgg = {
-  full_name: string;
+  key: string;
+  label: string;
 
   total_restock: number;
   total_sold: number;
 
-  expected_total: number; // sum expected_sales (85%)
-  gross_total: number; // sum overall_sales (gross)
-  net_total: number; // gross_total * 0.85 (shown as Overall Sales)
+  expected_total: number;
+  gross_total: number;
+  net_total: number;
 
-  cashout_total: number; // from cashouts
-  remaining: number; // (gross_total*0.15) - cashout_total
+  cashout_total: number;
+  remaining: number; // ✅ now based on net_total
 };
 
 const Staff_Consignment_Record: React.FC = () => {
@@ -100,9 +120,11 @@ const Staff_Consignment_Record: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
 
   const [searchText, setSearchText] = useState<string>("");
+  const [groupBy, setGroupBy] = useState<GroupBy>("full_name");
 
   // cashout modal
-  const [cashoutTargetName, setCashoutTargetName] = useState<string | null>(null);
+  const [cashoutTargetKey, setCashoutTargetKey] = useState<string | null>(null);
+  const [cashoutTargetLabel, setCashoutTargetLabel] = useState<string>("");
   const [cashoutAmount, setCashoutAmount] = useState<string>("");
   const [cashoutNote, setCashoutNote] = useState<string>("");
   const [savingCashout, setSavingCashout] = useState<boolean>(false);
@@ -115,7 +137,6 @@ const Staff_Consignment_Record: React.FC = () => {
   const fetchAll = async (): Promise<void> => {
     setLoading(true);
 
-    // ✅ ALL consignment rows (no date filter)
     const { data: sales, error: sErr } = await supabase
       .from("consignment")
       .select(
@@ -123,6 +144,7 @@ const Staff_Consignment_Record: React.FC = () => {
         id,
         created_at,
         full_name,
+        category,
         item_name,
         size,
         image_url,
@@ -146,39 +168,70 @@ const Staff_Consignment_Record: React.FC = () => {
       return;
     }
 
-    // ✅ ALL cashouts (no date filter)
-    const { data: outs, error: cErr } = await supabase
+    // cashouts: try with category, fallback without
+    const withCat = await supabase
       .from("consignment_cash_outs")
-      .select("id, created_at, full_name, cashout_amount, note")
+      .select("id, created_at, full_name, category, cashout_amount, note")
       .order("created_at", { ascending: false })
       .returns<CashOutRow[]>();
 
-    if (cErr) {
-      // eslint-disable-next-line no-console
-      console.error("FETCH CASH OUTS ERROR:", cErr);
+    if (withCat.error) {
+      const noCat = await supabase
+        .from("consignment_cash_outs")
+        .select("id, created_at, full_name, cashout_amount, note")
+        .order("created_at", { ascending: false })
+        .returns<CashOutRowNoCategory[]>();
+
+      if (noCat.error) {
+        // eslint-disable-next-line no-console
+        console.error("FETCH CASH OUTS ERROR:", noCat.error);
+        setSalesRows(sales ?? []);
+        setCashouts([]);
+        setLoading(false);
+        return;
+      }
+
+      const mapped: CashOutRow[] = (noCat.data ?? []).map((r) => ({
+        id: r.id,
+        created_at: r.created_at,
+        full_name: r.full_name,
+        category: null,
+        cashout_amount: r.cashout_amount,
+        note: r.note,
+      }));
+
       setSalesRows(sales ?? []);
-      setCashouts([]);
+      setCashouts(mapped);
       setLoading(false);
       return;
     }
 
     setSalesRows(sales ?? []);
-    setCashouts(outs ?? []);
+    setCashouts(withCat.data ?? []);
     setLoading(false);
   };
 
   /* ---------------- build grouped summary ---------------- */
 
-  const perNameAggAll = useMemo<PersonAgg[]>(() => {
+  const perKeyAggAll = useMemo<PersonAgg[]>(() => {
     const map = new Map<string, PersonAgg>();
 
-    const getOrCreate = (fullNameRaw: string): PersonAgg => {
-      const key = norm(fullNameRaw);
+    const getKeyAndLabel = (r: { full_name: string; category: string | null }): { key: string; label: string } => {
+      if (groupBy === "category") {
+        const label = show(r.category, "-");
+        return { key: norm(label), label };
+      }
+      const label = show(r.full_name, "-");
+      return { key: norm(label), label };
+    };
+
+    const getOrCreate = (key: string, label: string): PersonAgg => {
       const found = map.get(key);
       if (found) return found;
 
       const fresh: PersonAgg = {
-        full_name: (fullNameRaw ?? "").trim() || "-",
+        key,
+        label,
         total_restock: 0,
         total_sold: 0,
         expected_total: 0,
@@ -192,8 +245,10 @@ const Staff_Consignment_Record: React.FC = () => {
       return fresh;
     };
 
+    // sales aggregation
     for (const r of salesRows) {
-      const a = getOrCreate(r.full_name);
+      const { key, label } = getKeyAndLabel(r);
+      const a = getOrCreate(key, label);
 
       const rest = Number(r.restocked ?? 0) || 0;
       const sold = Number(r.sold ?? 0) || 0;
@@ -208,28 +263,30 @@ const Staff_Consignment_Record: React.FC = () => {
       a.gross_total = round2(a.gross_total + gross);
     }
 
-    for (const a of map.values()) {
-      a.net_total = grossToNet(a.gross_total);
-    }
+    // compute net totals
+    for (const a of map.values()) a.net_total = grossToNet(a.gross_total);
 
+    // cashout aggregation
     for (const c of cashouts) {
-      const a = getOrCreate(c.full_name);
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      const key = norm(label);
+      const a = getOrCreate(key, label);
       a.cashout_total = round2(a.cashout_total + round2(toNumber(c.cashout_amount)));
     }
 
+    // ✅ FIXED REMAINING: NET - CASHOUTS
     for (const a of map.values()) {
-      const pool = grossOversale(a.gross_total);
-      a.remaining = round2(Math.max(0, pool - a.cashout_total));
+      a.remaining = round2(Math.max(0, a.net_total - a.cashout_total));
     }
 
-    return Array.from(map.values()).sort((x, y) => norm(x.full_name).localeCompare(norm(y.full_name)));
-  }, [salesRows, cashouts]);
+    return Array.from(map.values()).sort((x, y) => norm(x.label).localeCompare(norm(y.label)));
+  }, [salesRows, cashouts, groupBy]);
 
-  const perNameAgg = useMemo<PersonAgg[]>(() => {
+  const perKeyAgg = useMemo<PersonAgg[]>(() => {
     const q = searchText.trim().toLowerCase();
-    if (!q) return perNameAggAll;
-    return perNameAggAll.filter((p) => norm(p.full_name).includes(q));
-  }, [perNameAggAll, searchText]);
+    if (!q) return perKeyAggAll;
+    return perKeyAggAll.filter((p) => norm(p.label).includes(q));
+  }, [perKeyAggAll, searchText]);
 
   const filteredRows = useMemo<ConsignmentRow[]>(() => {
     const q = searchText.trim().toLowerCase();
@@ -237,9 +294,10 @@ const Staff_Consignment_Record: React.FC = () => {
 
     return salesRows.filter((r) => {
       const f = norm(r.full_name);
+      const cat = norm(r.category);
       const it = norm(r.item_name);
       const sz = norm(r.size);
-      return f.includes(q) || it.includes(q) || sz.includes(q);
+      return f.includes(q) || cat.includes(q) || it.includes(q) || sz.includes(q);
     });
   }, [salesRows, searchText]);
 
@@ -247,21 +305,23 @@ const Staff_Consignment_Record: React.FC = () => {
 
   /* ---------------- cashout ---------------- */
 
-  const openCashout = (fullName: string): void => {
-    setCashoutTargetName(fullName);
+  const openCashout = (agg: PersonAgg): void => {
+    setCashoutTargetKey(agg.key);
+    setCashoutTargetLabel(agg.label);
     setCashoutAmount("");
     setCashoutNote("");
   };
 
-  // ✅ history ALL TIME for this name
   const cashoutHistoryForTarget = useMemo(() => {
-    if (!cashoutTargetName) return [];
-    const k = norm(cashoutTargetName);
-    return cashouts.filter((c) => norm(c.full_name) === k);
-  }, [cashoutTargetName, cashouts]);
+    if (!cashoutTargetKey) return [];
+    return cashouts.filter((c) => {
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      return norm(label) === cashoutTargetKey;
+    });
+  }, [cashoutTargetKey, cashouts, groupBy]);
 
   const submitCashout = async (): Promise<void> => {
-    if (!cashoutTargetName) return;
+    if (!cashoutTargetKey) return;
 
     const amt = round2(Math.max(0, Number(cashoutAmount) || 0));
     if (amt <= 0) {
@@ -269,9 +329,10 @@ const Staff_Consignment_Record: React.FC = () => {
       return;
     }
 
-    const target = perNameAggAll.find((p) => norm(p.full_name) === norm(cashoutTargetName));
+    const target = perKeyAggAll.find((p) => p.key === cashoutTargetKey);
     const remaining = round2(target?.remaining ?? 0);
 
+    // ✅ BLOCK OVER CASHOUT
     if (amt > remaining) {
       alert(`Insufficient remaining. Remaining: ${moneyText(remaining)}`);
       return;
@@ -280,9 +341,10 @@ const Staff_Consignment_Record: React.FC = () => {
     try {
       setSavingCashout(true);
 
+      // NOTE: your RPC is by full_name. If groupBy=category, this still passes label.
       const { error } = await supabase.rpc("cashout_consignment_oversale", {
         p_cashout_amount: amt,
-        p_full_name: cashoutTargetName,
+        p_full_name: cashoutTargetLabel,
         p_note: cashoutNote.trim() || null,
       });
 
@@ -291,9 +353,10 @@ const Staff_Consignment_Record: React.FC = () => {
         return;
       }
 
-      setCashoutTargetName(null);
+      setCashoutTargetKey(null);
+      setCashoutTargetLabel("");
       await fetchAll();
-    } catch (e) {
+    } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
       alert("Cash out failed.");
@@ -311,8 +374,18 @@ const Staff_Consignment_Record: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Consignment Records</h2>
               <div className="customer-subtext">
-                Showing: <strong>ALL</strong> • Rows: <strong>{rowsCount}</strong> • Names:{" "}
-                <strong>{perNameAgg.length}</strong>
+                Showing: <strong>ALL</strong> • Rows: <strong>{rowsCount}</strong> • Groups:{" "}
+                <strong>{perKeyAgg.length}</strong>
+              </div>
+
+              {/* group toggle */}
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="receipt-btn" onClick={() => setGroupBy("full_name")} style={{ opacity: groupBy === "full_name" ? 1 : 0.6 }}>
+                  Group by Full Name
+                </button>
+                <button className="receipt-btn" onClick={() => setGroupBy("category")} style={{ opacity: groupBy === "category" ? 1 : 0.6 }}>
+                  Group by Category
+                </button>
               </div>
             </div>
 
@@ -327,7 +400,7 @@ const Staff_Consignment_Record: React.FC = () => {
                   <input
                     className="customer-search-input"
                     type="text"
-                    placeholder="Search fullname / item / size..."
+                    placeholder="Search fullname / category / item / size..."
                     value={searchText}
                     onChange={(e) => setSearchText(e.currentTarget.value)}
                   />
@@ -350,16 +423,16 @@ const Staff_Consignment_Record: React.FC = () => {
 
           {loading ? (
             <p className="customer-note">Loading...</p>
-          ) : perNameAgg.length === 0 ? (
+          ) : perKeyAgg.length === 0 ? (
             <p className="customer-note">No consignment data found.</p>
           ) : (
             <>
-              {/* ✅ TOP SUMMARY TABLE */}
+              {/* TOP SUMMARY TABLE */}
               <div className="customer-table-wrap" style={{ marginBottom: 14 }}>
                 <table className="customer-table">
                   <thead>
                     <tr>
-                      <th>Full Name</th>
+                      <th>{groupBy === "category" ? "Category" : "Full Name"}</th>
                       <th>Total Restock</th>
                       <th>Total Sold</th>
                       <th>Expected Sales</th>
@@ -371,17 +444,13 @@ const Staff_Consignment_Record: React.FC = () => {
                   </thead>
 
                   <tbody>
-                    {perNameAgg.map((p) => (
-                      <tr key={norm(p.full_name)}>
-                        <td style={{ fontWeight: 1000 }}>{p.full_name}</td>
+                    {perKeyAgg.map((p) => (
+                      <tr key={p.key}>
+                        <td style={{ fontWeight: 1000 }}>{p.label}</td>
                         <td style={{ fontWeight: 900 }}>{p.total_restock}</td>
                         <td style={{ fontWeight: 900 }}>{p.total_sold}</td>
-
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.expected_total)}</td>
-
-                        {/* ✅ Overall Sales is NET now (already -15%) */}
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.net_total)}</td>
-
                         <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{moneyText(p.cashout_total)}</td>
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1100 }}>{moneyText(p.remaining)}</td>
 
@@ -389,7 +458,7 @@ const Staff_Consignment_Record: React.FC = () => {
                           <div className="action-stack">
                             <button
                               className="receipt-btn"
-                              onClick={() => openCashout(p.full_name)}
+                              onClick={() => openCashout(p)}
                               disabled={p.remaining <= 0}
                               title={p.remaining <= 0 ? "No remaining" : "Cash out"}
                             >
@@ -401,9 +470,15 @@ const Staff_Consignment_Record: React.FC = () => {
                     ))}
                   </tbody>
                 </table>
+
+                {groupBy === "category" ? (
+                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                    Note: Your cashout table has no <b>category</b> column, so grouping by category can’t compute cashouts correctly unless you add it.
+                  </div>
+                ) : null}
               </div>
 
-              {/* ✅ DETAILS TABLE */}
+              {/* DETAILS TABLE */}
               <div className="customer-table-wrap">
                 <table className="customer-table">
                   <thead>
@@ -412,6 +487,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       <th>Item Name</th>
                       <th>Date/Time (PH)</th>
                       <th>Full Name</th>
+                      <th>Category</th>
                       <th>Size</th>
                       <th>Price</th>
                       <th>Restock</th>
@@ -469,7 +545,8 @@ const Staff_Consignment_Record: React.FC = () => {
 
                           <td style={{ fontWeight: 900 }}>{r.item_name || "-"}</td>
                           <td>{formatPHDateTime(r.created_at)}</td>
-                          <td style={{ fontWeight: 900 }}>{r.full_name || "-"}</td>
+                          <td style={{ fontWeight: 900 }}>{show(r.full_name)}</td>
+                          <td style={{ fontWeight: 900 }}>{show(r.category)}</td>
                           <td>{sizeText(r.size)}</td>
 
                           <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{moneyText(price)}</td>
@@ -489,20 +566,22 @@ const Staff_Consignment_Record: React.FC = () => {
           )}
 
           {/* CASH OUT MODAL */}
-          {cashoutTargetName && (
-            <div className="receipt-overlay" onClick={() => (savingCashout ? null : setCashoutTargetName(null))}>
+          {cashoutTargetKey && (
+            <div className="receipt-overlay" onClick={() => (savingCashout ? null : setCashoutTargetKey(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">CASH OUT</h3>
-                <p className="receipt-subtitle">{cashoutTargetName}</p>
+                <p className="receipt-subtitle">
+                  {groupBy === "category" ? "Category: " : "Full Name: "}
+                  {cashoutTargetLabel}
+                </p>
 
                 <hr />
 
                 {(() => {
-                  const p = perNameAggAll.find((x) => norm(x.full_name) === norm(cashoutTargetName));
+                  const p = perKeyAggAll.find((x) => x.key === cashoutTargetKey);
 
                   const gross = round2(p?.gross_total ?? 0);
                   const net = grossToNet(gross);
-                  const pool = grossOversale(gross);
 
                   const remaining = round2(p?.remaining ?? 0);
                   const cashout = round2(p?.cashout_total ?? 0);
@@ -528,10 +607,6 @@ const Staff_Consignment_Record: React.FC = () => {
                       <div className="receipt-row">
                         <span>Remaining</span>
                         <span style={{ fontWeight: 1000 }}>{moneyText(remaining)}</span>
-                      </div>
-
-                      <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
-                        Note: Remaining comes from MeTyme pool (15% of gross = {moneyText(pool)}).
                       </div>
 
                       <hr />
@@ -591,16 +666,14 @@ const Staff_Consignment_Record: React.FC = () => {
                                 <div style={{ fontWeight: 900 }}>{formatPHDateTime(h.created_at)}</div>
                                 {h.note ? <div style={{ fontSize: 12, opacity: 0.8 }}>{h.note}</div> : null}
                               </div>
-                              <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>
-                                {moneyText(round2(toNumber(h.cashout_amount)))}
-                              </div>
+                              <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>{moneyText(round2(toNumber(h.cashout_amount)))}</div>
                             </div>
                           ))
                         )}
                       </div>
 
                       <div className="modal-actions" style={{ marginTop: 16 }}>
-                        <button className="receipt-btn" onClick={() => setCashoutTargetName(null)} disabled={savingCashout}>
+                        <button className="receipt-btn" onClick={() => setCashoutTargetKey(null)} disabled={savingCashout}>
                           Close
                         </button>
                         <button className="receipt-btn" onClick={() => void submitCashout()} disabled={savingCashout}>
@@ -614,7 +687,7 @@ const Staff_Consignment_Record: React.FC = () => {
             </div>
           )}
 
-          {!loading && perNameAgg.length === 0 && <IonText />}
+          {!loading && perKeyAgg.length === 0 && <IonText />}
         </div>
       </IonContent>
     </IonPage>

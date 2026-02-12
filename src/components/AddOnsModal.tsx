@@ -19,11 +19,70 @@ import {
   IonThumbnail,
   IonImg,
   IonText,
+  IonSegment,
+  IonSegmentButton,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
+/* =========================
+   TYPES
+========================= */
+
+type Mode = "add_ons" | "consignment";
+
+type SeatGroup = { title: string; seats: string[] };
+
+type Props = {
+  isOpen: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+  seatGroups: SeatGroup[];
+};
+
+// RPC payloads
+type RpcAddOnItem = { add_on_id: string; quantity: number };
+type RpcConsignItem = { consignment_id: string; quantity: number };
+
+/* =========================
+   DB ROW TYPES
+========================= */
+
+type AddOnRow = {
+  id: string;
+  category: string;
+  size: string | null;
+  name: string;
+  price: number | string;
+  restocked: number | string | null;
+  sold: number | string | null;
+  expenses: number | string | null;
+  stocks: number | string | null;
+  overall_sales: number | string | null;
+  expected_sales: number | string | null;
+  image_url: string | null;
+};
+
+type ConsignmentRow = {
+  id: string;
+  full_name: string;
+  item_name: string;
+  size: string | null;
+  image_url: string | null;
+  price: number | string;
+  restocked: number | string | null;
+  sold: number | string | null;
+  expected_sales: number | string | null;
+  overall_sales: number | string | null;
+  stocks: number | string | null;
+};
+
+/* =========================
+   APP ITEM TYPES (discriminator)
+========================= */
+
 interface AddOn {
+  kind: "add_ons";
   id: string;
   category: string;
   size: string | null;
@@ -38,8 +97,26 @@ interface AddOn {
   image_url: string | null;
 }
 
-interface SelectedAddOn {
+interface ConsignmentItem {
+  kind: "consignment";
   id: string;
+  category: string; // owner full_name
+  size: string | null;
+  name: string; // item_name
+  price: number;
+  restocked: number;
+  sold: number;
+  stocks: number;
+  overall_sales: number;
+  expected_sales: number;
+  image_url: string | null;
+}
+
+type Item = AddOn | ConsignmentItem;
+
+interface SelectedItem {
+  id: string;
+  kind: Item["kind"];
   name: string;
   category: string;
   size: string | null;
@@ -48,39 +125,49 @@ interface SelectedAddOn {
   image_url: string | null;
 }
 
-type SeatGroup = { title: string; seats: string[] };
-
-type Props = {
-  isOpen: boolean;
-  onClose: () => void;
-  onSaved: () => void;
-  seatGroups: SeatGroup[];
-};
-
-type RpcItem = { add_on_id: string; quantity: number };
+/* =========================
+   HELPERS
+========================= */
 
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
 
 const toNum = (v: unknown): number => {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
 };
+
+const toInt = (v: unknown): number => Math.max(0, Math.floor(toNum(v)));
 
 const norm = (s: string): string => s.trim().toLowerCase();
 const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 
+const isConsignmentItem = (x: Item): x is ConsignmentItem => x.kind === "consignment";
+
+// ✅ IMPORTANT: hide this category name in add_ons mode
+const isConsignmentCategory = (cat: string): boolean => norm(cat) === "consignment";
+
+/* =========================
+   COMPONENT
+========================= */
+
 export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
-  const [addOns, setAddOns] = useState<AddOn[]>([]);
+  const [mode, setMode] = useState<Mode>("add_ons");
+
+  const [items, setItems] = useState<Item[]>([]);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
-  const [addOnsFullName, setAddOnsFullName] = useState<string>("");
-  const [addOnsSeat, setAddOnsSeat] = useState<string>("");
+  const [fullName, setFullName] = useState<string>("");
+  const [seat, setSeat] = useState<string>("");
 
   const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
   const [selectedSizes, setSelectedSizes] = useState<string[]>([""]);
-  const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
+  const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([]);
 
-  // ✅ Item Picker modal states
+  // picker modal
   const [isPickerOpen, setIsPickerOpen] = useState<boolean>(false);
   const [pickerCategory, setPickerCategory] = useState<string>("");
   const [pickerSize, setPickerSize] = useState<string>("");
@@ -88,69 +175,135 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   useEffect(() => {
     if (!isOpen) return;
-    void fetchAddOns();
+
+    // reset picker when switching mode/opening
+    setPickerCategory("");
+    setPickerSize("");
+    setPickerSearch("");
+    setIsPickerOpen(false);
 
     setSelectedCategories((prev) => (prev.length === 0 ? [""] : prev));
     setSelectedSizes((prev) => (prev.length === 0 ? [""] : prev));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
 
-  const fetchAddOns = async (): Promise<void> => {
+    void fetchItems();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, mode]);
+
+  const fetchItems = async (): Promise<void> => {
+    if (mode === "add_ons") {
+      const { data, error } = await supabase
+        .from("add_ons")
+        .select("id, category, size, name, price, restocked, sold, expenses, stocks, overall_sales, expected_sales, image_url")
+        .gt("stocks", 0)
+        .order("category", { ascending: true })
+        .order("size", { ascending: true })
+        .order("name", { ascending: true })
+        .returns<AddOnRow[]>();
+
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error(error);
+        alert(`Error loading add-ons: ${error.message}`);
+        setItems([]);
+        return;
+      }
+
+      const mappedAll: AddOn[] = (data ?? []).map((r) => ({
+        kind: "add_ons",
+        id: r.id,
+        category: String(r.category ?? "").trim(),
+        size: r.size ?? null,
+        name: String(r.name ?? "").trim(),
+        price: toNum(r.price),
+        restocked: toInt(r.restocked),
+        sold: toInt(r.sold),
+        expenses: toNum(r.expenses),
+        stocks: toInt(r.stocks),
+        overall_sales: toNum(r.overall_sales),
+        expected_sales: toNum(r.expected_sales),
+        image_url: r.image_url ?? null,
+      }));
+
+      // ✅ Remove "Consignment" category rows from Add-Ons list
+      const mapped = mappedAll.filter((a) => !isConsignmentCategory(a.category));
+
+      setItems(mapped);
+      return;
+    }
+
+    // consignment
     const { data, error } = await supabase
-      .from("add_ons")
-      .select("*")
+      .from("consignment")
+      .select("id, full_name, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks")
       .gt("stocks", 0)
-      .order("category", { ascending: true })
+      .order("full_name", { ascending: true })
       .order("size", { ascending: true })
-      .order("name", { ascending: true });
+      .order("item_name", { ascending: true })
+      .returns<ConsignmentRow[]>();
 
     if (error) {
       // eslint-disable-next-line no-console
       console.error(error);
-      alert(`Error loading add-ons: ${error.message}`);
+      alert(`Error loading consignment: ${error.message}`);
+      setItems([]);
       return;
     }
 
-    setAddOns((data as AddOn[]) || []);
+    const mapped: ConsignmentItem[] = (data ?? []).map((r) => ({
+      kind: "consignment",
+      id: r.id,
+      category: String(r.full_name ?? "").trim() || "Consignment",
+      name: String(r.item_name ?? "").trim() || "-",
+      size: r.size ?? null,
+      image_url: r.image_url ?? null,
+      price: toNum(r.price),
+      restocked: toInt(r.restocked),
+      sold: toInt(r.sold),
+      stocks: toInt(r.stocks),
+      overall_sales: toNum(r.overall_sales),
+      expected_sales: toNum(r.expected_sales),
+    }));
+
+    setItems(mapped);
   };
 
+  // ✅ categories list (also hide "consignment" when mode is add_ons)
   const categories = useMemo(() => {
-    const uniq = Array.from(new Set(addOns.map((a) => a.category).filter((c) => c.trim().length > 0)));
+    const base = items.map((a) => a.category).filter((c) => c.trim().length > 0);
+
+    const filtered = mode === "add_ons" ? base.filter((c) => !isConsignmentCategory(c)) : base;
+
+    const uniq = Array.from(new Set(filtered));
     uniq.sort((a, b) => a.localeCompare(b));
     return uniq;
-  }, [addOns]);
+  }, [items, mode]);
 
-  const addOnsTotal = useMemo<number>(
-    () => selectedAddOns.reduce((sum, s) => sum + s.quantity * s.price, 0),
-    [selectedAddOns]
-  );
+  const totalAmount = useMemo<number>(() => selectedItems.reduce((sum, s) => sum + s.quantity * s.price, 0), [selectedItems]);
 
   const selectedSummaryByCategory = useMemo(() => {
-    const map = new Map<string, SelectedAddOn[]>();
-    for (const item of selectedAddOns) {
-      const cat = item.category || "Uncategorized";
+    const map = new Map<string, SelectedItem[]>();
+    for (const it of selectedItems) {
+      const cat = it.category || "Uncategorized";
       if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(item);
+      map.get(cat)!.push(it);
     }
-    return Array.from(map.entries()).map(([category, items]) => ({
+    return Array.from(map.entries()).map(([category, block]) => ({
       category,
-      items: items.slice().sort((a, b) => a.name.localeCompare(b.name)),
+      items: block.slice().sort((a, b) => a.name.localeCompare(b.name)),
     }));
-  }, [selectedAddOns]);
+  }, [selectedItems]);
 
   const stocksById = useMemo(() => {
     const m = new Map<string, number>();
-    for (const a of addOns) m.set(a.id, Math.max(0, Math.floor(toNum(a.stocks))));
+    for (const a of items) m.set(a.id, toInt(a.stocks));
     return m;
-  }, [addOns]);
+  }, [items]);
 
   const selectedQtyById = useMemo(() => {
     const m = new Map<string, number>();
-    for (const s of selectedAddOns) {
-      m.set(s.id, (m.get(s.id) ?? 0) + Math.max(0, Math.floor(toNum(s.quantity))));
-    }
+    for (const s of selectedItems) m.set(s.id, (m.get(s.id) ?? 0) + Math.max(0, Math.floor(toNum(s.quantity))));
     return m;
-  }, [selectedAddOns]);
+  }, [selectedItems]);
 
   const getRemainingForId = (id: string): number => {
     const stocks = stocksById.get(id) ?? 0;
@@ -158,18 +311,18 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     return Math.max(0, stocks - chosen);
   };
 
-  const handleAddOnQuantityChange = (id: string, quantity: number): void => {
+  const handleQuantityChange = (id: string, quantity: number): void => {
     const wanted = Math.max(0, Math.floor(quantity));
 
-    setSelectedAddOns((prev) => {
+    setSelectedItems((prev) => {
       const existing = prev.find((s) => s.id === id);
-      const addOn = addOns.find((a) => a.id === id);
-      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? addOn?.stocks ?? 0)));
+      const item = items.find((a) => a.id === id);
+      if (!item) return prev;
 
+      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? item.stocks)));
       const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
-      const chosenTotalSameId = prev
-        .filter((s) => s.id === id)
-        .reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
+
+      const chosenTotalSameId = prev.filter((s) => s.id === id).reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
 
       const chosenOtherSameId = Math.max(0, chosenTotalSameId - currentQty);
       const maxAllowedForThis = Math.max(0, stocks - chosenOtherSameId);
@@ -179,18 +332,18 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
       if (q > 0) {
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
-        if (!addOn) return prev;
 
         return [
           ...prev,
           {
-            id,
-            name: addOn.name,
-            category: addOn.category,
-            size: addOn.size,
-            price: addOn.price,
+            id: item.id,
+            kind: item.kind,
+            name: item.name,
+            category: item.category,
+            size: item.size ?? null,
+            price: toNum(item.price),
             quantity: q,
-            image_url: addOn.image_url ?? null,
+            image_url: item.image_url ?? null,
           },
         ];
       }
@@ -238,10 +391,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     setSelectedSizes((prev) => [...prev, ""]);
   };
 
-  const resetAddOnsForm = (): void => {
-    setAddOnsFullName("");
-    setAddOnsSeat("");
-    setSelectedAddOns([]);
+  const resetForm = (): void => {
+    setFullName("");
+    setSeat("");
+    setSelectedItems([]);
     setSelectedCategories([""]);
     setSelectedSizes([""]);
     setPickerSearch("");
@@ -252,13 +405,14 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   const getSizesForCategory = (category: string): string[] => {
     if (!category) return [];
-    const sizes = addOns
+    const sizes = items
       .filter((a) => a.category === category)
       .map((a) => cleanSize(a.size))
       .filter((s) => s.length > 0);
 
     const uniq = Array.from(new Set(sizes));
     const order = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+
     uniq.sort((a, b) => {
       const ia = order.indexOf(a.toUpperCase());
       const ib = order.indexOf(b.toUpperCase());
@@ -267,30 +421,30 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       if (ib !== -1) return 1;
       return a.localeCompare(b);
     });
+
     return uniq;
   };
 
   const categoryHasSizes = (category: string): boolean => getSizesForCategory(category).length > 0;
 
-  const pickerItems = useMemo(() => {
+  const pickerItems = useMemo<Item[]>(() => {
     const cat = pickerCategory;
     const hasSizes = categoryHasSizes(cat);
     const size = pickerSize.trim();
     const q = pickerSearch.trim().toLowerCase();
 
-    return addOns
+    return items
       .filter((a) => (cat ? a.category === cat : false))
       .filter((a) => {
         if (!hasSizes) return true;
         return norm(cleanSize(a.size)) === norm(size);
       })
-      .map((a) => ({ ...a, remaining: getRemainingForId(a.id) }))
-      .filter((a) => a.remaining > 0)
+      .filter((a) => getRemainingForId(a.id) > 0)
       .filter((a) => {
         if (!q) return true;
         return a.name.toLowerCase().includes(q);
       });
-  }, [addOns, pickerCategory, pickerSize, pickerSearch, selectedAddOns]);
+  }, [items, pickerCategory, pickerSize, pickerSearch, selectedItems]);
 
   const openPicker = (category: string, size: string): void => {
     setPickerCategory(category);
@@ -299,26 +453,28 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     setIsPickerOpen(true);
   };
 
-  const addFromPicker = (addOn: AddOn): void => {
-    const remaining = getRemainingForId(addOn.id);
+  const addFromPicker = (item: Item): void => {
+    const remaining = getRemainingForId(item.id);
     if (remaining <= 0) {
       alert("No remaining stock for this item.");
       return;
     }
 
-    setSelectedAddOns((prev) => {
-      const existing = prev.find((s) => s.id === addOn.id);
+    setSelectedItems((prev) => {
+      const existing = prev.find((s) => s.id === item.id);
       if (existing) return prev;
+
       return [
         ...prev,
         {
-          id: addOn.id,
-          name: addOn.name,
-          category: addOn.category,
-          size: addOn.size,
-          price: addOn.price,
+          id: item.id,
+          kind: item.kind,
+          name: item.name,
+          category: item.category,
+          size: item.size ?? null,
+          price: toNum(item.price),
           quantity: 1,
-          image_url: addOn.image_url ?? null,
+          image_url: item.image_url ?? null,
         },
       ];
     });
@@ -326,36 +482,62 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     setIsPickerOpen(false);
   };
 
-  // ✅ FIXED: use RPC so it works on Vercel (RLS-safe)
-  const handleSubmitAddOns = async (): Promise<void> => {
-    const name = addOnsFullName.trim();
-    if (!name) return alert("Full Name is required.");
-    if (!addOnsSeat) return alert("Seat Number is required.");
-    if (selectedAddOns.length === 0) return alert("Please select at least one add-on.");
+  const handleSubmit = async (): Promise<void> => {
+    const buyerName = fullName.trim();
+    if (!buyerName) return alert("Full Name is required.");
+    if (!seat) return alert("Seat Number is required.");
+    if (selectedItems.length === 0) return alert("Please select at least one item.");
 
-    const items: RpcItem[] = selectedAddOns.map((s) => ({
-      add_on_id: s.id,
-      quantity: Math.max(1, Math.floor(toNum(s.quantity))),
-    }));
+    // prevent mixing
+    const kindMismatch = selectedItems.some((s) => (mode === "add_ons" ? s.kind !== "add_ons" : s.kind !== "consignment"));
+    if (kindMismatch) {
+      alert("Selected items do not match the chosen Type. Please Reset and try again.");
+      return;
+    }
 
     setIsSaving(true);
     try {
-      const { error } = await supabase.rpc("place_addon_order", {
-        p_full_name: name,
-        p_seat_number: addOnsSeat,
-        p_items: items,
-      });
+      if (mode === "add_ons") {
+        const payload: RpcAddOnItem[] = selectedItems.map((s) => ({
+          add_on_id: s.id,
+          quantity: Math.max(1, Math.floor(toNum(s.quantity))),
+        }));
 
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error(error);
-        alert(`Order failed: ${error.message}`);
-        return;
+        const { error } = await supabase.rpc("place_addon_order", {
+          p_full_name: buyerName,
+          p_seat_number: seat,
+          p_items: payload,
+        });
+
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error(error);
+          alert(`Order failed: ${error.message}`);
+          return;
+        }
+      } else {
+        const payload: RpcConsignItem[] = selectedItems.map((s) => ({
+          consignment_id: s.id,
+          quantity: Math.max(1, Math.floor(toNum(s.quantity))),
+        }));
+
+        const { error } = await supabase.rpc("place_consignment_order", {
+          p_full_name: buyerName,
+          p_seat_number: seat,
+          p_items: payload,
+        });
+
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error(error);
+          alert(`Consignment order failed: ${error.message}`);
+          return;
+        }
       }
 
-      await fetchAddOns();
+      await fetchItems();
       onSaved();
-      resetAddOnsForm();
+      resetForm();
       onClose();
     } finally {
       setIsSaving(false);
@@ -367,7 +549,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
         <IonHeader>
           <IonToolbar>
-            <IonTitle>Add-Ons</IonTitle>
+            <IonTitle>{mode === "add_ons" ? "Add-Ons" : "Consignment"}</IonTitle>
             <IonButtons slot="end">
               <IonButton onClick={onClose}>
                 <IonIcon icon={closeOutline} />
@@ -378,22 +560,37 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
         <IonContent className="ion-padding">
           <div className="bookadd-card">
+            {/* MODE SWITCH */}
+            <div style={{ marginBottom: 10 }}>
+              <IonLabel style={{ fontWeight: 800, display: "block", marginBottom: 6 }}>Type</IonLabel>
+              <IonSegment
+                value={mode}
+                onIonChange={(e) => {
+                  const v = asString(e.detail.value) as Mode;
+                  setMode(v);
+                  // prevent mixing when switching
+                  setSelectedItems([]);
+                  setSelectedCategories([""]);
+                  setSelectedSizes([""]);
+                }}
+              >
+                <IonSegmentButton value="add_ons">
+                  <IonLabel>Add-Ons</IonLabel>
+                </IonSegmentButton>
+                <IonSegmentButton value="consignment">
+                  <IonLabel>Consignment</IonLabel>
+                </IonSegmentButton>
+              </IonSegment>
+            </div>
+
             <IonItem className="form-item">
               <IonLabel position="stacked">Full Name *</IonLabel>
-              <IonInput
-                value={addOnsFullName}
-                placeholder="Enter full name"
-                onIonChange={(e) => setAddOnsFullName(e.detail.value ?? "")}
-              />
+              <IonInput value={fullName} placeholder="Enter full name" onIonChange={(e) => setFullName(e.detail.value ?? "")} />
             </IonItem>
 
             <IonItem className="form-item">
               <IonLabel position="stacked">Seat Number *</IonLabel>
-              <IonSelect
-                value={addOnsSeat}
-                placeholder="Choose seat"
-                onIonChange={(e) => setAddOnsSeat(asString(e.detail.value))}
-              >
+              <IonSelect value={seat} placeholder="Choose seat" onIonChange={(e) => setSeat(asString(e.detail.value))}>
                 {seatGroups.map((g) => (
                   <React.Fragment key={g.title}>
                     <IonSelectOption disabled value={`__${g.title}__`}>
@@ -410,7 +607,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
             </IonItem>
 
             <IonButton expand="block" onClick={addAnotherCategory}>
-              Add More Add-Ons
+              Add More {mode === "add_ons" ? "Add-Ons" : "Consignment"}
             </IonButton>
 
             {selectedCategories.map((category, index) => {
@@ -423,10 +620,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                 <div key={`cat-${index}`} className="addon-block">
                   <div className="addon-row">
                     <IonItem className="form-item addon-flex">
-                      <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                      <IonLabel position="stacked">{mode === "add_ons" ? `Select Category ${index + 1}` : `Select Owner ${index + 1}`}</IonLabel>
                       <IonSelect
                         value={category}
-                        placeholder="Choose a category"
+                        placeholder={mode === "add_ons" ? "Choose a category" : "Choose an owner"}
                         onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}
                       >
                         {categories.map((cat) => (
@@ -445,11 +642,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   {category && hasSizes ? (
                     <IonItem className="form-item">
                       <IonLabel position="stacked">Select Size</IonLabel>
-                      <IonSelect
-                        value={pickedSize}
-                        placeholder="Choose size"
-                        onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}
-                      >
+                      <IonSelect value={pickedSize} placeholder="Choose size" onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}>
                         {sizeOptions.map((sz) => (
                           <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
                             {sz}
@@ -461,7 +654,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
                   {allowPick ? (
                     <IonButton expand="block" onClick={() => openPicker(category, hasSizes ? pickedSize : "")} style={{ marginTop: 8 }}>
-                      Choose {category} Item{hasSizes ? ` (${pickedSize})` : ""}
+                      Choose Item{hasSizes ? ` (${pickedSize})` : ""}
                     </IonButton>
                   ) : category && hasSizes ? (
                     <IonItem className="form-item" lines="none">
@@ -473,13 +666,13 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
             })}
 
             {/* SELECTED ITEMS LIST */}
-            {selectedAddOns.length > 0 ? (
+            {selectedItems.length > 0 ? (
               <IonList style={{ marginTop: 12 }}>
                 <IonListHeader>
                   <IonLabel>Selected Items</IonLabel>
                 </IonListHeader>
 
-                {selectedSummaryByCategory.map(({ category: catTitle, items }) => (
+                {selectedSummaryByCategory.map(({ category: catTitle, items: blockItems }) => (
                   <React.Fragment key={catTitle}>
                     <IonListHeader>
                       <IonLabel>
@@ -487,7 +680,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                       </IonLabel>
                     </IonListHeader>
 
-                    {items.map((selected) => {
+                    {blockItems.map((selected) => {
                       const stocks = Math.max(0, Math.floor(toNum(stocksById.get(selected.id) ?? 0)));
                       const remainingIfKeepQty = Math.max(0, stocks - selected.quantity);
 
@@ -503,15 +696,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
                           <IonLabel>
                             <div style={{ fontWeight: 700 }}>
-                              {selected.name}{" "}
-                              {cleanSize(selected.size) ? (
-                                <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span>
-                              ) : null}
+                              {selected.name} {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
                             </div>
                             <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
-                            <div style={{ marginTop: 4, fontWeight: 700 }}>
-                              Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
-                            </div>
+                            <div style={{ marginTop: 4, fontWeight: 700 }}>Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}</div>
                             <div style={{ marginTop: 6, opacity: 0.9 }}>
                               Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
                             </div>
@@ -527,11 +715,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                               onIonChange={(e) => {
                                 const raw = (e.detail.value ?? "").toString();
                                 const v = parseInt(raw, 10);
-                                handleAddOnQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
+                                handleQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
                               }}
                             />
 
-                            <IonButton color="danger" onClick={() => setSelectedAddOns((prev) => prev.filter((s) => s.id !== selected.id))}>
+                            <IonButton color="danger" onClick={() => setSelectedItems((prev) => prev.filter((s) => s.id !== selected.id))}>
                               Remove
                             </IonButton>
                           </div>
@@ -545,11 +733,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
             <div className="summary-section" style={{ marginTop: 12 }}>
               <p className="summary-text">
-                <strong>Add-Ons Total: ₱{addOnsTotal.toFixed(2)}</strong>
+                <strong>Total: ₱{totalAmount.toFixed(2)}</strong>
               </p>
             </div>
 
-            <IonButton expand="block" disabled={isSaving} onClick={() => void handleSubmitAddOns()}>
+            <IonButton expand="block" disabled={isSaving} onClick={() => void handleSubmit()}>
               {isSaving ? "Saving..." : "Submit Order"}
             </IonButton>
 
@@ -557,7 +745,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
               expand="block"
               fill="clear"
               onClick={() => {
-                resetAddOnsForm();
+                resetForm();
                 onClose();
               }}
               style={{ marginTop: 6 }}
@@ -568,7 +756,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         </IonContent>
       </IonModal>
 
-      {/* ✅ ITEM PICKER MODAL (with images) */}
+      {/* ITEM PICKER MODAL */}
       <IonModal isOpen={isPickerOpen} onDidDismiss={() => setIsPickerOpen(false)} className="booking-modal">
         <IonHeader>
           <IonToolbar>
@@ -606,7 +794,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     </IonThumbnail>
 
                     <IonLabel>
-                      <div style={{ fontWeight: 800 }}>{a.name}</div>
+                      <div style={{ fontWeight: 800 }}>
+                        {a.name}
+                        {isConsignmentItem(a) ? <span style={{ marginLeft: 8, opacity: 0.7, fontWeight: 700 }}>• Owner</span> : null}
+                      </div>
                       {cleanSize(a.size) ? <div style={{ opacity: 0.85 }}>Size: {cleanSize(a.size)}</div> : null}
                       <div style={{ marginTop: 4 }}>
                         ₱{toNum(a.price)} • Remaining: <strong>{remaining}</strong>

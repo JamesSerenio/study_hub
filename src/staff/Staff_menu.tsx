@@ -37,8 +37,11 @@ import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
 import Customer_Cancelled from "./Customer_Cancelled";
-import Staff_Consignment from "./Staff_Consignment"; // ✅ NEW
-import Staff_Consignment_Record from "./Staff_Consignment_Record"; // ✅ NEW
+import Staff_Consignment from "./Staff_Consignment";
+import Staff_Consignment_Record from "./Staff_Consignment_Record";
+
+/* ✅ NEW: customer consignment record page */
+import Customer_Consignment_Record from "./Customer_Consignment_Record";
 
 /* assets */
 import dashboardIcon from "../assets/add_user.png";
@@ -53,8 +56,11 @@ import salesIcon from "../assets/sales.png";
 import flowerImg from "../assets/flower.png";
 import cancelledIcon from "../assets/cancelled.png";
 import bellIcon from "../assets/bell.png";
-import consignmentIcon from "../assets/consignment.png"; // ✅ NEW
-import consignmentRecordIcon from "../assets/consignment_record.png"; // ✅ NEW
+import consignmentIcon from "../assets/consignment.png";
+import staff_consignmentIcon from "../assets/staff_consignment.png";
+
+/* ✅ NEW icon (put this file in src/assets/consignment_record.png) */
+import consignmentRecordIcon from "../assets/consignment_record.png";
 
 type FlowerStatic = {
   id: string;
@@ -389,8 +395,12 @@ const Staff_menu: React.FC = () => {
       { name: "Memberships", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
-      { name: "Add Consignment", key: "staff_consignment", icon: consignmentIcon }, // ✅ NEW
-      { name: "Consignment Record", key: "staff_consignment_record", icon: consignmentRecordIcon }, // ✅ NEW
+
+      { name: "Add Consignment", key: "staff_consignment", icon: consignmentIcon },
+      { name: "Consignment Record", key: "staff_consignment_record", icon: staff_consignmentIcon },
+
+      /* ✅ NEW: customer consignment record */
+      { name: "Customer Consignment Record", key: "customer_consignment_record", icon: consignmentRecordIcon },
     ],
     []
   );
@@ -429,9 +439,14 @@ const Staff_menu: React.FC = () => {
       case "product_item_lists":
         return <Product_Item_Lists />;
       case "staff_consignment":
-        return <Staff_Consignment />; // ✅ NEW
+        return <Staff_Consignment />;
       case "staff_consignment_record":
-        return <Staff_Consignment_Record />; // ✅ NEW
+        return <Staff_Consignment_Record />;
+
+      /* ✅ NEW */
+      case "customer_consignment_record":
+        return <Customer_Consignment_Record />;
+
       default:
         return <Staff_Dashboard />;
     }

@@ -30,8 +30,15 @@ const normalizeText = (v: string): string => v.trim().replace(/\s+/g, " ");
 
 type CategoryRow = { id: string };
 
+// ✅ DB row for suggestions
+type ConsignmentSuggestRow = {
+  full_name: string | null;
+  category: string | null;
+};
+
 const Staff_Consignment: React.FC = () => {
   const [fullName, setFullName] = useState<string>("");
+  const [category, setCategory] = useState<string>(""); // ✅ NEW
   const [itemName, setItemName] = useState<string>("");
   const [size, setSize] = useState<AddOnSize>("None");
 
@@ -44,9 +51,15 @@ const Staff_Consignment: React.FC = () => {
 
   // ✅ Popover suggestions for FULL NAME
   const [allFullNames, setAllFullNames] = useState<string[]>([]);
+  const [fullOpen, setFullOpen] = useState<boolean>(false);
+  const [fullEvent, setFullEvent] = useState<MouseEvent | undefined>(undefined);
+  const fullBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // ✅ Popover suggestions for CATEGORY
+  const [allCategories, setAllCategories] = useState<string[]>([]);
   const [catOpen, setCatOpen] = useState<boolean>(false);
   const [catEvent, setCatEvent] = useState<MouseEvent | undefined>(undefined);
-  const iconBtnRef = useRef<HTMLButtonElement | null>(null);
+  const catBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // ✅ category_id must be the addon_categories row where name='Consignment'
   const [consignmentCategoryId, setConsignmentCategoryId] = useState<string | null>(null);
@@ -61,6 +74,7 @@ const Staff_Consignment: React.FC = () => {
         .limit(1);
 
       if (catErr) {
+        // eslint-disable-next-line no-console
         console.error("Load addon_categories error:", catErr);
         setToastMessage("Failed to load addon_categories.");
         setShowToast(true);
@@ -69,36 +83,62 @@ const Staff_Consignment: React.FC = () => {
         setConsignmentCategoryId(id);
       }
 
-      // 2) load full name suggestions from existing consignment rows
-      const { data, error } = await supabase.from("consignment").select("full_name").not("full_name", "is", null);
+      // 2) load suggestions from existing consignment rows
+      //    (full_name + category)
+      const { data, error } = await supabase.from("consignment").select("full_name, category");
 
       if (error) {
-        console.error("Load full names error:", error);
+        // eslint-disable-next-line no-console
+        console.error("Load suggestions error:", error);
         return;
       }
 
-      const unique: string[] = Array.from(
+      const rows: ConsignmentSuggestRow[] = (data ?? []) as ConsignmentSuggestRow[];
+
+      const uniqFull: string[] = Array.from(
         new Set(
-          (data ?? [])
-            .map((r: { full_name?: string | null }) => (r.full_name ?? "").trim())
-            .filter((c) => c.length > 0)
+          rows
+            .map((r) => normalizeText(r.full_name ?? ""))
+            .filter((v) => v.length > 0)
         )
       ).sort((a, b) => a.localeCompare(b));
 
-      setAllFullNames(unique);
+      const uniqCat: string[] = Array.from(
+        new Set(
+          rows
+            .map((r) => normalizeText(r.category ?? ""))
+            .filter((v) => v.length > 0)
+        )
+      ).sort((a, b) => a.localeCompare(b));
+
+      setAllFullNames(uniqFull);
+      setAllCategories(uniqCat);
     };
 
     void loadPrereqs();
   }, []);
 
-  const shownNames = useMemo(() => allFullNames.slice(0, 30), [allFullNames]);
+  const shownFullNames = useMemo(() => allFullNames.slice(0, 30), [allFullNames]);
+  const shownCategories = useMemo(() => allCategories.slice(0, 30), [allCategories]);
 
-  const closePopover = (): void => {
+  const closeFullPopover = (): void => {
+    setFullOpen(false);
+    setFullEvent(undefined);
+  };
+
+  const closeCatPopover = (): void => {
     setCatOpen(false);
     setCatEvent(undefined);
   };
 
-  const onDropdownClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
+  const onFullDropdownClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFullEvent(e.nativeEvent);
+    setFullOpen(true);
+  };
+
+  const onCatDropdownClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
     e.preventDefault();
     e.stopPropagation();
     setCatEvent(e.nativeEvent);
@@ -107,11 +147,20 @@ const Staff_Consignment: React.FC = () => {
 
   const handlePickFullName = (picked: string): void => {
     setFullName(picked);
-    requestAnimationFrame(() => closePopover());
+    requestAnimationFrame(() => closeFullPopover());
+  };
+
+  const handlePickCategory = (picked: string): void => {
+    setCategory(picked);
+    requestAnimationFrame(() => closeCatPopover());
   };
 
   const handleSubmit = async (): Promise<void> => {
-    if (!fullName || !itemName || restocked === undefined || price === undefined) {
+    const fullNameFinal = normalizeText(fullName);
+    const categoryFinal = normalizeText(category);
+    const itemNameFinal = normalizeText(itemName);
+
+    if (!fullNameFinal || !categoryFinal || !itemNameFinal || restocked === undefined || price === undefined) {
       setToastMessage("Please fill in all required fields!");
       setShowToast(true);
       return;
@@ -156,18 +205,16 @@ const Staff_Consignment: React.FC = () => {
         imageUrl = urlData.publicUrl;
       }
 
-      const fullNameFinal = normalizeText(fullName);
-      const itemNameFinal = normalizeText(itemName);
-
       const sizeFinal = normalizeSize(size);
       const sizeDb: string | null = sizeFinal === "None" ? null : sizeFinal;
 
-      // ✅ 1) insert to consignment
+      // ✅ insert to consignment (now includes category)
       const { error: insertConsErr } = await supabase.from("consignment").insert([
         {
           created_by: userId,
           category_id: consignmentCategoryId,
           full_name: fullNameFinal,
+          category: categoryFinal, // ✅ NEW
           item_name: itemNameFinal,
           size: sizeDb,
           restocked,
@@ -178,39 +225,32 @@ const Staff_Consignment: React.FC = () => {
 
       if (insertConsErr) throw insertConsErr;
 
-      // ✅ 2) ALSO insert to add_ons so it appears under category = "Consignment"
-      const { error: insertAddOnErr } = await supabase.from("add_ons").insert([
-        {
-          admin_id: userId, // staff/admin id (ok)
-          category: "Consignment",
-          category_id: consignmentCategoryId,
-          name: itemNameFinal,
-          size: sizeDb,
-          restocked,
-          price,
-          image_url: imageUrl,
-        },
-      ]);
-
-      if (insertAddOnErr) throw insertAddOnErr;
-
-      // update suggestions list
+      // ✅ update suggestions lists
       setAllFullNames((prev) => {
         if (prev.some((n) => n.toLowerCase() === fullNameFinal.toLowerCase())) return prev;
         return [...prev, fullNameFinal].sort((a, b) => a.localeCompare(b));
       });
 
+      setAllCategories((prev) => {
+        if (prev.some((c) => c.toLowerCase() === categoryFinal.toLowerCase())) return prev;
+        return [...prev, categoryFinal].sort((a, b) => a.localeCompare(b));
+      });
+
+      // reset form
       setFullName("");
+      setCategory("");
       setItemName("");
       setSize("None");
       setRestocked(undefined);
       setPrice(undefined);
       setImageFile(null);
-      closePopover();
+      closeFullPopover();
+      closeCatPopover();
 
-      setToastMessage("Consignment item added (also added to Add-Ons > Consignment)!");
+      setToastMessage("Consignment item added!");
       setShowToast(true);
     } catch (err: unknown) {
+      // eslint-disable-next-line no-console
       console.error(err);
       setToastMessage(err instanceof Error ? err.message : "Unexpected error occurred");
       setShowToast(true);
@@ -252,28 +292,28 @@ const Staff_Consignment: React.FC = () => {
                         setFullName(v);
                       }}
                       onIonFocus={() => {
-                        if (catOpen) closePopover();
+                        if (fullOpen) closeFullPopover();
                       }}
                       onClick={(e) => e.stopPropagation()}
                     />
 
                     <button
-                      ref={iconBtnRef}
+                      ref={fullBtnRef}
                       type="button"
                       className="aao-dropbtn"
                       aria-label="Open full name suggestions"
-                      onClick={onDropdownClick}
+                      onClick={onFullDropdownClick}
                     >
                       <IonIcon className="aao-field-icon aao-field-icon--click" icon={chevronDownOutline} />
                     </button>
                   </div>
                 </IonItem>
 
-                {/* POPOVER */}
+                {/* FULL NAME POPOVER */}
                 <IonPopover
-                  isOpen={catOpen}
-                  event={catEvent}
-                  onDidDismiss={closePopover}
+                  isOpen={fullOpen}
+                  event={fullEvent}
+                  onDidDismiss={closeFullPopover}
                   side="bottom"
                   alignment="start"
                   className="aao-popover"
@@ -284,8 +324,66 @@ const Staff_Consignment: React.FC = () => {
 
                     <div className="aao-popover-scroll">
                       <IonList className="aao-popover-list">
-                        {shownNames.map((n) => (
+                        {shownFullNames.map((n) => (
                           <IonItem key={n} button className="aao-popover-item" onClick={() => handlePickFullName(n)}>
+                            <IonLabel className="aao-popover-label">{n}</IonLabel>
+                          </IonItem>
+                        ))}
+                      </IonList>
+                    </div>
+                  </IonContent>
+                </IonPopover>
+
+                {/* ✅ CATEGORY (same style as Full Name) */}
+                <IonItem className="aao-item" lines="none">
+                  <IonLabel position="stacked" className="aao-label">
+                    Category <span className="aao-req">*</span>
+                  </IonLabel>
+
+                  <div className="aao-field aao-field--withIcon">
+                    <IonInput
+                      className="aao-input"
+                      value={category}
+                      placeholder="Tap to choose category"
+                      onIonInput={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
+                        const v = (e.detail.value ?? "").toString();
+                        setCategory(v);
+                      }}
+                      onIonFocus={() => {
+                        if (catOpen) closeCatPopover();
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+
+                    <button
+                      ref={catBtnRef}
+                      type="button"
+                      className="aao-dropbtn"
+                      aria-label="Open category suggestions"
+                      onClick={onCatDropdownClick}
+                    >
+                      <IonIcon className="aao-field-icon aao-field-icon--click" icon={chevronDownOutline} />
+                    </button>
+                  </div>
+                </IonItem>
+
+                {/* CATEGORY POPOVER */}
+                <IonPopover
+                  isOpen={catOpen}
+                  event={catEvent}
+                  onDidDismiss={closeCatPopover}
+                  side="bottom"
+                  alignment="start"
+                  className="aao-popover"
+                  showBackdrop={false}
+                >
+                  <IonContent className="aao-popover-content">
+                    <IonText className="aao-popover-hint">Suggestions (tap to select)</IonText>
+
+                    <div className="aao-popover-scroll">
+                      <IonList className="aao-popover-list">
+                        {shownCategories.map((n) => (
+                          <IonItem key={n} button className="aao-popover-item" onClick={() => handlePickCategory(n)}>
                             <IonLabel className="aao-popover-label">{n}</IonLabel>
                           </IonItem>
                         ))}
@@ -407,9 +505,7 @@ const Staff_Consignment: React.FC = () => {
                     Add Consignment
                   </IonButton>
 
-                  <div className="aao-footnote aao-footnote-right">
-                    Tip: Full name suggestions will appear when you tap the dropdown icon.
-                  </div>
+                  <div className="aao-footnote aao-footnote-right">Tip: dropdown icons show suggestions.</div>
                 </div>
               </div>
             </div>
