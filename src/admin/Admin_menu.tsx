@@ -3,7 +3,8 @@
 // ✅ STATIC flowers
 // ✅ Keeps your existing pages/files/menu items
 // ✅ VERCEL FIX: boot + resize/reflow so dashboard shows immediately after login
-// ✅ NEW: Admin Cancelled Records menu item + page
+// ✅ Admin Cancelled Records menu item + page
+// ✅ Added: Consignment Record + Customer Consignment Record (NO unused MenuKey / NO missing imports)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -37,7 +38,9 @@ import Admin_Staff_Expenses_Expired from "./Admin_Staff_Expenses&Expired";
 import Admin_Customer_Add_ons from "./Admin_Customer_Add_ons";
 import Admin_Sales_Report from "./Admin_Sales_Report";
 import Admin_Restock_Record from "./Admin_Restock_Record";
-import Admin_Customer_Cancelled from "./Admin_Customer_Cancelled"; // ✅ NEW
+import Admin_Customer_Cancelled from "./Admin_Customer_Cancelled";
+import Staff_Consignment_Record from "./Admin_Staff_Consignment_Record";
+import Customer_Consignment_Record from "./Admin_Customer_Consignment_Record";
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -52,9 +55,11 @@ import expenseIcon from "../assets/expense.png";
 import hamburgerIcon from "../assets/hamburger.png";
 import salesIcon from "../assets/sales.png";
 import restockIcon from "../assets/restock.png";
-import cancelledIcon from "../assets/cancelled.png"; // ✅ NEW
+import cancelledIcon from "../assets/cancelled.png";
 import studyHubLogo from "../assets/study_hub.png";
 import flowerImg from "../assets/flower.png";
+import staff_consignmentIcon from "../assets/staff_consignment.png";
+import customerConsignmentIcon from "../assets/consignment_record.png";
 
 type MenuKey =
   | "dashboard"
@@ -66,10 +71,12 @@ type MenuKey =
   | "customer_add_ons"
   | "customer_list"
   | "customer_reservation"
-  | "customer_cancelled" // ✅ NEW
+  | "customer_cancelled"
   | "seat_table"
   | "packages"
-  | "discount_records";
+  | "discount_records"
+  | "staff_consignment_record"
+  | "customer_consignment_record";
 
 type MenuItem = {
   name: string;
@@ -114,10 +121,12 @@ const Admin_menu: React.FC = () => {
       { name: "Customer Add-Ons", key: "customer_add_ons", icon: hamburgerIcon },
       { name: "Customer List", key: "customer_list", icon: customerListIcon },
       { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
-      { name: "Cancelled Records", key: "customer_cancelled", icon: cancelledIcon }, // ✅ NEW
+      { name: "Cancelled Records", key: "customer_cancelled", icon: cancelledIcon },
+      { name: "Consignment Record", key: "staff_consignment_record", icon: staff_consignmentIcon },
+      { name: "Customer Consignment Record", key: "customer_consignment_record", icon: customerConsignmentIcon   },
       { name: "Seat Table", key: "seat_table", icon: seatIcon },
       { name: "Promotions", key: "packages", icon: promotionIcon },
-      { name: "Memberships", key: "discount_records", icon: discountIcon },
+      { name: "Fayenarisse@gmail.com", key: "discount_records", icon: discountIcon },
     ],
     []
   );
@@ -156,13 +165,20 @@ const Admin_menu: React.FC = () => {
       case "customer_reservation":
         return <Admin_customer_reservation />;
       case "customer_cancelled":
-        return <Admin_Customer_Cancelled />; // ✅ NEW
+        return <Admin_Customer_Cancelled />;
       case "seat_table":
         return <Admin_Seat_Table />;
       case "packages":
         return <Admin_Packages />;
       case "discount_records":
         return <Admin_Customer_Discount_List />;
+
+      // ✅ NEW
+      case "staff_consignment_record":
+        return <Staff_Consignment_Record />;
+      case "customer_consignment_record":
+        return <Customer_Consignment_Record />;
+
       default:
         return <Admin_Dashboard />;
     }
