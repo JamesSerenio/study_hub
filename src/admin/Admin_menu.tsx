@@ -126,7 +126,7 @@ const Admin_menu: React.FC = () => {
       { name: "Customer Consignment Record", key: "customer_consignment_record", icon: customerConsignmentIcon   },
       { name: "Seat Table", key: "seat_table", icon: seatIcon },
       { name: "Promotions", key: "packages", icon: promotionIcon },
-      { name: "Fayenarisse@gmail.com", key: "discount_records", icon: discountIcon },
+      { name: "Memberships", key: "discount_records", icon: discountIcon },
     ],
     []
   );

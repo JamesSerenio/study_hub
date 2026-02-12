@@ -2,21 +2,24 @@
 // ✅ NO DATE FILTER (shows ALL records)
 // ✅ Date/Time shown in PH
 // ✅ Overall Sales shown is NET (gross - 15%)
+// ✅ MeTyme Commission shown (15% of gross)
 // ✅ Remaining = NET Overall Sales - Cashouts (CASH+GCASH)
-// ✅ Cash Out modal now supports CASH + GCASH + history breakdown
-// ✅ Cash Out history shows payment_method (CASH/GCASH)
+// ✅ Cash Out modal supports CASH + GCASH + history breakdown + payment_method
 // ✅ SAME classnames as Customer_Add_ons.tsx (customer-* / receipt-btn)
 // ✅ Category column (from consignment.category)
-// ✅ Grouping can be by CATEGORY (toggle)
-// ✅ NEW: Action column in DETAILS: Edit / Restock / Delete
-// ✅ NEW: Edit supports IMAGE UPLOAD (Supabase Storage)
-// ✅ NEW: Replacing image auto-deletes OLD image in Storage
-// ✅ NEW: Deleting row also deletes image in Storage + DB row
+// ✅ Grouping: FULL NAME / CATEGORY (toggle)
+// ✅ Action column in DETAILS: Edit / Restock / Delete
+// ✅ Edit supports IMAGE UPLOAD (Supabase Storage) + replacing auto deletes old image
+// ✅ Deleting row deletes image in Storage + DB row
+// ✅ ✅ Export to Excel (nice layout) + embeds actual images
 // ✅ STRICT TS: NO any
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
+
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
 type NumericLike = number | string;
 type GroupBy = "full_name" | "category";
@@ -114,6 +117,7 @@ const sizeText = (s: string | null | undefined): string => {
 };
 
 const grossToNet = (gross: number): number => round2(gross * 0.85);
+const grossToCommission = (gross: number): number => round2(gross * 0.15);
 
 const safeExtFromName = (name: string): string => {
   const parts = name.split(".");
@@ -171,6 +175,46 @@ const uploadConsignmentImage = async (file: File, bucket: string): Promise<strin
 
 const labelPay = (m: PayMethod): string => (m === "gcash" ? "GCASH" : "CASH");
 
+/* ---------------- excel helpers ---------------- */
+
+type ImgData = { base64: string; extension: "png" | "jpeg" };
+
+const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Failed to read image."));
+    reader.onload = () => {
+      const res = reader.result;
+      if (typeof res !== "string") return reject(new Error("Invalid base64 result."));
+      resolve(res);
+    };
+    reader.readAsDataURL(blob);
+  });
+};
+
+const fetchImageAsBase64 = async (url: string): Promise<ImgData | null> => {
+  try {
+    const resp = await fetch(url, { mode: "cors" });
+    if (!resp.ok) return null;
+
+    const blob = await resp.blob();
+    if (!blob.type.startsWith("image/")) return null;
+
+    // exceljs only supports png/jpeg in practice
+    const isPng = blob.type.includes("png");
+    const ext: "png" | "jpeg" = isPng ? "png" : "jpeg";
+
+    const dataUrl = await blobToBase64(blob);
+    const commaIdx = dataUrl.indexOf(",");
+    const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+
+    if (!base64) return null;
+    return { base64, extension: ext };
+  } catch {
+    return null;
+  }
+};
+
 /* ---------------- money rules ---------------- */
 
 type PersonAgg = {
@@ -182,7 +226,9 @@ type PersonAgg = {
 
   expected_total: number;
   gross_total: number;
-  net_total: number;
+
+  net_total: number; // 85%
+  commission_total: number; // 15%
 
   cashout_cash: number;
   cashout_gcash: number;
@@ -211,7 +257,7 @@ const Staff_Consignment_Record: React.FC = () => {
   const [cashoutTargetKey, setCashoutTargetKey] = useState<string | null>(null);
   const [cashoutTargetLabel, setCashoutTargetLabel] = useState<string>("");
 
-  // ✅ new: two inputs
+  // ✅ two inputs
   const [cashAmount, setCashAmount] = useState<string>("");
   const [gcashAmount, setGcashAmount] = useState<string>("");
 
@@ -240,6 +286,9 @@ const Staff_Consignment_Record: React.FC = () => {
 
   const [deleteTarget, setDeleteTarget] = useState<ConsignmentRow | null>(null);
   const [deleting, setDeleting] = useState<boolean>(false);
+
+  // excel
+  const [exporting, setExporting] = useState<boolean>(false);
 
   useEffect(() => {
     void fetchAll();
@@ -385,6 +434,7 @@ const Staff_Consignment_Record: React.FC = () => {
         expected_total: 0,
         gross_total: 0,
         net_total: 0,
+        commission_total: 0,
         cashout_cash: 0,
         cashout_gcash: 0,
         cashout_total: 0,
@@ -412,7 +462,10 @@ const Staff_Consignment_Record: React.FC = () => {
       a.gross_total = round2(a.gross_total + gross);
     }
 
-    for (const a of map.values()) a.net_total = grossToNet(a.gross_total);
+    for (const a of map.values()) {
+      a.net_total = grossToNet(a.gross_total);
+      a.commission_total = grossToCommission(a.gross_total);
+    }
 
     for (const c of cashouts) {
       const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
@@ -454,6 +507,207 @@ const Staff_Consignment_Record: React.FC = () => {
 
   const rowsCount = filteredRows.length;
 
+  /* ---------------- export excel ---------------- */
+
+  const exportToExcel = async (): Promise<void> => {
+    try {
+      setExporting(true);
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "Consignment System";
+      wb.created = new Date();
+
+      const ws = wb.addWorksheet("Consignment", {
+        views: [{ state: "frozen", ySplit: 2 }], // freeze top title + header
+        pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      });
+
+      // Title row
+      const title = `Consignment Records (ALL) • Exported: ${formatPHDateTime(new Date().toISOString())}`;
+      ws.addRow([title]);
+      ws.mergeCells("A1:M1");
+      const titleCell = ws.getCell("A1");
+      titleCell.font = { bold: true, size: 14 };
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      ws.getRow(1).height = 26;
+
+      // Header row
+      const headers = [
+        "Image",
+        "Item Name",
+        "Date/Time (PH)",
+        "Full Name",
+        "Category",
+        "Size",
+        "Price",
+        "Restock",
+        "Stock",
+        "Sold",
+        "Expected Sales",
+        "Overall Sales (NET)",
+        "MeTyme Commission",
+      ];
+      ws.addRow(headers);
+
+      const headerRow = ws.getRow(2);
+      headerRow.height = 20;
+      headerRow.font = { bold: true };
+      headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+
+      // Column widths (nice layout)
+      ws.columns = [
+        { key: "img", width: 14 },
+        { key: "item", width: 26 },
+        { key: "dt", width: 22 },
+        { key: "name", width: 24 },
+        { key: "cat", width: 18 },
+        { key: "size", width: 10 },
+        { key: "price", width: 14 },
+        { key: "rest", width: 10 },
+        { key: "stock", width: 10 },
+        { key: "sold", width: 10 },
+        { key: "exp", width: 16 },
+        { key: "net", width: 18 },
+        { key: "comm", width: 18 },
+      ];
+
+      // Simple border helper
+      const borderAll = {
+        top: { style: "thin" as const },
+        left: { style: "thin" as const },
+        bottom: { style: "thin" as const },
+        right: { style: "thin" as const },
+      };
+
+      // Body rows
+      const startRow = 3; // after title+header
+      for (let i = 0; i < filteredRows.length; i++) {
+        const r = filteredRows[i];
+
+        const price = round2(toNumber(r.price));
+        const rest = Number(r.restocked ?? 0) || 0;
+        const sold = Number(r.sold ?? 0) || 0;
+        const stocks = Number(r.stocks ?? 0) || 0;
+
+        const expected = round2(toNumber(r.expected_sales));
+        const gross = round2(toNumber(r.overall_sales));
+        const netOverall = grossToNet(gross);
+        const commission = grossToCommission(gross);
+
+        // add row (Image cell is empty string; image will be embedded)
+        ws.addRow([
+          "",
+          show(r.item_name),
+          formatPHDateTime(r.created_at),
+          show(r.full_name),
+          show(r.category),
+          sizeText(r.size),
+          price,
+          rest,
+          stocks,
+          sold,
+          expected,
+          netOverall,
+          commission,
+        ]);
+
+        const excelRowNum = startRow + i;
+        const row = ws.getRow(excelRowNum);
+        row.height = 56;
+
+        // Style row
+        for (let c = 1; c <= headers.length; c++) {
+          const cell = row.getCell(c);
+          cell.border = borderAll;
+          cell.alignment = {
+            vertical: "middle",
+            horizontal: c === 2 || c === 4 || c === 5 ? "left" : "center",
+            wrapText: true,
+          };
+
+          // number formats
+          if (c === 7 || c === 11 || c === 12 || c === 13) cell.numFmt = '"₱"#,##0.00';
+          if (c === 8 || c === 9 || c === 10) cell.numFmt = "0";
+        }
+
+        // Embed image if available
+        if (r.image_url) {
+          const img = await fetchImageAsBase64(r.image_url);
+          if (img) {
+            const imgId = wb.addImage({
+              base64: img.base64,
+              extension: img.extension,
+            });
+
+            // Put image inside A{row}
+            // Using "tl/br" anchors. Row/col are 0-based in exceljs positioning.
+          ws.addImage(imgId, {
+            tl: { col: 0, row: excelRowNum - 1 },
+            ext: { width: 64, height: 64 },
+            editAs: "oneCell",
+          });
+
+          }
+        }
+      }
+
+      // Borders for header row too
+      for (let c = 1; c <= headers.length; c++) {
+        const cell = ws.getRow(2).getCell(c);
+        cell.border = borderAll;
+      }
+
+      // AutoFilter across header
+      ws.autoFilter = {
+        from: { row: 2, column: 1 },
+        to: { row: 2, column: headers.length },
+      };
+
+      // Footer: totals (optional but nice)
+      const totalsRowNum = startRow + filteredRows.length + 1;
+      ws.addRow([]);
+      ws.addRow([
+        "TOTALS",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "", // price
+        "", // restock
+        "", // stock
+        "", // sold
+        { formula: `SUM(K${startRow}:K${startRow + filteredRows.length - 1})` },
+        { formula: `SUM(L${startRow}:L${startRow + filteredRows.length - 1})` },
+        { formula: `SUM(M${startRow}:M${startRow + filteredRows.length - 1})` },
+      ]);
+
+      const totalsRow = ws.getRow(totalsRowNum);
+      totalsRow.height = 20;
+      totalsRow.font = { bold: true };
+      for (let c = 1; c <= headers.length; c++) {
+        const cell = totalsRow.getCell(c);
+        cell.border = borderAll;
+        cell.alignment = { vertical: "middle", horizontal: c === 1 ? "left" : "center" };
+        if (c === 11 || c === 12 || c === 13) cell.numFmt = '"₱"#,##0.00';
+      }
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      const fileName = `consignment_records_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      saveAs(blob, fileName);
+    } catch (e: unknown) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Export failed. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   /* ---------------- cashout ---------------- */
 
   const openCashout = (agg: PersonAgg): void => {
@@ -462,7 +716,6 @@ const Staff_Consignment_Record: React.FC = () => {
 
     setCashAmount("");
     setGcashAmount("");
-
     setCashoutNote("");
   };
 
@@ -497,11 +750,15 @@ const Staff_Consignment_Record: React.FC = () => {
     try {
       setSavingCashout(true);
 
+      // optional: if your RPC supports category, you can pass it
+      const p_category = groupBy === "category" ? cashoutTargetLabel : null;
+
       const { error } = await supabase.rpc("cashout_consignment_oversale", {
-        p_full_name: cashoutTargetLabel,
+        p_full_name: groupBy === "category" ? "CATEGORY" : cashoutTargetLabel,
         p_cash_amount: cash,
         p_gcash_amount: gcash,
         p_note: cashoutNote.trim() || null,
+        p_category,
       });
 
       if (error) {
@@ -564,7 +821,6 @@ const Staff_Consignment_Record: React.FC = () => {
       setSavingEdit(true);
 
       const oldUrl = editTarget.image_url ?? null;
-
       let nextImageUrl: string | null = oldUrl;
 
       if (newImageFile) {
@@ -598,9 +854,7 @@ const Staff_Consignment_Record: React.FC = () => {
       }
 
       const changedImage = (oldUrl ?? null) !== (nextImageUrl ?? null);
-      if (changedImage && oldUrl) {
-        await deleteStorageByUrl(oldUrl, CONSIGNMENT_BUCKET);
-      }
+      if (changedImage && oldUrl) await deleteStorageByUrl(oldUrl, CONSIGNMENT_BUCKET);
 
       setEditTarget(null);
 
@@ -693,6 +947,9 @@ const Staff_Consignment_Record: React.FC = () => {
                 <button className="receipt-btn" onClick={() => setGroupBy("full_name")} style={{ opacity: groupBy === "full_name" ? 1 : 0.6 }}>
                   Group by Full Name
                 </button>
+                <button className="receipt-btn" onClick={() => setGroupBy("category")} style={{ opacity: groupBy === "category" ? 1 : 0.6 }}>
+                  Group by Category
+                </button>
               </div>
             </div>
 
@@ -721,8 +978,11 @@ const Staff_Consignment_Record: React.FC = () => {
               </div>
 
               <div className="admin-tools-row">
-                <button className="receipt-btn" onClick={() => void fetchAll()} disabled={loading}>
+                <button className="receipt-btn" onClick={() => void fetchAll()} disabled={loading || exporting}>
                   Refresh
+                </button>
+                <button className="receipt-btn" onClick={() => void exportToExcel()} disabled={loading || exporting || filteredRows.length === 0} title="Exports the current filtered list">
+                  {exporting ? "Exporting..." : "Export Excel"}
                 </button>
               </div>
             </div>
@@ -744,6 +1004,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       <th>Total Sold</th>
                       <th>Expected Sales</th>
                       <th>Overall Sales</th>
+                      <th>MeTyme Commission</th>
                       <th>Cash Outs</th>
                       <th>Remaining</th>
                       <th>Action</th>
@@ -757,23 +1018,25 @@ const Staff_Consignment_Record: React.FC = () => {
                         <td style={{ fontWeight: 900 }}>{p.total_restock}</td>
                         <td style={{ fontWeight: 900 }}>{p.total_sold}</td>
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.expected_total)}</td>
+
+                        {/* NET */}
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.net_total)}</td>
+
+                        {/* 15% */}
+                        <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.commission_total)}</td>
+
                         <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>
                           {moneyText(p.cashout_total)}
                           <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
                             Cash: {moneyText(p.cashout_cash)} • GCash: {moneyText(p.cashout_gcash)}
                           </div>
                         </td>
+
                         <td style={{ whiteSpace: "nowrap", fontWeight: 1100 }}>{moneyText(p.remaining)}</td>
 
                         <td>
                           <div className="action-stack">
-                            <button
-                              className="receipt-btn"
-                              onClick={() => openCashout(p)}
-                              disabled={p.remaining <= 0}
-                              title={p.remaining <= 0 ? "No remaining" : "Cash out"}
-                            >
+                            <button className="receipt-btn" onClick={() => openCashout(p)} disabled={p.remaining <= 0} title={p.remaining <= 0 ? "No remaining" : "Cash out"}>
                               Cash Out
                             </button>
                           </div>
@@ -785,7 +1048,7 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 {groupBy === "category" ? (
                   <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                    Note: If your cashout table has no <b>category</b> column, grouping by category can’t compute cashouts correctly unless you add it.
+                    Note: For perfect cashouts when grouping by <b>Category</b>, your cashout table should store the category value too (column: <b>category</b>).
                   </div>
                 ) : null}
               </div>
@@ -909,6 +1172,7 @@ const Staff_Consignment_Record: React.FC = () => {
 
                   const gross = round2(p?.gross_total ?? 0);
                   const net = grossToNet(gross);
+                  const comm = grossToCommission(gross);
 
                   const remaining = round2(p?.remaining ?? 0);
                   const cash = round2(p?.cashout_cash ?? 0);
@@ -924,8 +1188,13 @@ const Staff_Consignment_Record: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Overall Sales</span>
+                        <span>Overall Sales (NET)</span>
                         <span>{moneyText(net)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>MeTyme Commission (15%)</span>
+                        <span>{moneyText(comm)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -949,7 +1218,6 @@ const Staff_Consignment_Record: React.FC = () => {
 
                       <hr />
 
-                      {/* ✅ NEW: Cash + GCash inputs */}
                       <div className="receipt-row">
                         <span>Cash Amount</span>
                         <input
@@ -979,10 +1247,7 @@ const Staff_Consignment_Record: React.FC = () => {
                       </div>
 
                       <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
-                        Total Cashout:{" "}
-                        <b>
-                          {moneyText(round2((Number(cashAmount) || 0) + (Number(gcashAmount) || 0)))}
-                        </b>
+                        Total Cashout: <b>{moneyText(round2((Number(cashAmount) || 0) + (Number(gcashAmount) || 0)))}</b>
                       </div>
 
                       <div style={{ marginTop: 10 }}>
@@ -1117,60 +1382,27 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Full Name *</span>
-                  <input
-                    className="money-input"
-                    value={editForm.full_name}
-                    onChange={(e) => setEditForm((p) => ({ ...p, full_name: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Owner full name"
-                  />
+                  <input className="money-input" value={editForm.full_name} onChange={(e) => setEditForm((p) => ({ ...p, full_name: e.currentTarget.value }))} disabled={savingEdit} placeholder="Owner full name" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Category</span>
-                  <input
-                    className="money-input"
-                    value={editForm.category}
-                    onChange={(e) => setEditForm((p) => ({ ...p, category: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Optional category"
-                  />
+                  <input className="money-input" value={editForm.category} onChange={(e) => setEditForm((p) => ({ ...p, category: e.currentTarget.value }))} disabled={savingEdit} placeholder="Optional category" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Item Name *</span>
-                  <input
-                    className="money-input"
-                    value={editForm.item_name}
-                    onChange={(e) => setEditForm((p) => ({ ...p, item_name: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Item name"
-                  />
+                  <input className="money-input" value={editForm.item_name} onChange={(e) => setEditForm((p) => ({ ...p, item_name: e.currentTarget.value }))} disabled={savingEdit} placeholder="Item name" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Size</span>
-                  <input
-                    className="money-input"
-                    value={editForm.size}
-                    onChange={(e) => setEditForm((p) => ({ ...p, size: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="Optional size"
-                  />
+                  <input className="money-input" value={editForm.size} onChange={(e) => setEditForm((p) => ({ ...p, size: e.currentTarget.value }))} disabled={savingEdit} placeholder="Optional size" />
                 </div>
 
                 <div className="receipt-row">
                   <span>Price *</span>
-                  <input
-                    className="money-input"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={editForm.price}
-                    onChange={(e) => setEditForm((p) => ({ ...p, price: e.currentTarget.value }))}
-                    disabled={savingEdit}
-                    placeholder="0.00"
-                  />
+                  <input className="money-input" type="number" min="0" step="0.01" value={editForm.price} onChange={(e) => setEditForm((p) => ({ ...p, price: e.currentTarget.value }))} disabled={savingEdit} placeholder="0.00" />
                 </div>
 
                 <div className="modal-actions" style={{ marginTop: 16 }}>
@@ -1198,16 +1430,7 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Add Qty</span>
-                  <input
-                    className="money-input"
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={restockQty}
-                    onChange={(e) => setRestockQty(e.currentTarget.value)}
-                    placeholder="0"
-                    disabled={savingRestock}
-                  />
+                  <input className="money-input" type="number" min="1" step="1" value={restockQty} onChange={(e) => setRestockQty(e.currentTarget.value)} placeholder="0" disabled={savingRestock} />
                 </div>
 
                 <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>Example: current 10 + input 5 = 15</div>
@@ -1243,8 +1466,7 @@ const Staff_Consignment_Record: React.FC = () => {
                     Category: <b>{show(deleteTarget.category)}</b>
                   </div>
                   <div>
-                    Stocks: <b>{Math.max(0, Math.floor(Number(deleteTarget.stocks ?? 0) || 0))}</b> • Sold:{" "}
-                    <b>{Math.max(0, Math.floor(Number(deleteTarget.sold ?? 0) || 0))}</b>
+                    Stocks: <b>{Math.max(0, Math.floor(Number(deleteTarget.stocks ?? 0) || 0))}</b> • Sold: <b>{Math.max(0, Math.floor(Number(deleteTarget.sold ?? 0) || 0))}</b>
                   </div>
                   <div style={{ opacity: 0.85 }}>
                     Image: <b>{deleteTarget.image_url ? "will be deleted" : "none"}</b>
