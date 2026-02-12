@@ -13,6 +13,12 @@
 //         - Discount total
 //         - Total Time amount
 //         Applies to BOTH non-reservation + reservation.
+// ✅ CONSIGNMENT NET (SAME AS ADMIN):
+//         - Uses RPC: get_consignment_totals_for_day(p_date)
+//         - RPC handles Manila date inside (paid_at at time zone 'Asia/Manila')
+//         - Returns: gross, fee15, net
+//         - Display boxes: Consignment Sales / 15% / net + Inventory Loss
+//         - Sales System computed uses NET
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -118,6 +124,12 @@ type ConsignmentState = {
   gross: number;
   fee15: number;
   net: number;
+};
+
+type ConsignmentRpcRow = {
+  gross: number | string | null;
+  fee15: number | string | null;
+  net: number | string | null;
 };
 
 // ✅ for Add-ons payment grouping (avoid double counting)
@@ -235,13 +247,6 @@ const buildZeroLines = (reportId: string): CashLine[] => {
   return merged;
 };
 
-// ✅ Manila day range from YYYY-MM-DD (correct for timestamptz)
-const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } => {
-  const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { startIso: start.toISOString(), endIso: end.toISOString() };
-};
-
 const ms = (iso: string): number => {
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? t : 0;
@@ -286,8 +291,7 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
     const g = Math.max(0, toNumber(r.gcash_amount));
     const c = Math.max(0, toNumber(r.cash_amount));
 
-    const startNew =
-      !started || name !== curName || seat !== curSeat || Math.abs(t - curLast) > GROUP_WINDOW_MS;
+    const startNew = !started || name !== curName || seat !== curSeat || Math.abs(t - curLast) > GROUP_WINDOW_MS;
 
     if (startNew) {
       if (started) flush();
@@ -337,7 +341,11 @@ const computeCostWithFreeMinutes = (startIso: string, endIso: string): number =>
   return round2(chargeMinutes * perMinute);
 };
 
-const computeDiscountAmountFromTimeCost = (timeCost: number, kindRaw: string | null | undefined, valueRaw: number | string | null | undefined): number => {
+const computeDiscountAmountFromTimeCost = (
+  timeCost: number,
+  kindRaw: string | null | undefined,
+  valueRaw: number | string | null | undefined
+): number => {
   const kind = (kindRaw ?? "none").toLowerCase().trim();
   const v = Math.max(0, toNumber(valueRaw));
 
@@ -360,7 +368,7 @@ const StaffSalesReport: React.FC = () => {
   const [lines, setLines] = useState<CashLine[]>([]);
   const [totals, setTotals] = useState<SalesTotalsRow | null>(null);
 
-  // ✅ CONSIGNMENT (PAID ONLY)
+  // ✅ CONSIGNMENT (PAID ONLY) — from RPC (same as admin)
   const [consignment, setConsignment] = useState<ConsignmentState>({ gross: 0, fee15: 0, net: 0 });
 
   // ✅ ADD-ONS (PAYMENTS)
@@ -370,10 +378,10 @@ const StaffSalesReport: React.FC = () => {
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
-  // ✅ FIX: Total Time amount from time consumed (₱) — PAID ONLY
+  // ✅ Total Time amount (₱) — PAID ONLY
   const [totalTimeAmount, setTotalTimeAmount] = useState<number>(0);
 
-  // ✅ NEW: Discount total — PAID ONLY
+  // ✅ Discount total — PAID ONLY
   const [discountPaid, setDiscountPaid] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
@@ -463,7 +471,10 @@ const StaffSalesReport: React.FC = () => {
   };
 
   const loadCashLines = async (reportId: string): Promise<void> => {
-    const res = await supabase.from("daily_cash_count_lines").select("report_id, money_kind, denomination, qty").eq("report_id", reportId);
+    const res = await supabase
+      .from("daily_cash_count_lines")
+      .select("report_id, money_kind, denomination, qty")
+      .eq("report_id", reportId);
 
     if (res.error) {
       // eslint-disable-next-line no-console
@@ -493,7 +504,11 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("v_daily_sales_report_totals").select("*").eq("report_date", dateYMD).single<SalesTotalsRow>();
+    const res = await supabase
+      .from("v_daily_sales_report_totals")
+      .select("*")
+      .eq("report_date", dateYMD)
+      .single<SalesTotalsRow>();
 
     if (res.error) {
       // eslint-disable-next-line no-console
@@ -505,37 +520,38 @@ const StaffSalesReport: React.FC = () => {
     setTotals(res.data);
   };
 
+  /**
+   * ✅ CONSIGNMENT NET (SAME AS ADMIN):
+   * - Uses RPC: get_consignment_totals_for_day(p_date)
+   * - RPC handles Manila date inside (paid_at at time zone 'Asia/Manila')
+   * - Reads customer_session_consignment (paid + not voided) inside RPC
+   */
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
     }
 
-    const startISO = `${dateYMD}T00:00:00.000`;
-    const endISO = `${dateYMD}T23:59:59.999`;
-
-    const res = await supabase
-      .from("customer_session_add_ons")
-      .select("total, paid_at, add_ons!inner(category)")
-      .eq("is_paid", true)
-      .not("paid_at", "is", null)
-      .eq("add_ons.category", "CONSIGNMENT")
-      .gte("paid_at", startISO)
-      .lte("paid_at", endISO);
+    const res = await supabase.rpc("get_consignment_totals_for_day", { p_date: dateYMD });
 
     if (res.error) {
       // eslint-disable-next-line no-console
-      console.error("consignment query error:", res.error.message);
+      console.error("get_consignment_totals_for_day error:", res.error.message);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
-    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
-    const fee15 = gross * 0.15;
-    const net = gross - fee15;
+    const row = (res.data?.[0] ?? null) as ConsignmentRpcRow | null;
+    if (!row) {
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      return;
+    }
 
-    setConsignment({ gross, fee15, net });
+    setConsignment({
+      gross: toNumber(row.gross),
+      fee15: toNumber(row.fee15),
+      net: toNumber(row.net),
+    });
   };
 
   // ✅ FIXED: Add-ons (Paid) based on PAYMENT, not total
@@ -545,13 +561,15 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const { startIso, endIso } = manilaDayRange(dateYMD);
+    // Manila day range (timestamptz safe)
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
     const res = await supabase
       .from("customer_session_add_ons")
       .select("created_at, full_name, seat_number, gcash_amount, cash_amount")
-      .gte("created_at", startIso)
-      .lt("created_at", endIso);
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString());
 
     if (res.error) {
       // eslint-disable-next-line no-console
@@ -671,7 +689,6 @@ const StaffSalesReport: React.FC = () => {
     let discountSum = 0;
 
     for (const s of all) {
-      // extra safety (kahit naka-eq(is_paid,true))
       if (!s.is_paid) continue;
 
       const start = String(s.time_started ?? "").trim();
@@ -722,7 +739,10 @@ const StaffSalesReport: React.FC = () => {
     await loadTotals(selectedDate);
   };
 
-  const updateReportField = async (field: "starting_cash" | "starting_gcash" | "bilin_amount", valueNum: number): Promise<void> => {
+  const updateReportField = async (
+    field: "starting_cash" | "starting_gcash" | "bilin_amount",
+    valueNum: number
+  ): Promise<void> => {
     if (!report || submitting) return;
 
     const safe = Math.max(0, valueNum);
@@ -790,7 +810,9 @@ const StaffSalesReport: React.FC = () => {
     }));
 
     if (payload.length > 0) {
-      const r2 = await supabase.from("daily_cash_count_lines").upsert(payload, { onConflict: "report_id,money_kind,denomination" });
+      const r2 = await supabase
+        .from("daily_cash_count_lines")
+        .upsert(payload, { onConflict: "report_id,money_kind,denomination" });
       if (r2.error) return r2.error.message;
     }
 
@@ -873,10 +895,10 @@ const StaffSalesReport: React.FC = () => {
         setTotalTimeAmount(0);
         setDiscountPaid(0);
       } else {
-        void loadConsignment(selectedDate);
+        void loadConsignment(selectedDate); // ✅ RPC like admin
         void loadAddonsPaid(selectedDate);
         void loadCashOutsTotal(selectedDate);
-        void loadTimeAndDiscountPaid(selectedDate); // ✅ PAID ONLY (time + discount)
+        void loadTimeAndDiscountPaid(selectedDate);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -930,7 +952,7 @@ const StaffSalesReport: React.FC = () => {
   const startingGcash = report ? toNumber(report.starting_gcash) : 0;
 
   const addons = addonsPaid;
-  const discount = discountPaid; // ✅ PAID ONLY
+  const discount = discountPaid;
 
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 
@@ -941,9 +963,9 @@ const StaffSalesReport: React.FC = () => {
 
   /**
    * ✅ Sales System (computed)
-   * add-ons + total time (PAID ONLY) + consignment sales - discount (PAID ONLY)
+   * add-ons + total time (PAID ONLY) + consignment NET - discount (PAID ONLY)
    */
-  const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
+  const salesSystemComputed = addons + totalTimeAmount + consignment.net - discount;
 
   /**
    * ✅ Sales Collected:
@@ -1153,11 +1175,13 @@ const StaffSalesReport: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* ✅ SAME AS ADMIN: show consignment breakdown + inventory loss */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
-                      <span className="ssr-sales-box-value">{peso(consignment.gross)}</span>
+                      <span className="ssr-sales-box-value">{peso(consignment.net)}</span>
                     </div>
+
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Inventory Loss</span>
                       <span className="ssr-sales-box-value">{peso(expenses)}</span>
@@ -1284,13 +1308,11 @@ const StaffSalesReport: React.FC = () => {
                       <b>{peso(addonsPaid)}</b>
                     </div>
 
-                    {/* ✅ PAID ONLY */}
                     <div className="ssr-mini-row">
                       <span>Discount (amount)</span>
                       <b>{peso(discountPaid)}</b>
                     </div>
 
-                    {/* ✅ PAID ONLY */}
                     <div className="ssr-mini-row">
                       <span>Total Time</span>
                       <b>{peso(totalTimeAmount)}</b>
