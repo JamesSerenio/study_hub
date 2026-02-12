@@ -947,9 +947,6 @@ const Staff_Consignment_Record: React.FC = () => {
                 <button className="receipt-btn" onClick={() => setGroupBy("full_name")} style={{ opacity: groupBy === "full_name" ? 1 : 0.6 }}>
                   Group by Full Name
                 </button>
-                <button className="receipt-btn" onClick={() => setGroupBy("category")} style={{ opacity: groupBy === "category" ? 1 : 0.6 }}>
-                  Group by Category
-                </button>
               </div>
             </div>
 

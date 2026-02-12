@@ -12,6 +12,9 @@
 // ✅ UI UPDATE:
 //    - Inventory Loss moved to BOTTOM section, placed beside "Consignment Net" (same row)
 // ✅ PDF + Excel exports still include Inventory Loss
+// ✅ CONSIGNMENT FIX (NEW):
+//    - Uses RPC: get_consignment_totals_for_day(p_date) reading customer_session_consignment (paid + not voided)
+//    - Manila date handled inside RPC (paid_at at time zone 'Asia/Manila')
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -115,6 +118,12 @@ type ConsignmentState = {
   gross: number;
   fee15: number;
   net: number;
+};
+
+type ConsignmentRpcRow = {
+  gross: number | string | null;
+  fee15: number | string | null;
+  net: number | string | null;
 };
 
 // ✅ for Add-ons payment grouping (avoid double counting)
@@ -228,7 +237,6 @@ const buildZeroLines = (reportId: string): CashLine[] => {
 
 const GROUP_WINDOW_MS = 10_000;
 
-
 const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
   if (rows.length === 0) return 0;
 
@@ -259,10 +267,7 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
 
     const isFirst = curStart === 0;
     const startNew =
-      isFirst ||
-      norm(r.full_name) !== curName ||
-      norm(r.seat_number) !== curSeat ||
-      Math.abs(t - curLast) > GROUP_WINDOW_MS;
+      isFirst || norm(r.full_name) !== curName || norm(r.seat_number) !== curSeat || Math.abs(t - curLast) > GROUP_WINDOW_MS;
 
     if (startNew) {
       if (!isFirst) flush();
@@ -325,10 +330,7 @@ const AdminSalesReport: React.FC = () => {
   const ensureReportRow = async (dateYMD: string): Promise<void> => {
     const upsertRes = await supabase
       .from("daily_sales_reports")
-      .upsert(
-        { report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 },
-        { onConflict: "report_date", ignoreDuplicates: true }
-      );
+      .upsert({ report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 }, { onConflict: "report_date", ignoreDuplicates: true });
 
     if (upsertRes.error) console.error("daily_sales_reports ensure(upsert) error:", upsertRes.error.message);
   };
@@ -415,37 +417,32 @@ const AdminSalesReport: React.FC = () => {
     setTotals(res.data);
   };
 
+  // ✅ CONSIGNMENT (RPC FIX)
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
     }
 
-    // keep existing logic (paid consignment sales)
-    const startISO = `${dateYMD}T00:00:00.000`;
-    const endISO = `${dateYMD}T23:59:59.999`;
-
-    const res = await supabase
-      .from("customer_session_add_ons")
-      .select("total, paid_at, add_ons!inner(category)")
-      .eq("is_paid", true)
-      .not("paid_at", "is", null)
-      .eq("add_ons.category", "CONSIGNMENT")
-      .gte("paid_at", startISO)
-      .lte("paid_at", endISO);
+    const res = await supabase.rpc("get_consignment_totals_for_day", { p_date: dateYMD });
 
     if (res.error) {
-      console.error("consignment query error:", res.error.message);
+      console.error("get_consignment_totals_for_day error:", res.error.message);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ total: number | string | null }>;
-    const gross = rows.reduce((sum, r) => sum + toNumber(r.total), 0);
-    const fee15 = gross * 0.15;
-    const net = gross - fee15;
+    const row = (res.data?.[0] ?? null) as ConsignmentRpcRow | null;
+    if (!row) {
+      setConsignment({ gross: 0, fee15: 0, net: 0 });
+      return;
+    }
 
-    setConsignment({ gross, fee15, net });
+    setConsignment({
+      gross: toNumber(row.gross),
+      fee15: toNumber(row.fee15),
+      net: toNumber(row.net),
+    });
   };
 
   /**
@@ -454,10 +451,6 @@ const AdminSalesReport: React.FC = () => {
    * - Uses created_at day range in Manila (+08)
    * - Groups per order (same full_name+seat within 10s)
    * - Payment per order = MAX(gcash)+MAX(cash) to avoid double counting (since each row in the order gets same values)
-   *
-   * Example:
-   *  - you set payment 30 → addonsPaid = 30
-   *  - then another customer payment 40 → addonsPaid = 70
    */
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -480,10 +473,7 @@ const AdminSalesReport: React.FC = () => {
     }
 
     const rows = (res.data ?? []) as AddOnPaymentRow[];
-
-    // if no payments at all, will return 0
     const onlyWithAnyPayment = rows.filter((r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0);
-
     const totalPayments = computeAddonsPaidFromPayments(onlyWithAnyPayment);
     setAddonsPaid(totalPayments);
   };
@@ -533,10 +523,7 @@ const AdminSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("daily_cash_count_lines")
-      .upsert(
-        { report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty },
-        { onConflict: "report_id,money_kind,denomination" }
-      );
+      .upsert({ report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty }, { onConflict: "report_id,money_kind,denomination" });
 
     if (res.error) {
       console.error("daily_cash_count_lines upsert error:", res.error.message);
@@ -977,8 +964,8 @@ const AdminSalesReport: React.FC = () => {
   useEffect(() => {
     void loadReport(selectedDate);
     void loadTotals(selectedDate);
-    void loadConsignment(selectedDate);
-    void loadAddonsPaid(selectedDate); // ✅ fixed
+    void loadConsignment(selectedDate); // ✅ rpc
+    void loadAddonsPaid(selectedDate); // ✅ payments-based
     void loadCashOutsTotal(selectedDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
@@ -1105,9 +1092,7 @@ const AdminSalesReport: React.FC = () => {
 
                 <div className="ssr-status">
                   Status: <b>{report?.is_submitted ? "SUBMITTED" : "DRAFT"}</b>
-                  {report?.submitted_at ? (
-                    <span className="ssr-status-sub">(last submit: {new Date(report.submitted_at).toLocaleString()})</span>
-                  ) : null}
+                  {report?.submitted_at ? <span className="ssr-status-sub">(last submit: {new Date(report.submitted_at).toLocaleString()})</span> : null}
                 </div>
               </div>
 
