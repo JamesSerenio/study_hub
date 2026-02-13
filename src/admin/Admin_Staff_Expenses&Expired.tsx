@@ -1,14 +1,15 @@
 // src/pages/Admin_Staff_Expenses&Expired.tsx
 // ✅ Admin view: Damage/Expired logs + Inventory Loss logs + Cash outs logs + Bilin (Utang) logs
 // ✅ TOPBAR ORDER: Dropdown -> Export -> Date -> Refresh
-// ✅ Damage/Expired + Inventory Loss: filtered by selectedDate
-// ✅ Cash outs: filtered by cashout_date = selectedDate
-// ✅ Bilin (Utang): whole week (Mon-Sun) based on selectedDate
-// ✅ Case-insensitive name grouping
+// ✅ STRICT TS, NO any, NO unknown
 // ✅ VOID uses RPC void_addon_expense (restores counters)
 // ✅ DELETE deletes log only (no revert)
-// ✅ STRICT TS, NO any, NO unknown
 // ✅ FIX (YOUR REQUEST): Damage/Expired section shows ONLY "expired" rows (Inventory Loss hidden there)
+// ✅ NEW (YOUR REQUEST):
+//    - Global filter mode: DAY / WEEK / MONTH
+//    - Export Excel supports DAY / WEEK / MONTH
+//    - Delete By Filter supports DAY / WEEK / MONTH
+//    - Bilin section now also respects filter mode (day/week/month)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -30,6 +31,7 @@ import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
 type SectionKind = "damage_expired" | "inventory_loss" | "cash_outs" | "bilin";
+type FilterMode = "day" | "week" | "month";
 
 // ✅ unify with DB + Admin_Item_Lists
 type ExpenseType = "expired" | "inventory_loss" | "bilin";
@@ -89,12 +91,16 @@ type CashOutRowDB = {
   amount: number | string | null;
 };
 
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const m = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
   return `${y}-${m}-${day}`;
 };
+
+const yyyyMmLocal = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 
 const startOfLocalDay = (d: Date): Date => {
   const x = new Date(d);
@@ -102,12 +108,25 @@ const startOfLocalDay = (d: Date): Date => {
   return x;
 };
 
-const getWeekRangeMonSun = (selectedYmd: string): { start: Date; endExclusive: Date } => {
-  const base = new Date(`${selectedYmd}T00:00:00`);
+const addDays = (d: Date, days: number): Date => new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
+
+// ✅ Monday-start week
+const getWeekRangeMonSun = (anchorYmd: string): { start: Date; endExclusive: Date } => {
+  const base = new Date(`${anchorYmd}T00:00:00`);
   const day = base.getDay(); // 0 Sun ... 6 Sat
   const diffToMon = day === 0 ? -6 : 1 - day;
-  const start = startOfLocalDay(new Date(base.getTime() + diffToMon * 24 * 60 * 60 * 1000));
-  const endExclusive = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const start = startOfLocalDay(addDays(base, diffToMon));
+  const endExclusive = addDays(start, 7);
+  return { start, endExclusive };
+};
+
+// ✅ Month range
+const getMonthRange = (anchorYmd: string): { start: Date; endExclusive: Date } => {
+  const base = new Date(`${anchorYmd}T00:00:00`);
+  const y = base.getFullYear();
+  const m = base.getMonth(); // 0-11
+  const start = new Date(y, m, 1, 0, 0, 0, 0);
+  const endExclusive = new Date(y, m + 1, 1, 0, 0, 0, 0);
   return { start, endExclusive };
 };
 
@@ -158,8 +177,7 @@ const toExpenseType = (v: string | null): ExpenseType | null => {
   return null;
 };
 
-const peso = (n: number): string =>
-  `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const peso = (n: number): string => `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const normNameKey = (name: string): string => String(name ?? "").trim().toLowerCase();
 const prettyName = (name: string): string => String(name ?? "").trim() || "—";
@@ -196,10 +214,14 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
   const [confirmDelete, setConfirmDelete] = useState<ExpenseRow | null>(null);
   const [confirmDeleteCashOut, setConfirmDeleteCashOut] = useState<CashOutRow | null>(null);
 
+  // ✅ Delete by filter
+  const [showDeleteFilterAlert, setShowDeleteFilterAlert] = useState<boolean>(false);
+
   const [busyId, setBusyId] = useState<string>("");
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
   const [section, setSection] = useState<SectionKind>("damage_expired");
+  const [filterMode, setFilterMode] = useState<FilterMode>("day");
 
   const fetchExpenses = async (): Promise<ExpenseRow[]> => {
     const { data, error } = await supabase
@@ -284,49 +306,74 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
     void fetchAll().finally(() => event.detail.complete());
   };
 
-  // ✅ Daily filter by selectedDate (for damage/expired + inventory loss views)
-  const rowsBySelectedDate = useMemo(() => {
+  // ✅ current range based on filterMode + selectedDate
+  const activeRange = useMemo((): { start: Date; endExclusive: Date; label: string; fileLabel: string } => {
+    if (filterMode === "day") {
+      const start = startOfLocalDay(new Date(`${selectedDate}T00:00:00`));
+      const endExclusive = addDays(start, 1);
+      return { start, endExclusive, label: selectedDate, fileLabel: selectedDate };
+    }
+    if (filterMode === "week") {
+      const w = getWeekRangeMonSun(selectedDate);
+      const endInc = new Date(w.endExclusive.getTime() - 1);
+      const label = `${yyyyMmDdLocal(w.start)} to ${yyyyMmDdLocal(endInc)}`;
+      const fileLabel = `${yyyyMmDdLocal(w.start)}_to_${yyyyMmDdLocal(endInc)}`;
+      return { start: w.start, endExclusive: w.endExclusive, label, fileLabel };
+    }
+    const m = getMonthRange(selectedDate);
+    const label = yyyyMmLocal(new Date(`${selectedDate}T00:00:00`));
+    const fileLabel = label;
+    return { start: m.start, endExclusive: m.endExclusive, label, fileLabel };
+  }, [filterMode, selectedDate]);
+
+  // ✅ all expense rows inside active range (for delete/filter/export)
+  const rowsInActiveRange = useMemo(() => {
     return rows.filter((r) => {
       const d = new Date(r.created_at);
       if (!Number.isFinite(d.getTime())) return false;
-      return yyyyMmDdLocal(d) === selectedDate;
+      return inRange(d, activeRange.start, activeRange.endExclusive);
     });
-  }, [rows, selectedDate]);
+  }, [rows, activeRange.start, activeRange.endExclusive]);
 
-  // ✅ FIXED: Damage/Expired shows ONLY expired
+  // ✅ section rows (Damage/Expired only expired) / Inventory Loss / Bilin
   const expenseRowsForSection = useMemo(() => {
-    if (section === "inventory_loss") {
-      return rowsBySelectedDate.filter((r) => r.expense_type === "inventory_loss");
-    }
+    if (section === "inventory_loss") return rowsInActiveRange.filter((r) => r.expense_type === "inventory_loss");
+    if (section === "bilin") return rowsInActiveRange.filter((r) => r.expense_type === "bilin");
     // damage_expired
-    return rowsBySelectedDate.filter((r) => r.expense_type === "expired");
-  }, [rowsBySelectedDate, section]);
+    return rowsInActiveRange.filter((r) => r.expense_type === "expired");
+  }, [rowsInActiveRange, section]);
 
-  const totalDamageExpiredQty = useMemo(
+  const totalQtyForSection = useMemo(
     () => expenseRowsForSection.reduce((sum, r) => sum + (Number.isFinite(r.quantity) ? r.quantity : 0), 0),
     [expenseRowsForSection]
   );
-  const totalDamageExpiredVoided = useMemo(
-    () => expenseRowsForSection.filter((r) => r.voided).length,
-    [expenseRowsForSection]
-  );
 
-  // ✅ Week range for bilin
-  const bilinWeek = useMemo(() => getWeekRangeMonSun(selectedDate), [selectedDate]);
+  const totalVoidedForSection = useMemo(() => expenseRowsForSection.filter((r) => r.voided).length, [expenseRowsForSection]);
 
-  const bilinWeekRows = useMemo(() => {
-    return rows.filter((r) => {
-      if (r.expense_type !== "bilin") return false;
-      const d = new Date(r.created_at);
-      if (!Number.isFinite(d.getTime())) return false;
-      return inRange(d, bilinWeek.start, bilinWeek.endExclusive);
+  // ✅ Cash outs filter by range:
+  // - DAY: cashout_date = selectedDate (same as before)
+  // - WEEK/MONTH: include cashouts whose cashout_date falls inside date range
+  const filteredCashOuts = useMemo(() => {
+    if (filterMode === "day") return cashOuts.filter((r) => r.cashout_date === selectedDate);
+
+    const startKey = yyyyMmDdLocal(activeRange.start);
+    const endKey = yyyyMmDdLocal(new Date(activeRange.endExclusive.getTime() - 1));
+    return cashOuts.filter((r) => {
+      const key = String(r.cashout_date ?? "").trim();
+      if (!key) return false;
+      return key >= startKey && key <= endKey;
     });
-  }, [rows, bilinWeek.start, bilinWeek.endExclusive]);
+  }, [cashOuts, filterMode, selectedDate, activeRange.start, activeRange.endExclusive]);
 
+  const cashOutsTotal = useMemo(() => filteredCashOuts.reduce((sum, r) => sum + r.amount, 0), [filteredCashOuts]);
+
+  // ✅ Bilin weekly summary now becomes "range summary" (day/week/month)
   const bilinSummary = useMemo((): BilinSummaryRow[] => {
+    if (section !== "bilin") return [];
+
     const map = new Map<string, BilinSummaryRow>();
 
-    for (const r of bilinWeekRows) {
+    for (const r of expenseRowsForSection) {
       if (r.voided) continue;
       const key = normNameKey(r.full_name);
       if (!key) continue;
@@ -345,9 +392,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
         });
       } else {
         const bestName =
-          prettyName(prev.display_name).length >= prettyName(r.full_name).length
-            ? prev.display_name
-            : prettyName(r.full_name);
+          prettyName(prev.display_name).length >= prettyName(r.full_name).length ? prev.display_name : prettyName(r.full_name);
 
         map.set(key, {
           ...prev,
@@ -360,12 +405,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
     }
 
     return Array.from(map.values()).sort((a, b) => b.total_amount - a.total_amount);
-  }, [bilinWeekRows]);
+  }, [expenseRowsForSection, section]);
 
   const bilinGrandTotal = useMemo(() => bilinSummary.reduce((s, x) => s + x.total_amount, 0), [bilinSummary]);
-
-  const filteredCashOuts = useMemo(() => cashOuts.filter((r) => r.cashout_date === selectedDate), [cashOuts, selectedDate]);
-  const cashOutsTotal = useMemo(() => filteredCashOuts.reduce((sum, r) => sum + r.amount, 0), [filteredCashOuts]);
 
   // ===== Excel helpers
   const applyHeaderStyle = (row: ExcelJS.Row): void => {
@@ -414,6 +456,15 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
     r.commit();
   };
 
+  const sectionLabel =
+    section === "damage_expired"
+      ? "DAMAGE/EXPIRED"
+      : section === "inventory_loss"
+        ? "INVENTORY LOSS"
+        : section === "cash_outs"
+          ? "CASH OUTS"
+          : "BILIN (UTANG)";
+
   const exportExcel = async (): Promise<void> => {
     try {
       const now = new Date();
@@ -440,25 +491,8 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       ws.mergeCells(3, 1, 3, 8);
       ws.mergeCells(4, 1, 4, 8);
 
-      const sectionLabel =
-        section === "damage_expired"
-          ? "DAMAGE/EXPIRED"
-          : section === "inventory_loss"
-            ? "INVENTORY LOSS"
-            : section === "cash_outs"
-              ? "CASH OUTS"
-              : "BILIN (UTANG)";
-
       ws.getCell("A1").value = `STAFF LOGS REPORT — ${sectionLabel}`;
-
-      if (section === "bilin") {
-        ws.getCell("A2").value = `Week: ${yyyyMmDdLocal(bilinWeek.start)} to ${yyyyMmDdLocal(
-          new Date(bilinWeek.endExclusive.getTime() - 1)
-        )} (Mon-Sun)`;
-      } else {
-        ws.getCell("A2").value = `Date: ${selectedDate}`;
-      }
-
+      ws.getCell("A2").value = `${filterMode.toUpperCase()} Range: ${activeRange.label}`;
       ws.getCell("A3").value = `Generated: ${now.toLocaleString()}`;
 
       styleTitleCell(ws.getCell("A1"), 16, true);
@@ -468,9 +502,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       if (section === "cash_outs") {
         ws.getCell("A4").value = `Rows: ${filteredCashOuts.length}   Total: ${peso(cashOutsTotal)}`;
       } else if (section === "bilin") {
-        ws.getCell("A4").value = `People: ${bilinSummary.length}   Grand Total: ${peso(bilinGrandTotal)}`;
+        ws.getCell("A4").value = `People: ${bilinSummary.length}   Grand Total: ${peso(bilinGrandTotal)}   Rows: ${expenseRowsForSection.length}`;
       } else {
-        ws.getCell("A4").value = `Rows: ${expenseRowsForSection.length}   Total Qty: ${totalDamageExpiredQty}   Voided: ${totalDamageExpiredVoided}`;
+        ws.getCell("A4").value = `Rows: ${expenseRowsForSection.length}   Total Qty: ${totalQtyForSection}   Voided: ${totalVoidedForSection}`;
       }
       styleMetaCell(ws.getCell("A4"), true);
 
@@ -517,6 +551,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
           cur++;
         }
       } else if (section === "bilin") {
+        // Summary
         const hSum = ws.getRow(6);
         hSum.values = ["Staff", "Tx Count", "Total Qty", "Total Amount", "", "", "", ""];
         applyHeaderStyle(hSum);
@@ -539,13 +574,14 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
         cur += 2;
         blankRow(ws, cur - 1);
 
+        // Details
         const h = ws.getRow(cur);
         h.values = ["Full Name", "Product", "Category", "Qty", "Amount", "Description", "Date & Time", "Status"];
         applyHeaderStyle(h);
         h.commit();
         cur++;
 
-        for (const r of bilinWeekRows) {
+        for (const r of expenseRowsForSection) {
           const row = ws.getRow(cur);
           const status = r.voided ? `VOIDED${r.voided_at ? ` • ${formatDateTime(r.voided_at)}` : ""}` : "ACTIVE";
 
@@ -609,7 +645,6 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
-      const pad2 = (n: number) => String(n).padStart(2, "0");
       const filenameNow = new Date();
       const y = filenameNow.getFullYear();
       const m = pad2(filenameNow.getMonth() + 1);
@@ -626,12 +661,8 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
               ? "CashOuts"
               : "Bilin";
 
-      const dateLabel =
-        section === "bilin"
-          ? `${yyyyMmDdLocal(bilinWeek.start)}_to_${yyyyMmDdLocal(new Date(bilinWeek.endExclusive.getTime() - 1))}`
-          : selectedDate;
-
-      const fileName = `MeTyme_StaffLogs_${sec}_${dateLabel}_generated_${y}-${m}-${d}_${hh}${mm}.xlsx`;
+      const mode = filterMode.toUpperCase();
+      const fileName = `MeTyme_StaffLogs_${sec}_${mode}_${activeRange.fileLabel}_generated_${y}-${m}-${d}_${hh}${mm}.xlsx`;
 
       saveAs(blob, fileName);
       setToastMsg("Exported Excel successfully.");
@@ -706,6 +737,47 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
     }
   };
 
+  // ✅ NEW: Delete by filter (DAY/WEEK/MONTH) — deletes LOGS only (no revert)
+  const deleteByFilter = async (): Promise<void> => {
+    try {
+      if (section === "cash_outs") {
+        const ids = filteredCashOuts.map((x) => x.id);
+        if (ids.length === 0) {
+          setToastMsg("No CASH OUT logs to delete for this filter.");
+          setToastOpen(true);
+          return;
+        }
+        const { error } = await supabase.from("cash_outs").delete().in("id", ids);
+        if (error) throw error;
+
+        setToastMsg(`Deleted CASH OUT logs by ${filterMode.toUpperCase()} (no revert).`);
+        setToastOpen(true);
+        await fetchAll();
+        return;
+      }
+
+      // add_on_expenses sections
+      const ids = expenseRowsForSection.map((x) => x.id);
+      if (ids.length === 0) {
+        setToastMsg("No logs to delete for this filter.");
+        setToastOpen(true);
+        return;
+      }
+
+      const { error } = await supabase.from("add_on_expenses").delete().in("id", ids);
+      if (error) throw error;
+
+      setToastMsg(`Deleted logs by ${filterMode.toUpperCase()} (no revert).`);
+      setToastOpen(true);
+      await fetchAll();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      setToastMsg("Failed to delete by filter.");
+      setToastOpen(true);
+    }
+  };
+
   const sectionTitle =
     section === "damage_expired"
       ? "Damage/Expired"
@@ -716,9 +788,21 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
           : "Bilin (Utang)";
 
   const sectionCount =
-    section === "cash_outs" ? filteredCashOuts.length : section === "bilin" ? bilinWeekRows.length : expenseRowsForSection.length;
+    section === "cash_outs" ? filteredCashOuts.length : expenseRowsForSection.length;
 
-  const bilinWeekLabel = `${yyyyMmDdLocal(bilinWeek.start)} to ${yyyyMmDdLocal(new Date(bilinWeek.endExclusive.getTime() - 1))}`;
+  const deleteFilterMessage = useMemo(() => {
+    const label = `${filterMode.toUpperCase()} Range: ${activeRange.label}`;
+    if (section === "cash_outs") return `This will DELETE all CASH OUT logs for ${label}. Continue?`;
+
+    const sec =
+      section === "damage_expired"
+        ? "DAMAGE/EXPIRED"
+        : section === "inventory_loss"
+          ? "INVENTORY LOSS"
+          : "BILIN (UTANG)";
+
+    return `This will DELETE all ${sec} logs for ${label}. This deletes LOGS ONLY (no stock/count revert). Continue?`;
+  }, [filterMode, activeRange.label, section]);
 
   return (
     <IonPage>
@@ -732,21 +816,12 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Staff Logs</h2>
               <div className="customer-subtext">
-                Showing: <strong>{sectionTitle}</strong> •{" "}
-                {section === "bilin" ? (
-                  <>
-                    Week (Mon-Sun): <strong>{bilinWeekLabel}</strong>
-                  </>
-                ) : (
-                  <>
-                    Date: <strong>{selectedDate}</strong>
-                  </>
-                )}{" "}
-                • Rows: <strong>{sectionCount}</strong>
+                Showing: <strong>{sectionTitle}</strong> • {filterMode.toUpperCase()} Range: <strong>{activeRange.label}</strong> • Rows:{" "}
+                <strong>{sectionCount}</strong>
               </div>
             </div>
 
-            {/* ✅ ORDER: Dropdown -> Export -> Date -> Refresh */}
+            {/* ✅ ORDER: Dropdown -> Export -> Date -> Refresh (+ Mode + DeleteByFilter) */}
             <div className="customer-topbar-right">
               <label className="date-pill" style={{ marginLeft: 10 }}>
                 <span className="date-pill-label">Show</span>
@@ -761,13 +836,36 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
                 </span>
               </label>
 
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Mode</span>
+                <select className="date-pill-input" value={filterMode} onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}>
+                  <option value="day">Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
+
               <IonButton className="receipt-btn" onClick={() => void exportExcel()} fill="outline">
                 <IonIcon slot="start" icon={downloadOutline} />
                 Export Excel
               </IonButton>
 
+              <IonButton
+                className="receipt-btn"
+                color="danger"
+                fill="outline"
+                onClick={() => setShowDeleteFilterAlert(true)}
+                style={{ marginLeft: 10 }}
+              >
+                <IonIcon slot="start" icon={trashOutline} />
+                Delete By {filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}
+              </IonButton>
+
               <label className="date-pill" style={{ marginLeft: 10 }}>
-                <span className="date-pill-label">{section === "bilin" ? "Week of" : "Date"}</span>
+                <span className="date-pill-label">Anchor Date</span>
                 <input
                   className="date-pill-input"
                   type="date"
@@ -793,9 +891,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
             </div>
           ) : section === "cash_outs" ? (
             filteredCashOuts.length === 0 ? (
-              <p className="customer-note">No CASH OUTS found for this date</p>
+              <p className="customer-note">No CASH OUTS found for this filter</p>
             ) : (
-              <div className="customer-table-wrap" key={`co-${selectedDate}`}>
+              <div className="customer-table-wrap" key={`co-${filterMode}-${activeRange.fileLabel}`}>
                 <table className="customer-table admin-cashouts-table">
                   <thead>
                     <tr>
@@ -846,15 +944,16 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
               </div>
             )
           ) : section === "bilin" ? (
-            bilinWeekRows.length === 0 ? (
-              <p className="customer-note">No BILIN (UTANG) records found for this week</p>
+            expenseRowsForSection.length === 0 ? (
+              <p className="customer-note">No BILIN (UTANG) records found for this filter</p>
             ) : (
               <>
                 <div className="customer-note" style={{ marginTop: 6 }}>
-                  People: <strong>{bilinSummary.length}</strong> • Grand total this week: <strong>{peso(bilinGrandTotal)}</strong>
+                  People: <strong>{bilinSummary.length}</strong> • Grand total: <strong>{peso(bilinGrandTotal)}</strong> • Rows:{" "}
+                  <strong>{expenseRowsForSection.length}</strong>
                 </div>
 
-                <div className="customer-table-wrap" style={{ marginTop: 10 }} key={`bilin-sum-${selectedDate}`}>
+                <div className="customer-table-wrap" style={{ marginTop: 10 }} key={`bilin-sum-${filterMode}-${activeRange.fileLabel}`}>
                   <table className="customer-table admin-exp-table">
                     <thead>
                       <tr>
@@ -885,7 +984,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
                   </table>
                 </div>
 
-                <div className="customer-table-wrap" style={{ marginTop: 14 }} key={`bilin-${selectedDate}`}>
+                <div className="customer-table-wrap" style={{ marginTop: 14 }} key={`bilin-${filterMode}-${activeRange.fileLabel}`}>
                   <table className="customer-table admin-exp-table">
                     <thead>
                       <tr>
@@ -900,7 +999,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
                     </thead>
 
                     <tbody>
-                      {bilinWeekRows.map((r) => (
+                      {expenseRowsForSection.map((r) => (
                         <tr key={r.id} className={r.voided ? "is-voided" : ""}>
                           <td>
                             <div className="cell-stack">
@@ -965,10 +1064,10 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
             )
           ) : expenseRowsForSection.length === 0 ? (
             <p className="customer-note">
-              No {section === "inventory_loss" ? "INVENTORY LOSS" : "DAMAGE/EXPIRED"} records found for this date
+              No {section === "inventory_loss" ? "INVENTORY LOSS" : "DAMAGE/EXPIRED"} records found for this filter
             </p>
           ) : (
-            <div className="customer-table-wrap" key={`exp-${selectedDate}-${section}`}>
+            <div className="customer-table-wrap" key={`exp-${filterMode}-${activeRange.fileLabel}-${section}`}>
               <table className="customer-table admin-exp-table">
                 <thead>
                   <tr>
@@ -1047,7 +1146,7 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
               </table>
 
               <div className="customer-note" style={{ marginTop: 10 }}>
-                Total qty: <strong>{totalDamageExpiredQty}</strong> • Voided: <strong>{totalDamageExpiredVoided}</strong>
+                Total qty: <strong>{totalQtyForSection}</strong> • Voided: <strong>{totalVoidedForSection}</strong>
               </div>
             </div>
           )}
@@ -1057,7 +1156,9 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
             isOpen={!!confirmVoid}
             onDidDismiss={() => setConfirmVoid(null)}
             header="Void this record?"
-            message={confirmVoid ? `This will restore counts by reverting ${typeLabel(confirmVoid.expense_type)} (qty: ${confirmVoid.quantity}).` : ""}
+            message={
+              confirmVoid ? `This will restore counts by reverting ${typeLabel(confirmVoid.expense_type)} (qty: ${confirmVoid.quantity}).` : ""
+            }
             buttons={[
               { text: "Cancel", role: "cancel" },
               {
@@ -1105,6 +1206,25 @@ const Admin_Staff_Expenses_Expired: React.FC = () => {
                   const r = confirmDeleteCashOut;
                   setConfirmDeleteCashOut(null);
                   if (r) void doDeleteCashOut(r);
+                },
+              },
+            ]}
+          />
+
+          {/* ✅ DELETE BY FILTER (DAY/WEEK/MONTH) */}
+          <IonAlert
+            isOpen={showDeleteFilterAlert}
+            onDidDismiss={() => setShowDeleteFilterAlert(false)}
+            header={`Delete by ${filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}?`}
+            message={deleteFilterMessage}
+            buttons={[
+              { text: "Cancel", role: "cancel" },
+              {
+                text: "Delete",
+                role: "destructive",
+                handler: () => {
+                  setShowDeleteFilterAlert(false);
+                  void deleteByFilter();
                 },
               },
             ]}
