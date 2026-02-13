@@ -11,7 +11,8 @@
 // ✅ Cancel requires DESCRIPTION and moves record to customer_sessions_cancelled (RPC cancel_customer_session)
 // ✅ Admin-only: Export to Excel (.xlsx) with nice layout + embedded logo
 // ✅ NEW: Refresh button (same classname style: receipt-btn) beside Export
-// ✅ NEW: DELETE BY DATE (deletes ALL non-reservation records with date = selectedDate)
+// ✅ UPDATED (YOUR REQUEST): Export to Excel by DAY / WEEK / MONTH (anchor date)
+// ✅ UPDATED (YOUR REQUEST): DELETE by DAY / WEEK / MONTH (permanent delete) (NON-RESERVATION only)
 // ✅ strict TS (NO "any")
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -45,6 +46,7 @@ type CustomerViewRow = {
 };
 
 type DiscountKind = "none" | "percent" | "amount";
+type FilterMode = "day" | "week" | "month";
 
 interface CustomerSession {
   id: string;
@@ -83,13 +85,65 @@ interface CustomerSession {
   paid_at?: string | null;
 }
 
+/* =========================
+   Date / Range helpers
+========================= */
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const m = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
   return `${y}-${m}-${day}`;
 };
 
+const yyyyMmLocal = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+
+const startOfLocalDay = (d: Date): Date => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+
+const addDays = (d: Date, days: number): Date => new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
+
+const getWeekRangeMonSunKeys = (anchorYmd: string): { startKey: string; endKey: string } => {
+  const base = new Date(`${anchorYmd}T00:00:00`);
+  const day = base.getDay(); // 0 Sun ... 6 Sat
+  const diffToMon = day === 0 ? -6 : 1 - day;
+  const start = startOfLocalDay(addDays(base, diffToMon));
+  const endInc = addDays(start, 6);
+  return { startKey: yyyyMmDdLocal(start), endKey: yyyyMmDdLocal(endInc) };
+};
+
+const getMonthRangeKeys = (anchorYmd: string): { startKey: string; endKey: string; monthLabel: string } => {
+  const base = new Date(`${anchorYmd}T00:00:00`);
+  const y = base.getFullYear();
+  const m = base.getMonth();
+  const start = new Date(y, m, 1, 0, 0, 0, 0);
+  const endExclusive = new Date(y, m + 1, 1, 0, 0, 0, 0);
+  const endInc = new Date(endExclusive.getTime() - 24 * 60 * 60 * 1000);
+  return { startKey: yyyyMmDdLocal(start), endKey: yyyyMmDdLocal(endInc), monthLabel: yyyyMmLocal(base) };
+};
+
+const rangeFromMode = (
+  mode: FilterMode,
+  anchorYmd: string
+): { startKey: string; endKey: string; label: string; fileLabel: string } => {
+  if (mode === "day") {
+    return { startKey: anchorYmd, endKey: anchorYmd, label: anchorYmd, fileLabel: anchorYmd };
+  }
+  if (mode === "week") {
+    const w = getWeekRangeMonSunKeys(anchorYmd);
+    return { startKey: w.startKey, endKey: w.endKey, label: `${w.startKey} to ${w.endKey} (Mon-Sun)`, fileLabel: `${w.startKey}_to_${w.endKey}` };
+  }
+  const m = getMonthRangeKeys(anchorYmd);
+  return { startKey: m.startKey, endKey: m.endKey, label: `${m.monthLabel} (${m.startKey} to ${m.endKey})`, fileLabel: m.monthLabel };
+};
+
+/* =========================
+   Misc helpers
+========================= */
 const formatTimeText = (iso: string): string => {
   const dt = new Date(iso);
   if (!Number.isFinite(dt.getTime())) return "";
@@ -201,8 +255,11 @@ const Admin_customer_list: React.FC = () => {
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
 
-  // Date filter
-  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+  // ✅ NEW: Range filter
+  const [filterMode, setFilterMode] = useState<FilterMode>("day");
+  const [anchorDate, setAnchorDate] = useState<string>(yyyyMmDdLocal(new Date()));
+
+  const activeRange = useMemo(() => rangeFromMode(filterMode, anchorDate), [filterMode, anchorDate]);
 
   // ✅ Search (Full Name only)
   const [searchName, setSearchName] = useState<string>("");
@@ -234,9 +291,9 @@ const Admin_customer_list: React.FC = () => {
   // Refresh busy
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
-  // ✅ DELETE BY DATE
-  const [deleteDateOpen, setDeleteDateOpen] = useState<boolean>(false);
-  const [deletingByDate, setDeletingByDate] = useState<boolean>(false);
+  // ✅ DELETE BY FILTER (Day/Week/Month)
+  const [deleteRangeOpen, setDeleteRangeOpen] = useState<boolean>(false);
+  const [deletingByRange, setDeletingByRange] = useState<boolean>(false);
 
   useEffect(() => {
     void initLoad();
@@ -252,29 +309,34 @@ const Admin_customer_list: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    // fetch whenever range changes
+    void fetchCustomerSessionsByRange(activeRange.startKey, activeRange.endKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRange.startKey, activeRange.endKey]);
+
   const initLoad = async (): Promise<void> => {
-    await Promise.all([fetchCustomerSessions(), readActiveCustomerView()]);
+    await Promise.all([fetchCustomerSessionsByRange(activeRange.startKey, activeRange.endKey), readActiveCustomerView()]);
   };
 
   const filteredSessions = useMemo(() => {
     const q = searchName.trim().toLowerCase();
     return sessions.filter((s) => {
-      const sameDate = (s.date ?? "") === selectedDate;
-      if (!sameDate) return false;
-
       if (!q) return true;
       const name = String(s.full_name ?? "").toLowerCase();
       return name.includes(q);
     });
-  }, [sessions, selectedDate, searchName]);
+  }, [sessions, searchName]);
 
-  const fetchCustomerSessions = async (): Promise<void> => {
+  const fetchCustomerSessionsByRange = async (startKey: string, endKey: string): Promise<void> => {
     setLoading(true);
 
     const { data, error } = await supabase
       .from("customer_sessions")
       .select("*")
       .eq("reservation", "no")
+      .gte("date", startKey)
+      .lte("date", endKey)
       .order("date", { ascending: false });
 
     if (error) {
@@ -293,7 +355,7 @@ const Admin_customer_list: React.FC = () => {
   const refreshAll = async (): Promise<void> => {
     try {
       setRefreshing(true);
-      await Promise.all([fetchCustomerSessions(), readActiveCustomerView()]);
+      await Promise.all([fetchCustomerSessionsByRange(activeRange.startKey, activeRange.endKey), readActiveCustomerView()]);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -724,29 +786,24 @@ const Admin_customer_list: React.FC = () => {
   };
 
   /* =========================
-     ✅ DELETE BY DATE (NON-RESERVATION ONLY)
+     ✅ DELETE BY RANGE (NON-RESERVATION ONLY)
   ========================= */
-  const openDeleteByDateModal = (): void => {
+  const openDeleteByRangeModal = (): void => {
     if (loading || refreshing || exporting) return;
-    if (!selectedDate) return;
     if (filteredSessions.length === 0) {
-      alert("No records to delete for this date.");
+      alert("No records to delete in this range.");
       return;
     }
-    setDeleteDateOpen(true);
+    setDeleteRangeOpen(true);
   };
 
-  const deleteByDate = async (): Promise<void> => {
-    if (!selectedDate) return;
-
+  const deleteByRange = async (): Promise<void> => {
     try {
-      setDeletingByDate(true);
+      setDeletingByRange(true);
 
       // ✅ close customer view if it points to a session that will be deleted
       if (activeView?.enabled && activeView.session_id) {
-        const willDelete = sessions.some(
-          (s) => s.date === selectedDate && s.reservation === "no" && String(s.id) === String(activeView.session_id)
-        );
+        const willDelete = sessions.some((s) => String(s.id) === String(activeView.session_id));
         if (willDelete) {
           try {
             await setCustomerViewState(false, null);
@@ -756,12 +813,13 @@ const Admin_customer_list: React.FC = () => {
         }
       }
 
-      // ✅ delete ALL non-reservation rows for that date
+      // ✅ delete ALL non-reservation rows for that range
       const { error } = await supabase
         .from("customer_sessions")
         .delete()
         .eq("reservation", "no")
-        .eq("date", selectedDate);
+        .gte("date", activeRange.startKey)
+        .lte("date", activeRange.endKey);
 
       if (error) {
         alert(`Delete failed: ${error.message}`);
@@ -769,23 +827,21 @@ const Admin_customer_list: React.FC = () => {
       }
 
       // ✅ update UI immediately
-      setSessions((prev) => prev.filter((x) => !(x.reservation === "no" && x.date === selectedDate)));
+      setSessions([]);
 
       // ✅ if receipt open and deleted
-      if (selectedSession && selectedSession.date === selectedDate && selectedSession.reservation === "no") {
-        setSelectedSession(null);
-      }
+      setSelectedSession(null);
 
       await readActiveCustomerView();
 
-      setDeleteDateOpen(false);
-      alert(`Deleted all non-reservation records for ${selectedDate}.`);
+      setDeleteRangeOpen(false);
+      alert(`Deleted all non-reservation records for ${filterMode.toUpperCase()} range: ${activeRange.label}`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
-      alert("Delete by date failed.");
+      alert("Delete by range failed.");
     } finally {
-      setDeletingByDate(false);
+      setDeletingByRange(false);
     }
   };
 
@@ -830,11 +886,11 @@ const Admin_customer_list: React.FC = () => {
 
   /* =========================
      ✅ EXPORT TO EXCEL (Nice layout + logo)
+     ✅ NOW: exports current Day/Week/Month range
   ========================= */
   const exportToExcel = async (): Promise<void> => {
-    if (!selectedDate) return;
     if (filteredSessions.length === 0) {
-      alert("No records for selected date.");
+      alert("No records for selected range.");
       return;
     }
 
@@ -888,7 +944,7 @@ const Admin_customer_list: React.FC = () => {
       ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
 
       ws.mergeCells(`A2:${lastColLetter}2`);
-      ws.getCell("A2").value = `Date: ${selectedDate}    •    Records: ${filteredSessions.length}`;
+      ws.getCell("A2").value = `${filterMode.toUpperCase()} Range: ${activeRange.label}    •    Records: ${filteredSessions.length}`;
       ws.getCell("A2").font = { size: 11 };
       ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
 
@@ -1018,7 +1074,7 @@ const Admin_customer_list: React.FC = () => {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
-      saveAs(blob, `admin-nonreservation-${selectedDate}.xlsx`);
+      saveAs(blob, `admin-nonreservation_${filterMode}_${activeRange.fileLabel}.xlsx`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -1027,6 +1083,13 @@ const Admin_customer_list: React.FC = () => {
       setExporting(false);
     }
   };
+
+  const rangeHint =
+    filterMode === "day"
+      ? `Showing records for: ${anchorDate}`
+      : filterMode === "week"
+      ? `Showing WEEK range: ${activeRange.label}`
+      : `Showing MONTH range: ${activeRange.label}`;
 
   return (
     <IonPage>
@@ -1037,7 +1100,7 @@ const Admin_customer_list: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Customer Lists - Non Reservation</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong>
+                <strong>{rangeHint}</strong> • Records: <strong>{filteredSessions.length}</strong>
               </div>
 
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
@@ -1068,21 +1131,34 @@ const Admin_customer_list: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE */}
+              {/* ✅ NEW: Mode */}
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Mode</span>
+                <select className="date-pill-input" value={filterMode} onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}>
+                  <option value="day">Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
+
+              {/* ✅ Anchor Date */}
               <label className="date-pill">
-                <span className="date-pill-label">Date</span>
+                <span className="date-pill-label">{filterMode === "day" ? "Date" : "Anchor"}</span>
                 <input
                   className="date-pill-input"
                   type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                  value={anchorDate}
+                  onChange={(e) => setAnchorDate(String(e.currentTarget.value ?? ""))}
                 />
                 <span className="date-pill-icon" aria-hidden="true">
                   📅
                 </span>
               </label>
 
-              {/* ✅ REFRESH (same classname) */}
+              {/* ✅ REFRESH */}
               <button
                 className="receipt-btn"
                 onClick={() => void refreshAll()}
@@ -1093,23 +1169,23 @@ const Admin_customer_list: React.FC = () => {
                 {refreshing ? "Refreshing..." : "Refresh"}
               </button>
 
-              {/* ✅ DELETE BY DATE */}
+              {/* ✅ DELETE BY RANGE */}
               <button
                 className="receipt-btn admin-danger"
-                onClick={() => openDeleteByDateModal()}
-                disabled={loading || refreshing || exporting || deletingByDate || filteredSessions.length === 0}
-                title={filteredSessions.length === 0 ? "No data to delete" : "Delete ALL records for selected date"}
+                onClick={() => openDeleteByRangeModal()}
+                disabled={loading || refreshing || exporting || deletingByRange || filteredSessions.length === 0}
+                title={filteredSessions.length === 0 ? "No data to delete" : `Delete ALL records for this ${filterMode.toUpperCase()} range`}
                 style={{ marginLeft: 8 }}
               >
-                {deletingByDate ? "Deleting..." : "Delete by Date"}
+                {deletingByRange ? "Deleting..." : `Delete (${filterMode})`}
               </button>
 
-              {/* ✅ EXPORT (same classname) */}
+              {/* ✅ EXPORT */}
               <button
                 className="receipt-btn"
                 onClick={() => void exportToExcel()}
                 disabled={exporting || loading || filteredSessions.length === 0}
-                title={filteredSessions.length === 0 ? "No data to export" : "Export .xlsx with nice layout"}
+                title={filteredSessions.length === 0 ? "No data to export" : `Export .xlsx for this ${filterMode.toUpperCase()} range`}
                 style={{ marginLeft: 8 }}
               >
                 {exporting ? "Exporting..." : "Export to Excel"}
@@ -1121,9 +1197,9 @@ const Admin_customer_list: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
-            <p className="customer-note">No data found for this date</p>
+            <p className="customer-note">No data found for this range</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}>
+            <div className="customer-table-wrap" key={`${filterMode}-${activeRange.fileLabel}`}>
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -1206,9 +1282,7 @@ const Admin_customer_list: React.FC = () => {
                               GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
                             </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              {remainingPay >= 0
-                                ? `Remaining ₱${remainingPay.toFixed(2)}`
-                                : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
+                              {remainingPay >= 0 ? `Remaining ₱${remainingPay.toFixed(2)}` : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
                             </span>
 
                             <button
@@ -1238,11 +1312,7 @@ const Admin_customer_list: React.FC = () => {
                         <td>
                           <div className="action-stack">
                             {open && (
-                              <button
-                                className="receipt-btn"
-                                disabled={stoppingId === session.id}
-                                onClick={() => void stopOpenTime(session)}
-                              >
+                              <button className="receipt-btn" disabled={stoppingId === session.id} onClick={() => void stopOpenTime(session)}>
                                 {stoppingId === session.id ? "Stopping..." : "Stop Time"}
                               </button>
                             )}
@@ -1251,19 +1321,11 @@ const Admin_customer_list: React.FC = () => {
                               View Receipt
                             </button>
 
-                            <button
-                              className="receipt-btn admin-danger"
-                              onClick={() => openCancelModal(session)}
-                              title="Cancel requires description"
-                            >
+                            <button className="receipt-btn admin-danger" onClick={() => openCancelModal(session)} title="Cancel requires description">
                               Cancel
                             </button>
 
-                            {viewOn ? (
-                              <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span>
-                            ) : (
-                              <span style={{ fontSize: 11, opacity: 0.45 }}>—</span>
-                            )}
+                            {viewOn ? <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span> : <span style={{ fontSize: 11, opacity: 0.45 }}>—</span>}
                           </div>
                         </td>
                       </tr>
@@ -1274,13 +1336,15 @@ const Admin_customer_list: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ DELETE BY DATE CONFIRM MODAL */}
-          {deleteDateOpen && (
-            <div className="receipt-overlay" onClick={() => (deletingByDate ? null : setDeleteDateOpen(false))}>
+          {/* ✅ DELETE BY RANGE CONFIRM MODAL */}
+          {deleteRangeOpen && (
+            <div className="receipt-overlay" onClick={() => (deletingByRange ? null : setDeleteRangeOpen(false))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <h3 className="receipt-title">DELETE BY DATE</h3>
+                <h3 className="receipt-title">DELETE ({filterMode.toUpperCase()})</h3>
                 <p className="receipt-subtitle">
-                  This will delete <strong>ALL</strong> non-reservation records on <strong>{selectedDate}</strong>.
+                  This will delete <strong>ALL</strong> non-reservation records in this range:
+                  <br />
+                  <strong>{activeRange.label}</strong>
                 </p>
 
                 <hr />
@@ -1296,17 +1360,12 @@ const Admin_customer_list: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDeleteDateOpen(false)} disabled={deletingByDate}>
+                  <button className="receipt-btn" onClick={() => setDeleteRangeOpen(false)} disabled={deletingByRange}>
                     Cancel
                   </button>
 
-                  <button
-                    className="receipt-btn admin-danger"
-                    onClick={() => void deleteByDate()}
-                    disabled={deletingByDate}
-                    title="Delete all records for this date"
-                  >
-                    {deletingByDate ? "Deleting..." : "Delete Now"}
+                  <button className="receipt-btn admin-danger" onClick={() => void deleteByRange()} disabled={deletingByRange} title="Delete all records for this range">
+                    {deletingByRange ? "Deleting..." : "Delete Now"}
                   </button>
                 </div>
               </div>
@@ -1378,14 +1437,7 @@ const Admin_customer_list: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Down Payment (₱)</span>
-                  <input
-                    className="money-input"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={dpInput}
-                    onChange={(e) => setDpInput(e.currentTarget.value)}
-                  />
+                  <input className="money-input" type="number" min="0" step="0.01" value={dpInput} onChange={(e) => setDpInput(e.currentTarget.value)} />
                 </div>
 
                 <div className="modal-actions">
@@ -1421,9 +1473,7 @@ const Admin_customer_list: React.FC = () => {
                 <div className="receipt-row">
                   <span>Value</span>
                   <div className="inline-input">
-                    <span className="inline-input-prefix">
-                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
-                    </span>
+                    <span className="inline-input-prefix">{discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}</span>
                     <input
                       className="small-input"
                       type="number"
@@ -1541,26 +1591,12 @@ const Admin_customer_list: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={gcashInput}
-                          onChange={(e) => setGcashInput(e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={gcashInput} onChange={(e) => setGcashInput(e.currentTarget.value)} />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={cashInput}
-                          onChange={(e) => setCashInput(e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={cashInput} onChange={(e) => setCashInput(e.currentTarget.value)} />
                       </div>
 
                       <hr />
@@ -1660,11 +1696,7 @@ const Admin_customer_list: React.FC = () => {
 
                 {isOpenTimeSession(selectedSession) && (
                   <div className="block-top">
-                    <button
-                      className="receipt-btn btn-full"
-                      disabled={stoppingId === selectedSession.id}
-                      onClick={() => void stopOpenTime(selectedSession)}
-                    >
+                    <button className="receipt-btn btn-full" disabled={stoppingId === selectedSession.id} onClick={() => void stopOpenTime(selectedSession)}>
                       {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
@@ -1687,7 +1719,9 @@ const Admin_customer_list: React.FC = () => {
                   const dpChange = round2(Math.max(0, dp - dueForPayment));
 
                   const dpDisp =
-                    dpBalance > 0 ? ({ label: "Total Balance", value: dpBalance } as const) : ({ label: "Total Change", value: dpChange } as const);
+                    dpBalance > 0
+                      ? ({ label: "Total Balance", value: dpBalance } as const)
+                      : ({ label: "Total Change", value: dpChange } as const);
 
                   const bottomLabel = dpBalance > 0 ? "PAYMENT DUE" : "TOTAL CHANGE";
                   const bottomValue = dpBalance > 0 ? dpBalance : dpChange;
@@ -1764,12 +1798,7 @@ const Admin_customer_list: React.FC = () => {
                     {isCustomerViewOnForSession(activeView, selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
                   </button>
 
-                  <button
-                    className="receipt-btn admin-danger"
-                    onClick={() => openCancelModal(selectedSession)}
-                    disabled={viewBusy}
-                    title="Cancel requires description"
-                  >
+                  <button className="receipt-btn admin-danger" onClick={() => openCancelModal(selectedSession)} disabled={viewBusy} title="Cancel requires description">
                     Cancel
                   </button>
 
