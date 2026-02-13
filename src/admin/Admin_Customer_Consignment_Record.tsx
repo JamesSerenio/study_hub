@@ -5,10 +5,10 @@
 // ✅ Payment modal (Cash + GCash, FREE INPUTS, NO LIMIT) -> RPC set_consignment_payment
 // ✅ Manual PAID toggle -> RPC set_consignment_paid_status
 // ✅ VOID (required reason) -> returns stock by RPC void_customer_consignment
-// ✅ NEW: DELETE (hard delete) -> removes row from database (customer_session_consignment)
+// ✅ NEW: CANCEL (required reason) -> archives to consignment_cancelled + deletes row from customer_session_consignment
 // ✅ STRICT TS: NO any
 // ✅ Same "customer-*" + "receipt-btn" vibe
-// ✅ Date filter: DEFAULT TODAY (PH) + query filtered by PH day range (like your screenshot)
+// ✅ Date filter: DEFAULT TODAY (PH) + query filtered by PH day range
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
@@ -60,7 +60,7 @@ type ReceiptItem = {
 };
 
 type ReceiptGroup = {
-  id: string; // row id
+  id: string;
   created_at: string | null;
   full_name: string;
   seat_number: string;
@@ -175,9 +175,10 @@ const Customer_Consignment_Record: React.FC = () => {
   const [voidReason, setVoidReason] = useState<string>("");
   const [voiding, setVoiding] = useState<boolean>(false);
 
-  // DELETE modal
-  const [deleteTarget, setDeleteTarget] = useState<CustomerConsignmentRow | null>(null);
-  const [deleting, setDeleting] = useState<boolean>(false);
+  // CANCEL modal
+  const [cancelTarget, setCancelTarget] = useState<CustomerConsignmentRow | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>("");
+  const [cancelling, setCancelling] = useState<boolean>(false);
 
   // ✅ fetch whenever date changes
   useEffect(() => {
@@ -234,7 +235,7 @@ const Customer_Consignment_Record: React.FC = () => {
     setLoading(false);
   };
 
-  // ✅ now only SEARCH locally (date is already filtered server-side)
+  // ✅ search locally
   const filtered = useMemo(() => {
     const q = norm(searchText);
     if (!q) return rows;
@@ -312,9 +313,7 @@ const Customer_Consignment_Record: React.FC = () => {
 
   /* ---------------- actions ---------------- */
 
-  const openReceipt = (r: CustomerConsignmentRow): void => {
-    setSelectedOrder(makeReceiptGroup(r));
-  };
+  const openReceipt = (r: CustomerConsignmentRow): void => setSelectedOrder(makeReceiptGroup(r));
 
   const openPaymentModal = (r: CustomerConsignmentRow): void => {
     const g = makeReceiptGroup(r);
@@ -435,33 +434,36 @@ const Customer_Consignment_Record: React.FC = () => {
     }
   };
 
-  const openDelete = (r: CustomerConsignmentRow): void => {
-    setDeleteTarget(r);
+  // ✅ CANCEL
+  const openCancel = (r: CustomerConsignmentRow): void => {
+    setCancelTarget(r);
+    setCancelReason("");
   };
 
-  const confirmDelete = async (): Promise<void> => {
-    if (!deleteTarget) return;
+  const submitCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
 
-    // ⚠️ Recommend: delete only if VOIDED (para hindi magulo sold/stock)
-    // If gusto mo allow kahit hindi voided, remove this check.
-    if (!toBool(deleteTarget.voided)) {
-      const ok = window.confirm(
-        "This record is NOT voided.\nDeleting it will NOT return stock automatically.\n\nRecommended: VOID first then DELETE.\n\nContinue delete anyway?"
-      );
-      if (!ok) return;
+    const reason = cancelReason.trim();
+    if (!reason) {
+      alert("Cancel reason is required.");
+      return;
     }
 
     try {
-      setDeleting(true);
+      setCancelling(true);
 
-      const { error } = await supabase.from("customer_session_consignment").delete().eq("id", deleteTarget.id);
+      const { error } = await supabase.rpc("cancel_customer_consignment", {
+        p_row_id: cancelTarget.id,
+        p_reason: reason,
+      });
 
       if (error) {
-        alert(`Delete failed: ${error.message}`);
+        alert(`Cancel failed: ${error.message}`);
         return;
       }
 
-      setDeleteTarget(null);
+      setCancelTarget(null);
+      setCancelReason("");
       setSelectedOrder(null);
       setPaymentTarget(null);
       setVoidTarget(null);
@@ -470,9 +472,9 @@ const Customer_Consignment_Record: React.FC = () => {
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
-      alert("Delete failed.");
+      alert("Cancel failed.");
     } finally {
-      setDeleting(false);
+      setCancelling(false);
     }
   };
 
@@ -676,11 +678,11 @@ const Customer_Consignment_Record: React.FC = () => {
 
                             <button
                               className="receipt-btn"
-                              onClick={() => openDelete(r)}
-                              title="Delete this record from database"
-                              disabled={deleting}
+                              onClick={() => openCancel(r)}
+                              title="Cancel (archive + delete from database)"
+                              disabled={cancelling}
                             >
-                              Delete
+                              Cancel
                             </button>
                           </div>
                         </td>
@@ -692,38 +694,52 @@ const Customer_Consignment_Record: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ DELETE CONFIRM MODAL */}
-          {deleteTarget && (
-            <div className="receipt-overlay" onClick={() => (deleting ? null : setDeleteTarget(null))}>
+          {/* ✅ CANCEL MODAL (required reason) */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancelling ? null : setCancelTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <h3 className="receipt-title">DELETE RECORD</h3>
+                <h3 className="receipt-title">CANCEL RECORD</h3>
                 <p className="receipt-subtitle">
-                  {show(deleteTarget.consignment?.item_name)} • Qty: <b>{deleteTarget.quantity}</b> • Seat:{" "}
-                  <b>{show(deleteTarget.seat_number)}</b>
+                  {show(cancelTarget.consignment?.item_name)} • Qty: <b>{cancelTarget.quantity}</b> • Seat:{" "}
+                  <b>{show(cancelTarget.seat_number)}</b>
                 </p>
 
                 <hr />
 
-                <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.4 }}>
-                  This will permanently remove the record from <b>customer_session_consignment</b>.
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>
+                    Reason <span style={{ color: "crimson" }}>*</span>
+                  </div>
+                  <textarea
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.currentTarget.value)}
+                    placeholder="Example: cancelled order / mistaken entry / customer changed mind..."
+                    style={{
+                      width: "100%",
+                      minHeight: 90,
+                      resize: "vertical",
+                      padding: 12,
+                      borderRadius: 12,
+                      border: "1px solid rgba(0,0,0,0.15)",
+                      outline: "none",
+                      fontSize: 14,
+                    }}
+                    disabled={cancelling}
+                  />
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85, lineHeight: 1.4 }}>
+                  • This will be saved to <b>consignment_cancelled</b> then removed from <b>customer_session_consignment</b>.
                   <br />
-                  {toBool(deleteTarget.voided) ? (
-                    <>
-                      Status: <b>VOIDED</b> (safe to delete)
-                    </>
-                  ) : (
-                    <>
-                      Status: <b>NOT VOIDED</b> — recommended: <b>Void first</b> so stock is returned.
-                    </>
-                  )}
+                  • If this record is <b>NOT VOIDED</b>, stock will be returned by reducing <b>consignment.sold</b>.
                 </div>
 
                 <div className="modal-actions" style={{ marginTop: 16 }}>
-                  <button className="receipt-btn" onClick={() => setDeleteTarget(null)} disabled={deleting}>
-                    Cancel
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancelling}>
+                    Close
                   </button>
-                  <button className="receipt-btn" onClick={() => void confirmDelete()} disabled={deleting}>
-                    {deleting ? "Deleting..." : "Confirm Delete"}
+                  <button className="receipt-btn" onClick={() => void submitCancel()} disabled={cancelling}>
+                    {cancelling ? "Cancelling..." : "Confirm Cancel"}
                   </button>
                 </div>
               </div>
