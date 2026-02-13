@@ -2,12 +2,14 @@
 // ✅ UI MATCHES Customer_Lists
 // ✅ FIX: PH/Manila date filtering (day range +08:00) so records show correctly
 // ✅ CANCEL: requires DESCRIPTION -> RPC cancel_add_on_order
-// ✅ Delete by Date: requires DESCRIPTION -> cancel_add_on_order
+// ✅ Delete by Filter (DAY/WEEK/MONTH): requires DESCRIPTION -> cancel_add_on_order
 // ✅ Payment modal: FREE INPUTS (NO LIMIT / NO FORCING to due)
 // ✅ FIXED: Payment SAVE now uses RPC set_addon_payment (AUTO PAID/UNPAID in DB)
 // ✅ FIXED: Manual PAID toggle now uses RPC set_addon_paid_status
 // ✅ Excel export (REAL XLSX + images) + shows SIZE
-// ✅ No "any"
+// ✅ NEW (YOUR REQUEST): Export Excel by DAY/WEEK/MONTH (anchor date)
+// ✅ NEW (YOUR REQUEST): Delete by DAY/WEEK/MONTH (cancel via RPC) (requires description)
+// ✅ No "any" + STRICT TS
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
@@ -18,6 +20,7 @@ import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
 type NumericLike = number | string;
+type FilterMode = "day" | "week" | "month";
 
 interface CustomerSessionAddOnRow {
   id: string;
@@ -92,6 +95,8 @@ type OrderGroup = {
 
 /* ---------------- helpers ---------------- */
 
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
 const toNumber = (v: NumericLike | null | undefined): number => {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "string") {
@@ -115,10 +120,12 @@ const toBool = (v: unknown): boolean => {
 
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const m = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
   return `${y}-${m}-${day}`;
 };
+
+const yyyyMmLocal = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 
 const ms = (iso: string): number => {
   const t = new Date(iso).getTime();
@@ -151,6 +158,77 @@ const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } 
   const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { startIso: start.toISOString(), endIso: end.toISOString() };
+};
+
+const startOfLocalDay = (d: Date): Date => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+
+const addDays = (d: Date, days: number): Date => new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
+
+const getWeekRangeMonSun = (anchorYmd: string): { start: Date; endExclusive: Date } => {
+  const base = new Date(`${anchorYmd}T00:00:00`);
+  const day = base.getDay(); // 0 Sun ... 6 Sat
+  const diffToMon = day === 0 ? -6 : 1 - day;
+  const start = startOfLocalDay(addDays(base, diffToMon));
+  const endExclusive = addDays(start, 7);
+  return { start, endExclusive };
+};
+
+const getMonthRange = (anchorYmd: string): { start: Date; endExclusive: Date } => {
+  const base = new Date(`${anchorYmd}T00:00:00`);
+  const y = base.getFullYear();
+  const m = base.getMonth();
+  const start = new Date(y, m, 1, 0, 0, 0, 0);
+  const endExclusive = new Date(y, m + 1, 1, 0, 0, 0, 0);
+  return { start, endExclusive };
+};
+
+// ✅ Build start/end ISO for Supabase from filter mode + anchor date (Manila +08)
+const manilaRangeFromMode = (mode: FilterMode, anchorYmd: string): { startIso: string; endIso: string; label: string; fileLabel: string } => {
+  if (mode === "day") {
+    const { startIso, endIso } = manilaDayRange(anchorYmd);
+    return { startIso, endIso, label: anchorYmd, fileLabel: anchorYmd };
+  }
+
+  if (mode === "week") {
+    const w = getWeekRangeMonSun(anchorYmd);
+    const endInc = new Date(w.endExclusive.getTime() - 1);
+
+    // Convert local start/end to Manila ISO boundaries
+    const startKey = yyyyMmDdLocal(w.start);
+    const endKey = yyyyMmDdLocal(endInc);
+
+    const start = new Date(`${startKey}T00:00:00+08:00`);
+    const end = new Date(`${endKey}T00:00:00+08:00`);
+    const endExclusive = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+
+    return {
+      startIso: start.toISOString(),
+      endIso: endExclusive.toISOString(),
+      label: `${startKey} to ${endKey} (Mon-Sun)`,
+      fileLabel: `${startKey}_to_${endKey}`,
+    };
+  }
+
+  // month
+  const m = getMonthRange(anchorYmd);
+  const startKey = yyyyMmDdLocal(m.start);
+  const endKey = yyyyMmDdLocal(new Date(m.endExclusive.getTime() - 1));
+  const monthLabel = yyyyMmLocal(new Date(`${anchorYmd}T00:00:00`));
+
+  const start = new Date(`${startKey}T00:00:00+08:00`);
+  const end = new Date(`${endKey}T00:00:00+08:00`);
+  const endExclusive = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+
+  return {
+    startIso: start.toISOString(),
+    endIso: endExclusive.toISOString(),
+    label: `${monthLabel} (${startKey} to ${endKey})`,
+    fileLabel: monthLabel,
+  };
 };
 
 const GROUP_WINDOW_MS = 10_000;
@@ -261,7 +339,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
   const [records, setRecords] = useState<CustomerAddOnMerged[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+  // ✅ NEW: filter mode (day/week/month)
+  const [filterMode, setFilterMode] = useState<FilterMode>("day");
+  const [anchorDate, setAnchorDate] = useState<string>(yyyyMmDdLocal(new Date())); // date input always uses anchor
   const [selectedOrder, setSelectedOrder] = useState<OrderGroup | null>(null);
 
   // ✅ Payment modal (FREE INPUTS, NO LIMIT)
@@ -277,25 +357,25 @@ const Admin_Customer_Add_ons: React.FC = () => {
   const [cancelDesc, setCancelDesc] = useState<string>("");
   const [cancellingKey, setCancellingKey] = useState<string | null>(null);
 
-  // ✅ DELETE BY DATE states (cancel all rows by date)
-  const [deleteDateOpen, setDeleteDateOpen] = useState<boolean>(false);
-  const [deleteDateDesc, setDeleteDateDesc] = useState<string>("");
-  const [deletingDate, setDeletingDate] = useState<string | null>(null);
+  // ✅ DELETE BY FILTER states (cancel all rows by filter)
+  const [deleteOpen, setDeleteOpen] = useState<boolean>(false);
+  const [deleteDesc, setDeleteDesc] = useState<string>("");
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+
+  const activeRange = useMemo(() => manilaRangeFromMode(filterMode, anchorDate), [filterMode, anchorDate]);
 
   useEffect(() => {
-    void fetchAddOns(selectedDate);
+    void fetchAddOnsByRange(activeRange.startIso, activeRange.endIso);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    void fetchAddOns(selectedDate);
+    void fetchAddOnsByRange(activeRange.startIso, activeRange.endIso);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate]);
+  }, [activeRange.startIso, activeRange.endIso]);
 
-  const fetchAddOns = async (dateStr: string): Promise<void> => {
+  const fetchAddOnsByRange = async (startIso: string, endIso: string): Promise<void> => {
     setLoading(true);
-
-    const { startIso, endIso } = manilaDayRange(dateStr);
 
     const { data: rows, error } = await supabase
       .from("customer_session_add_ons")
@@ -436,10 +516,11 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
   /* =========================================================
      ✅ Export to EXCEL (.xlsx) with IMAGES + SIZE
+     ✅ NOW: exports current filter range (day/week/month)
   ========================================================= */
-  const exportToExcelByDate = async (): Promise<void> => {
-    if (!selectedDate) return alert("Please select a date.");
-    if (records.length === 0) return alert("No records for selected date.");
+  const exportToExcelByFilter = async (): Promise<void> => {
+    if (!anchorDate) return alert("Please select a date.");
+    if (records.length === 0) return alert("No records for this filter range.");
 
     try {
       const now = new Date();
@@ -469,7 +550,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       ws.mergeCells(4, 1, 4, 11);
 
       ws.getCell("A1").value = "ADMIN ADD-ONS REPORT";
-      ws.getCell("A2").value = `Date: ${selectedDate}`;
+      ws.getCell("A2").value = `${filterMode.toUpperCase()} Range: ${activeRange.label}`;
       ws.getCell("A3").value = `Generated: ${now.toLocaleString()}`;
       ws.getCell("A4").value = `Rows: ${records.length}`;
 
@@ -573,7 +654,8 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      saveAs(blob, `admin_addons_${selectedDate}.xlsx`);
+
+      saveAs(blob, `admin_addons_${filterMode}_${activeRange.fileLabel}.xlsx`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -621,7 +703,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
 
       setCancelTarget(null);
       setSelectedOrder(null);
-      await fetchAddOns(selectedDate);
+      await fetchAddOnsByRange(activeRange.startIso, activeRange.endIso);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -632,32 +714,33 @@ const Admin_Customer_Add_ons: React.FC = () => {
   };
 
   /* =========================================================
-     ✅ DELETE BY DATE (Cancel ALL rows for selected date)
+     ✅ DELETE BY FILTER (DAY/WEEK/MONTH)
      - uses cancel_add_on_order so SOLD is reversed
+     - requires description
   ========================================================= */
 
-  const openDeleteByDate = (): void => {
-    if (!selectedDate) return;
+  const openDeleteByFilter = (): void => {
     if (records.length === 0) {
-      alert("No records to delete on this date.");
+      alert("No records to delete in this filter range.");
       return;
     }
-    setDeleteDateDesc("");
-    setDeleteDateOpen(true);
+    setDeleteDesc("");
+    setDeleteOpen(true);
   };
 
-  const submitDeleteByDate = async (): Promise<void> => {
-    const desc = deleteDateDesc.trim();
+  const submitDeleteByFilter = async (): Promise<void> => {
+    const desc = deleteDesc.trim();
     if (!desc) {
       alert("Description is required.");
       return;
     }
 
-    if (!selectedDate) return;
     if (records.length === 0) return;
 
     const ok = window.confirm(
-      `Cancel/Delete ALL add-ons on ${selectedDate}?\n\nRows: ${records.length}\n\nThis will move rows to the cancel table and reverse SOLD.`
+      `Cancel/Delete ALL add-ons in this ${filterMode.toUpperCase()} range?\n\n${activeRange.label}\n\nRows: ${
+        records.length
+      }\n\nThis will move rows to the cancel table and reverse SOLD.`
     );
     if (!ok) return;
 
@@ -665,7 +748,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
     if (ids.length === 0) return;
 
     try {
-      setDeletingDate(selectedDate);
+      setDeletingKey(`${filterMode}:${activeRange.fileLabel}`);
 
       const { error } = await supabase.rpc("cancel_add_on_order", {
         p_item_ids: ids,
@@ -673,19 +756,19 @@ const Admin_Customer_Add_ons: React.FC = () => {
       });
 
       if (error) {
-        alert(`Delete by date error: ${error.message}`);
+        alert(`Delete error: ${error.message}`);
         return;
       }
 
-      setDeleteDateOpen(false);
+      setDeleteOpen(false);
       setSelectedOrder(null);
-      await fetchAddOns(selectedDate);
+      await fetchAddOnsByRange(activeRange.startIso, activeRange.endIso);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
-      alert("Delete by date failed.");
+      alert("Delete by filter failed.");
     } finally {
-      setDeletingDate(null);
+      setDeletingKey(null);
     }
   };
 
@@ -724,7 +807,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
       }
 
       setPaymentTarget(null);
-      await fetchAddOns(selectedDate);
+      await fetchAddOnsByRange(activeRange.startIso, activeRange.endIso);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -758,7 +841,7 @@ const Admin_Customer_Add_ons: React.FC = () => {
         return;
       }
 
-      await fetchAddOns(selectedDate);
+      await fetchAddOnsByRange(activeRange.startIso, activeRange.endIso);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -768,6 +851,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
     }
   };
 
+  const rangeLabelShort =
+    filterMode === "day" ? anchorDate : filterMode === "week" ? `Week of ${anchorDate}` : `Month of ${anchorDate}`;
+
   return (
     <IonPage>
       <IonContent className="staff-content">
@@ -776,18 +862,33 @@ const Admin_Customer_Add_ons: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Add-Ons Records (Admin)</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong> ({groupedOrders.length})
+                Mode: <strong>{filterMode.toUpperCase()}</strong> • Range: <strong>{activeRange.label}</strong> • Orders:{" "}
+                <strong>{groupedOrders.length}</strong> • Rows: <strong>{records.length}</strong>
               </div>
             </div>
 
             <div className="customer-topbar-right">
+              {/* ✅ NEW: Mode */}
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Mode</span>
+                <select className="date-pill-input" value={filterMode} onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}>
+                  <option value="day">Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
+
+              {/* ✅ Anchor date */}
               <label className="date-pill">
-                <span className="date-pill-label">Date</span>
+                <span className="date-pill-label">{filterMode === "day" ? "Date" : "Anchor"}</span>
                 <input
                   className="date-pill-input"
                   type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                  value={anchorDate}
+                  onChange={(e) => setAnchorDate(String(e.currentTarget.value ?? ""))}
                 />
                 <span className="date-pill-icon" aria-hidden="true">
                   📅
@@ -795,20 +896,26 @@ const Admin_Customer_Add_ons: React.FC = () => {
               </label>
 
               <div className="admin-tools-row">
-                <button className="receipt-btn" onClick={() => void fetchAddOns(selectedDate)} disabled={loading}>
+                <button
+                  className="receipt-btn"
+                  onClick={() => void fetchAddOnsByRange(activeRange.startIso, activeRange.endIso)}
+                  disabled={loading}
+                  title="Reload this filter range"
+                >
                   Refresh
                 </button>
 
-                <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={records.length === 0}>
+                <button className="receipt-btn" onClick={() => void exportToExcelByFilter()} disabled={records.length === 0} title="Export this range">
                   Export to Excel
                 </button>
 
                 <button
                   className="receipt-btn admin-danger"
-                  onClick={openDeleteByDate}
-                  disabled={records.length === 0 || deletingDate === selectedDate || loading}
+                  onClick={openDeleteByFilter}
+                  disabled={records.length === 0 || Boolean(deletingKey) || loading}
+                  title={`Cancel/Delete ALL rows in this ${filterMode.toUpperCase()} range`}
                 >
-                  {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
+                  {deletingKey ? "Deleting..." : `Delete (${filterMode})`}
                 </button>
               </div>
             </div>
@@ -817,9 +924,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : groupedOrders.length === 0 ? (
-            <p className="customer-note">No add-ons found for this date</p>
+            <p className="customer-note">No add-ons found for this range</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}>
+            <div className="customer-table-wrap" key={`${filterMode}-${activeRange.fileLabel}`}>
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -1059,13 +1166,17 @@ const Admin_Customer_Add_ons: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ DELETE BY DATE MODAL (requires description) */}
-          {deleteDateOpen && (
-            <div className="receipt-overlay" onClick={() => (deletingDate ? null : setDeleteDateOpen(false))}>
+          {/* ✅ DELETE BY FILTER MODAL (requires description) */}
+          {deleteOpen && (
+            <div className="receipt-overlay" onClick={() => (deletingKey ? null : setDeleteOpen(false))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <h3 className="receipt-title">DELETE BY DATE</h3>
+                <h3 className="receipt-title">DELETE ({filterMode.toUpperCase()})</h3>
                 <p className="receipt-subtitle">
-                  Date: <strong>{selectedDate}</strong> • Rows: <strong>{records.length}</strong>
+                  {rangeLabelShort}: <strong>{anchorDate}</strong>
+                  <br />
+                  Range: <strong>{activeRange.label}</strong>
+                  <br />
+                  Rows: <strong>{records.length}</strong>
                 </p>
 
                 <hr />
@@ -1073,9 +1184,9 @@ const Admin_Customer_Add_ons: React.FC = () => {
                 <div style={{ fontWeight: 800, marginBottom: 8 }}>Required: Description / Reason</div>
 
                 <textarea
-                  value={deleteDateDesc}
-                  onChange={(e) => setDeleteDateDesc(e.currentTarget.value)}
-                  placeholder="Example: End of day cleanup / wrong date / duplicate orders..."
+                  value={deleteDesc}
+                  onChange={(e) => setDeleteDesc(e.currentTarget.value)}
+                  placeholder="Example: End of day cleanup / wrong range / duplicate orders..."
                   style={{
                     width: "100%",
                     minHeight: 110,
@@ -1086,24 +1197,24 @@ const Admin_Customer_Add_ons: React.FC = () => {
                     outline: "none",
                     fontSize: 14,
                   }}
-                  disabled={Boolean(deletingDate)}
+                  disabled={Boolean(deletingKey)}
                 />
 
                 <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
-                  ⚠️ This will CANCEL ALL rows for the date (moves to cancel table + reverses SOLD).
+                  ⚠️ This will CANCEL ALL rows in the selected range (moves to cancel table + reverses SOLD).
                 </div>
 
                 <div className="modal-actions" style={{ marginTop: 14 }}>
-                  <button className="receipt-btn" onClick={() => setDeleteDateOpen(false)} disabled={Boolean(deletingDate)}>
+                  <button className="receipt-btn" onClick={() => setDeleteOpen(false)} disabled={Boolean(deletingKey)}>
                     Close
                   </button>
                   <button
                     className="receipt-btn admin-danger"
-                    onClick={() => void submitDeleteByDate()}
-                    disabled={Boolean(deletingDate) || deleteDateDesc.trim().length === 0}
-                    title={deleteDateDesc.trim().length === 0 ? "Description required" : "Delete all rows for this date"}
+                    onClick={() => void submitDeleteByFilter()}
+                    disabled={Boolean(deletingKey) || deleteDesc.trim().length === 0}
+                    title={deleteDesc.trim().length === 0 ? "Description required" : "Delete all rows for this range"}
                   >
-                    {deletingDate ? "Deleting..." : "Submit Delete"}
+                    {deletingKey ? "Deleting..." : "Submit Delete"}
                   </button>
                 </div>
               </div>
