@@ -733,7 +733,7 @@ const Staff_menu: React.FC = () => {
               <div className="notif-popover-head">
                 <div>
                   <div className="notif-title">Notifications</div>
-                  <div className="notif-subtitle">Add-ons + Consignment • live • auto-read on open</div>
+                  <div className="notif-subtitle">Add-ons + Others • live • auto-read on open</div>
                 </div>
 
                 <div style={{ display: "flex", gap: 8 }}>

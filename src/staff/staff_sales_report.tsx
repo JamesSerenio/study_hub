@@ -17,8 +17,12 @@
 //         - Uses RPC: get_consignment_totals_for_day(p_date)
 //         - RPC handles Manila date inside (paid_at at time zone 'Asia/Manila')
 //         - Returns: gross, fee15, net
-//         - Display boxes: Consignment Sales / 15% / net + Inventory Loss
-//         - Sales System computed uses NET
+//         - Display boxes: Consignment Sales / Inventory Loss
+// ✅ NEW (YOUR REQUEST): Inventory Loss is now loaded from add_on_expenses
+//         - expense_type='inventory_loss'
+//         - within selected Manila day
+//         - not voided
+//         - sum(expense_amount)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -157,6 +161,14 @@ type SessionForTimeRow = {
   discount_value: number | string | null;
 };
 
+// ✅ inventory loss rows
+type AddOnExpenseRow = {
+  created_at: string;
+  expense_type: string;
+  expense_amount: number | string | null;
+  voided: boolean | null;
+};
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -256,8 +268,6 @@ const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerC
 
 /* =========================
    ADD-ONS PAYMENT GROUPING (avoid double count)
-   - same full_name + seat_number within 10 seconds = 1 order
-   - payment per order = MAX(gcash_amount) + MAX(cash_amount)
 ========================= */
 
 const GROUP_WINDOW_MS = 10_000;
@@ -384,6 +394,9 @@ const StaffSalesReport: React.FC = () => {
   // ✅ Discount total — PAID ONLY
   const [discountPaid, setDiscountPaid] = useState<number>(0);
 
+  // ✅ NEW: Inventory Loss (amount) from add_on_expenses (expense_type='inventory_loss')
+  const [inventoryLossAmount, setInventoryLossAmount] = useState<number>(0);
+
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(() => ({
     open: false,
@@ -422,6 +435,7 @@ const StaffSalesReport: React.FC = () => {
       setCashOutsGcash(0);
       setTotalTimeAmount(0);
       setDiscountPaid(0);
+      setInventoryLossAmount(0);
       setLoading(false);
       return;
     }
@@ -446,6 +460,7 @@ const StaffSalesReport: React.FC = () => {
       setCashOutsGcash(0);
       setTotalTimeAmount(0);
       setDiscountPaid(0);
+      setInventoryLossAmount(0);
       setLoading(false);
       return;
     }
@@ -462,6 +477,7 @@ const StaffSalesReport: React.FC = () => {
       setCashOutsGcash(0);
       setTotalTimeAmount(0);
       setDiscountPaid(0);
+      setInventoryLossAmount(0);
       setLoading(false);
       return;
     }
@@ -521,10 +537,7 @@ const StaffSalesReport: React.FC = () => {
   };
 
   /**
-   * ✅ CONSIGNMENT NET (SAME AS ADMIN):
-   * - Uses RPC: get_consignment_totals_for_day(p_date)
-   * - RPC handles Manila date inside (paid_at at time zone 'Asia/Manila')
-   * - Reads customer_session_consignment (paid + not voided) inside RPC
+   * ✅ CONSIGNMENT NET (SAME AS ADMIN)
    */
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -586,6 +599,45 @@ const StaffSalesReport: React.FC = () => {
   };
 
   /**
+   * ✅ NEW: Inventory Loss amount for the day
+   * - reads add_on_expenses within Manila day
+   * - expense_type = 'inventory_loss'
+   * - not voided
+   * - sum(expense_amount)
+   */
+  const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setInventoryLossAmount(0);
+      return;
+    }
+
+    // Manila day range (timestamptz safe)
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+    const res = await supabase
+      .from("add_on_expenses")
+      .select("created_at, expense_type, expense_amount, voided")
+      .eq("expense_type", "inventory_loss")
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString());
+
+    if (res.error) {
+      // eslint-disable-next-line no-console
+      console.error("inventory loss query error:", res.error.message);
+      setInventoryLossAmount(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as AddOnExpenseRow[];
+    const sum = rows
+      .filter((r) => !r.voided)
+      .reduce((acc, r) => acc + Math.max(0, toNumber(r.expense_amount)), 0);
+
+    setInventoryLossAmount(round2(sum));
+  };
+
+  /**
    * ✅ CASH OUTS (FIX)
    * - Prefer: cash_outs.payment_method ('cash' | 'gcash')
    * - If column doesn't exist, fallback to old schema
@@ -628,13 +680,7 @@ const StaffSalesReport: React.FC = () => {
   };
 
   /**
-   * ✅ FIX (YOUR REQUEST):
-   * - TOTAL TIME AMOUNT: PAID ONLY
-   * - DISCOUNT TOTAL: PAID ONLY
-   * - Includes BOTH:
-   *    - Non-reservation: customer_sessions.date == selectedDate AND reservation='no'
-   *    - Reservation:     customer_sessions.reservation_date == selectedDate AND reservation='yes'
-   * - If OPEN: use NOW as time_out
+   * ✅ TOTAL TIME AMOUNT + DISCOUNT (PAID ONLY)
    */
   const loadTimeAndDiscountPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -780,6 +826,7 @@ const StaffSalesReport: React.FC = () => {
     setCashOutsGcash(0);
     setTotalTimeAmount(0);
     setDiscountPaid(0);
+    setInventoryLossAmount(0);
     setSelectedDate(next);
   };
 
@@ -854,6 +901,7 @@ const StaffSalesReport: React.FC = () => {
     setCashOutsGcash(0);
     setTotalTimeAmount(0);
     setDiscountPaid(0);
+    setInventoryLossAmount(0);
 
     setToast({ open: true, msg: `DONE saved for ${selectedDate}. Moving to next day…`, color: "success" });
 
@@ -876,6 +924,7 @@ const StaffSalesReport: React.FC = () => {
         setCashOutsGcash(0);
         setTotalTimeAmount(0);
         setDiscountPaid(0);
+        setInventoryLossAmount(0);
         return;
       }
 
@@ -894,11 +943,13 @@ const StaffSalesReport: React.FC = () => {
         setCashOutsGcash(0);
         setTotalTimeAmount(0);
         setDiscountPaid(0);
+        setInventoryLossAmount(0);
       } else {
-        void loadConsignment(selectedDate); // ✅ RPC like admin
+        void loadConsignment(selectedDate);
         void loadAddonsPaid(selectedDate);
         void loadCashOutsTotal(selectedDate);
         void loadTimeAndDiscountPaid(selectedDate);
+        void loadInventoryLossAmount(selectedDate); // ✅ NEW
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -930,7 +981,6 @@ const StaffSalesReport: React.FC = () => {
     return lines.filter((l) => l.money_kind === "coin").reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
-  const expenses = totals ? toNumber(totals.expenses_amount) : 0;
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
@@ -1175,7 +1225,7 @@ const StaffSalesReport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* ✅ SAME AS ADMIN: show consignment breakdown + inventory loss */}
+                  {/* ✅ SAME AS ADMIN: show consignment + inventory loss */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
@@ -1184,7 +1234,7 @@ const StaffSalesReport: React.FC = () => {
 
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Inventory Loss</span>
-                      <span className="ssr-sales-box-value">{peso(expenses)}</span>
+                      <span className="ssr-sales-box-value">{peso(inventoryLossAmount)}</span>
                     </div>
                   </div>
                 </IonCardContent>

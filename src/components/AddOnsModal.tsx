@@ -245,7 +245,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     if (error) {
       // eslint-disable-next-line no-console
       console.error(error);
-      alert(`Error loading consignment: ${error.message}`);
+      alert(`Error loading special: ${error.message}`);
       setItems([]);
       return;
     }
@@ -561,7 +561,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
         <IonHeader>
           <IonToolbar>
-            <IonTitle>{mode === "add_ons" ? "Add-Ons" : "Consignment"}</IonTitle>
+            <IonTitle>{mode === "add_ons" ? "Add-Ons" : "Special FInds"}</IonTitle>
             <IonButtons slot="end">
               <IonButton onClick={onClose}>
                 <IonIcon icon={closeOutline} />
@@ -590,7 +590,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   <IonLabel>Add-Ons</IonLabel>
                 </IonSegmentButton>
                 <IonSegmentButton value="consignment">
-                  <IonLabel>Consignment</IonLabel>
+                  <IonLabel>Special Finds</IonLabel>
                 </IonSegmentButton>
               </IonSegment>
             </div>
@@ -619,7 +619,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
             </IonItem>
 
             <IonButton expand="block" onClick={addAnotherCategory}>
-              Add More {mode === "add_ons" ? "Add-Ons" : "Consignment"}
+              Add More {mode === "add_ons" ? "Add-Ons" : "Special finds"}
             </IonButton>
 
             {selectedCategories.map((category, index) => {
