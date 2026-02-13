@@ -1,82 +1,92 @@
-// src/pages/Customer_Consignment_Record.tsx
-// ✅ Shows customer_session_consignment records
-// ✅ Join with consignment for item info (name/image/size/category)
-// ✅ View Receipt modal (same vibe as Admin_Customer_Add_ons receipt)
-// ✅ Payment modal (Cash + GCash, FREE INPUTS, NO LIMIT) -> RPC set_consignment_payment
-// ✅ Manual PAID toggle -> RPC set_consignment_paid_status
-// ✅ VOID (required reason) -> returns stock by RPC void_customer_consignment
-// ✅ NEW: DELETE (hard delete) -> removes row from database (customer_session_consignment)
-// ✅ STRICT TS: NO any
-// ✅ Same "customer-*" + "receipt-btn" vibe
-// ✅ Date filter: DEFAULT TODAY (PH) + query filtered by PH day range (like your screenshot)
-
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
-import logo from "../assets/study_hub.png";
 
 type NumericLike = number | string;
+type GroupBy = "full_name" | "category";
+type PayMethod = "cash" | "gcash";
 
-type ConsignmentInfo = {
-  item_name: string;
-  size: string | null;
-  image_url: string | null;
+interface ConsignmentRow {
+  id: string;
+  created_at: string;
+
+  full_name: string;
   category: string | null;
-};
 
-type CustomerConsignmentRow = {
-  id: string;
-  created_at: string | null;
+  item_name: string;
+  size: string | null;
+  image_url: string | null;
 
-  consignment_id: string;
-  quantity: number;
   price: NumericLike;
-  total: NumericLike | null;
+  restocked: number | null;
+  sold: number | null;
+
+  expected_sales: NumericLike | null; // net(85%) in DB (restocked*price*0.85)
+  overall_sales: NumericLike | null; // gross in DB (sold*price)
+  stocks: number | null;
+}
+
+interface CashOutRow {
+  id: string;
+  created_at: string;
 
   full_name: string;
-  seat_number: string;
+  category: string | null;
 
-  paid_at: string | null;
-  gcash_amount: NumericLike;
-  cash_amount: NumericLike;
-  is_paid: boolean | number | string | null;
+  cashout_amount: NumericLike;
+  payment_method: PayMethod;
+  note: string | null;
+}
 
-  voided: boolean | number | string | null;
-  voided_at: string | null;
-  void_note: string | null;
-
-  consignment: ConsignmentInfo | null;
-};
-
-type ReceiptItem = {
+interface CashOutRowNoCategory {
   id: string;
+  created_at: string;
+
+  full_name: string;
+
+  cashout_amount: NumericLike;
+  payment_method: PayMethod;
+  note: string | null;
+}
+
+interface CashOutRowNoMethod {
+  id: string;
+  created_at: string;
+
+  full_name: string;
+  category: string | null;
+
+  cashout_amount: NumericLike;
+  note: string | null;
+}
+
+type ConsignmentRestockInsert = {
+  consignment_id: string;
+  qty: number;
+  full_name: string;
+  category: string | null;
   item_name: string;
-  category: string;
   size: string | null;
-  quantity: number;
-  price: number;
-  total: number;
   image_url: string | null;
 };
 
-type ReceiptGroup = {
-  id: string; // row id
-  created_at: string | null;
+type CancelledInsert = {
+  consignment_id: string;
+  original_created_at: string | null;
+  created_by: string | null;
+  category_id: string | null;
+
   full_name: string;
-  seat_number: string;
+  category: string | null;
+  item_name: string;
+  size: string | null;
+  image_url: string | null;
 
-  items: ReceiptItem[];
-  grand_total: number;
+  price: number;
+  restocked: number;
+  sold: number;
 
-  gcash_amount: number;
-  cash_amount: number;
-
-  is_paid: boolean;
-  paid_at: string | null;
-
-  is_voided: boolean;
-  voided_at: string | null;
-  void_note: string | null;
+  note: string | null;
 };
 
 /* ---------------- helpers ---------------- */
@@ -93,24 +103,7 @@ const toNumber = (v: NumericLike | null | undefined): number => {
 const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
 const moneyText = (n: number): string => `₱${round2(n).toFixed(2)}`;
 
-const toBool = (v: unknown): boolean => {
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  if (typeof v === "string") {
-    const s = v.trim().toLowerCase();
-    return s === "true" || s === "1" || s === "yes" || s === "paid";
-  }
-  return false;
-};
-
-const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
-const show = (s: string | null | undefined, fallback = "-"): string => {
-  const v = String(s ?? "").trim();
-  return v.length ? v : fallback;
-};
-
-const formatPHDateTime = (iso: string | null | undefined): string => {
-  if (!iso) return "-";
+const formatPHDateTime = (iso: string): string => {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return "-";
   return new Intl.DateTimeFormat("en-PH", {
@@ -125,354 +118,534 @@ const formatPHDateTime = (iso: string | null | undefined): string => {
   }).format(d);
 };
 
+const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+
+const show = (s: string | null | undefined, fallback = "-"): string => {
+  const v = String(s ?? "").trim();
+  return v.length ? v : fallback;
+};
+
 const sizeText = (s: string | null | undefined): string => {
   const v = String(s ?? "").trim();
   return v.length ? v : "—";
 };
 
-// ✅ today key in PH (YYYY-MM-DD)
-const todayPHKey = (): string => {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
+const grossToNet = (gross: number): number => round2(gross * 0.85);
+
+const labelPay = (m: PayMethod): string => (m === "gcash" ? "GCASH" : "CASH");
+
+/* ---------------- money rules ---------------- */
+
+type PersonAgg = {
+  key: string;
+  label: string;
+
+  total_restock: number;
+  total_sold: number;
+
+  expected_total: number;
+  gross_total: number;
+  net_total: number;
+
+  cashout_cash: number;
+  cashout_gcash: number;
+  cashout_total: number;
+
+  remaining: number; // net_total - cashouts
 };
 
-// ✅ PH day range -> UTC ISO bounds for timestamptz filtering
-const phDayRange = (dateKey: string): { startISO: string; endISO: string } => {
-  const startPH = new Date(`${dateKey}T00:00:00.000+08:00`);
-  const endPH = new Date(`${dateKey}T23:59:59.999+08:00`);
-  return { startISO: startPH.toISOString(), endISO: endPH.toISOString() };
-};
-
-/* ---------------- component ---------------- */
-
-const Customer_Consignment_Record: React.FC = () => {
-  const [rows, setRows] = useState<CustomerConsignmentRow[]>([]);
+const Staff_Consignment_Record: React.FC = () => {
+  const [salesRows, setSalesRows] = useState<ConsignmentRow[]>([]);
+  const [cashouts, setCashouts] = useState<CashOutRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   const [searchText, setSearchText] = useState<string>("");
+  const [groupBy, setGroupBy] = useState<GroupBy>("full_name");
 
-  // ✅ DEFAULT TODAY (PH)
-  const [selectedDate, setSelectedDate] = useState<string>(() => todayPHKey()); // YYYY-MM-DD
+  // cashout modal
+  const [cashoutTargetKey, setCashoutTargetKey] = useState<string | null>(null);
+  const [cashoutTargetLabel, setCashoutTargetLabel] = useState<string>("");
 
-  // receipt modal
-  const [selectedOrder, setSelectedOrder] = useState<ReceiptGroup | null>(null);
+  const [cashAmount, setCashAmount] = useState<string>("");
+  const [gcashAmount, setGcashAmount] = useState<string>("");
 
-  // payment modal
-  const [paymentTarget, setPaymentTarget] = useState<ReceiptGroup | null>(null);
-  const [gcashInput, setGcashInput] = useState<string>("0");
-  const [cashInput, setCashInput] = useState<string>("0");
-  const [savingPayment, setSavingPayment] = useState<boolean>(false);
+  const [cashoutNote, setCashoutNote] = useState<string>("");
+  const [savingCashout, setSavingCashout] = useState<boolean>(false);
 
-  // paid toggle busy
-  const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
+  // history modal
+  const [historyTargetKey, setHistoryTargetKey] = useState<string | null>(null);
+  const [historyTargetLabel, setHistoryTargetLabel] = useState<string>("");
 
-  // VOID modal
-  const [voidTarget, setVoidTarget] = useState<CustomerConsignmentRow | null>(null);
-  const [voidReason, setVoidReason] = useState<string>("");
-  const [voiding, setVoiding] = useState<boolean>(false);
+  // restock
+  const [restockTarget, setRestockTarget] = useState<ConsignmentRow | null>(null);
+  const [restockQty, setRestockQty] = useState<string>("");
+  const [savingRestock, setSavingRestock] = useState<boolean>(false);
 
-  // DELETE modal
-  const [deleteTarget, setDeleteTarget] = useState<CustomerConsignmentRow | null>(null);
-  const [deleting, setDeleting] = useState<boolean>(false);
+  // ✅ CANCEL (instead of delete)
+  const [cancelTarget, setCancelTarget] = useState<ConsignmentRow | null>(null);
+  const [cancelNote, setCancelNote] = useState<string>("");
+  const [cancelling, setCancelling] = useState<boolean>(false);
 
-  // ✅ fetch whenever date changes
   useEffect(() => {
-    void fetchByDate(selectedDate);
+    void fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate]);
+  }, []);
 
-  const fetchByDate = async (dateKey: string): Promise<void> => {
+  const fetchAll = async (): Promise<void> => {
     setLoading(true);
 
-    const { startISO, endISO } = phDayRange(dateKey);
-
-    const { data, error } = await supabase
-      .from("customer_session_consignment")
+    const { data: sales, error: sErr } = await supabase
+      .from("consignment")
       .select(
         `
         id,
         created_at,
-        consignment_id,
-        quantity,
-        price,
-        total,
         full_name,
-        seat_number,
-        paid_at,
-        gcash_amount,
-        cash_amount,
-        is_paid,
-        voided,
-        voided_at,
-        void_note,
-        consignment:consignment_id (
-          item_name,
-          size,
-          image_url,
-          category
-        )
+        category,
+        item_name,
+        size,
+        image_url,
+        price,
+        restocked,
+        sold,
+        expected_sales,
+        overall_sales,
+        stocks
       `
       )
-      .gte("created_at", startISO)
-      .lte("created_at", endISO)
       .order("created_at", { ascending: false })
-      .returns<CustomerConsignmentRow[]>();
+      .returns<ConsignmentRow[]>();
 
-    if (error) {
+    if (sErr) {
       // eslint-disable-next-line no-console
-      console.error("FETCH customer_session_consignment ERROR:", error);
-      setRows([]);
+      console.error("FETCH CONSIGNMENT ERROR:", sErr);
+      setSalesRows([]);
+      setCashouts([]);
       setLoading(false);
       return;
     }
 
-    setRows(data ?? []);
-    setLoading(false);
-  };
+    // 1) try: has category + payment_method
+    const withCatMethod = await supabase
+      .from("consignment_cash_outs")
+      .select("id, created_at, full_name, category, cashout_amount, payment_method, note")
+      .order("created_at", { ascending: false })
+      .returns<CashOutRow[]>();
 
-  // ✅ now only SEARCH locally (date is already filtered server-side)
-  const filtered = useMemo(() => {
-    const q = norm(searchText);
-    if (!q) return rows;
-
-    return rows.filter((r) => {
-      const fn = norm(r.full_name);
-      const seat = norm(r.seat_number);
-      const item = norm(r.consignment?.item_name ?? "");
-      const cat = norm(r.consignment?.category ?? "");
-      return fn.includes(q) || seat.includes(q) || item.includes(q) || cat.includes(q);
-    });
-  }, [rows, searchText]);
-
-  const totals = useMemo(() => {
-    let totalAmount = 0;
-    let totalCash = 0;
-    let totalGcash = 0;
-
-    for (const r of filtered) {
-      const isVoided = toBool(r.voided);
-      if (isVoided) continue;
-      totalAmount += round2(toNumber(r.total));
-      totalCash += round2(toNumber(r.cash_amount));
-      totalGcash += round2(toNumber(r.gcash_amount));
+    if (!withCatMethod.error) {
+      const mapped = (withCatMethod.data ?? []).map((r) => ({
+        ...r,
+        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash"
+          ? "gcash"
+          : "cash") as PayMethod,
+      }));
+      setSalesRows(sales ?? []);
+      setCashouts(mapped);
+      setLoading(false);
+      return;
     }
 
-    return {
-      totalAmount: round2(totalAmount),
-      totalCash: round2(totalCash),
-      totalGcash: round2(totalGcash),
-    };
-  }, [filtered]);
+    // 2) fallback: no category but has payment_method
+    const noCatMethod = await supabase
+      .from("consignment_cash_outs")
+      .select("id, created_at, full_name, cashout_amount, payment_method, note")
+      .order("created_at", { ascending: false })
+      .returns<CashOutRowNoCategory[]>();
 
-  const makeReceiptGroup = (r: CustomerConsignmentRow): ReceiptGroup => {
-    const qty = Number(r.quantity ?? 0) || 0;
-    const price = round2(toNumber(r.price));
-    const total = round2(toNumber(r.total));
+    if (!noCatMethod.error) {
+      const mapped: CashOutRow[] = (noCatMethod.data ?? []).map((r) => ({
+        id: r.id,
+        created_at: r.created_at,
+        full_name: r.full_name,
+        category: null,
+        cashout_amount: r.cashout_amount,
+        payment_method: (String((r as unknown as { payment_method?: unknown }).payment_method ?? "cash").toLowerCase() === "gcash"
+          ? "gcash"
+          : "cash") as PayMethod,
+        note: r.note,
+      }));
+      setSalesRows(sales ?? []);
+      setCashouts(mapped);
+      setLoading(false);
+      return;
+    }
 
-    const itemName = show(r.consignment?.item_name);
-    const cat = show(r.consignment?.category);
-    const img = r.consignment?.image_url ?? null;
+    // 3) last fallback: old table (no payment_method) -> treat as CASH
+    const old = await supabase
+      .from("consignment_cash_outs")
+      .select("id, created_at, full_name, category, cashout_amount, note")
+      .order("created_at", { ascending: false })
+      .returns<CashOutRowNoMethod[]>();
 
-    const gcash = round2(Math.max(0, toNumber(r.gcash_amount)));
-    const cash = round2(Math.max(0, toNumber(r.cash_amount)));
-    const paid = toBool(r.is_paid);
-    const isVoided = toBool(r.voided);
+    if (old.error) {
+      // eslint-disable-next-line no-console
+      console.error("FETCH CASH OUTS ERROR:", old.error);
+      setSalesRows(sales ?? []);
+      setCashouts([]);
+      setLoading(false);
+      return;
+    }
 
-    return {
+    const mapped: CashOutRow[] = (old.data ?? []).map((r) => ({
       id: r.id,
       created_at: r.created_at,
       full_name: r.full_name,
-      seat_number: r.seat_number,
-      items: [
-        {
-          id: r.id,
-          item_name: itemName,
-          category: cat,
-          size: r.consignment?.size ?? null,
-          quantity: qty,
-          price,
-          total,
-          image_url: img,
-        },
-      ],
-      grand_total: total,
-      gcash_amount: gcash,
-      cash_amount: cash,
-      is_paid: paid,
-      paid_at: r.paid_at ?? null,
-      is_voided: isVoided,
-      voided_at: r.voided_at ?? null,
-      void_note: r.void_note ?? null,
+      category: r.category ?? null,
+      cashout_amount: r.cashout_amount,
+      payment_method: "cash",
+      note: r.note,
+    }));
+
+    setSalesRows(sales ?? []);
+    setCashouts(mapped);
+    setLoading(false);
+  };
+
+  /* ---------------- build grouped summary ---------------- */
+
+  const perKeyAggAll = useMemo<PersonAgg[]>(() => {
+    const map = new Map<string, PersonAgg>();
+
+    const getKeyAndLabel = (r: { full_name: string; category: string | null }): { key: string; label: string } => {
+      if (groupBy === "category") {
+        const label = show(r.category, "-");
+        return { key: norm(label), label };
+      }
+      const label = show(r.full_name, "-");
+      return { key: norm(label), label };
     };
+
+    const getOrCreate = (key: string, label: string): PersonAgg => {
+      const found = map.get(key);
+      if (found) return found;
+
+      const fresh: PersonAgg = {
+        key,
+        label,
+        total_restock: 0,
+        total_sold: 0,
+        expected_total: 0,
+        gross_total: 0,
+        net_total: 0,
+        cashout_cash: 0,
+        cashout_gcash: 0,
+        cashout_total: 0,
+        remaining: 0,
+      };
+
+      map.set(key, fresh);
+      return fresh;
+    };
+
+    // sales => expected/gross
+    for (const r of salesRows) {
+      const { key, label } = getKeyAndLabel(r);
+      const a = getOrCreate(key, label);
+
+      const rest = Number(r.restocked ?? 0) || 0;
+      const sold = Number(r.sold ?? 0) || 0;
+
+      a.total_restock += rest;
+      a.total_sold += sold;
+
+      const expected = round2(toNumber(r.expected_sales));
+      const gross = round2(toNumber(r.overall_sales));
+
+      a.expected_total = round2(a.expected_total + expected);
+      a.gross_total = round2(a.gross_total + gross);
+    }
+
+    // net totals
+    for (const a of map.values()) a.net_total = grossToNet(a.gross_total);
+
+    // cashouts
+    for (const c of cashouts) {
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      const key = norm(label);
+      const a = getOrCreate(key, label);
+
+      const amt = round2(toNumber(c.cashout_amount));
+      if (c.payment_method === "gcash") a.cashout_gcash = round2(a.cashout_gcash + amt);
+      else a.cashout_cash = round2(a.cashout_cash + amt);
+
+      a.cashout_total = round2(a.cashout_cash + a.cashout_gcash);
+    }
+
+    // remaining
+    for (const a of map.values()) a.remaining = round2(Math.max(0, a.net_total - a.cashout_total));
+
+    return Array.from(map.values()).sort((x, y) => norm(x.label).localeCompare(norm(y.label)));
+  }, [salesRows, cashouts, groupBy]);
+
+  const perKeyAgg = useMemo<PersonAgg[]>(() => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return perKeyAggAll;
+    return perKeyAggAll.filter((p) => norm(p.label).includes(q));
+  }, [perKeyAggAll, searchText]);
+
+  const filteredRows = useMemo<ConsignmentRow[]>(() => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return salesRows;
+
+    return salesRows.filter((r) => {
+      const f = norm(r.full_name);
+      const cat = norm(r.category);
+      const it = norm(r.item_name);
+      const sz = norm(r.size);
+      return f.includes(q) || cat.includes(q) || it.includes(q) || sz.includes(q);
+    });
+  }, [salesRows, searchText]);
+
+  const rowsCount = filteredRows.length;
+
+  /* ---------------- cashout + history ---------------- */
+
+  const openCashout = (agg: PersonAgg): void => {
+    setCashoutTargetKey(agg.key);
+    setCashoutTargetLabel(agg.label);
+
+    setCashAmount("");
+    setGcashAmount("");
+    setCashoutNote("");
   };
 
-  /* ---------------- actions ---------------- */
-
-  const openReceipt = (r: CustomerConsignmentRow): void => {
-    setSelectedOrder(makeReceiptGroup(r));
+  const openHistory = (agg: PersonAgg): void => {
+    setHistoryTargetKey(agg.key);
+    setHistoryTargetLabel(agg.label);
   };
 
-  const openPaymentModal = (r: CustomerConsignmentRow): void => {
-    const g = makeReceiptGroup(r);
-    if (g.is_voided) {
-      alert("Cannot set payment for VOIDED record.");
+  const cashoutHistoryForTarget = useMemo(() => {
+    if (!cashoutTargetKey) return [];
+    return cashouts.filter((c) => {
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      return norm(label) === cashoutTargetKey;
+    });
+  }, [cashoutTargetKey, cashouts, groupBy]);
+
+  const historyForTarget = useMemo(() => {
+    if (!historyTargetKey) return [];
+    return cashouts.filter((c) => {
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      return norm(label) === historyTargetKey;
+    });
+  }, [historyTargetKey, cashouts, groupBy]);
+
+  const groupHasAnyHistory = (aggKey: string): boolean => {
+    return cashouts.some((c) => {
+      const label = groupBy === "category" ? show(c.category, "-") : show(c.full_name, "-");
+      return norm(label) === aggKey;
+    });
+  };
+
+  const submitCashout = async (): Promise<void> => {
+    if (!cashoutTargetKey) return;
+
+    const cash = round2(Math.max(0, Number(cashAmount) || 0));
+    const gcash = round2(Math.max(0, Number(gcashAmount) || 0));
+    const total = round2(cash + gcash);
+
+    if (total <= 0) {
+      alert("Please enter CASH or GCASH amount (must be > 0).");
       return;
     }
-    setPaymentTarget(g);
-    setGcashInput(String(round2(Math.max(0, g.gcash_amount))));
-    setCashInput(String(round2(Math.max(0, g.cash_amount))));
-  };
 
-  const savePayment = async (): Promise<void> => {
-    if (!paymentTarget) return;
+    const target = perKeyAggAll.find((p) => p.key === cashoutTargetKey);
+    const remaining = round2(target?.remaining ?? 0);
 
-    const g = round2(Math.max(0, toNumber(gcashInput)));
-    const c = round2(Math.max(0, toNumber(cashInput)));
+    if (total > remaining) {
+      alert(`Insufficient remaining. Remaining: ${moneyText(remaining)}`);
+      return;
+    }
 
     try {
-      setSavingPayment(true);
+      setSavingCashout(true);
 
-      const { error } = await supabase.rpc("set_consignment_payment", {
-        p_row_id: paymentTarget.id,
-        p_gcash: g,
-        p_cash: c,
-      });
+      const note = cashoutNote.trim() || null;
 
-      if (error) {
-        alert(`Save payment error: ${error.message}`);
-        return;
+      if (groupBy === "category") {
+        const try1 = await supabase.rpc("cashout_consignment_oversale", {
+          p_full_name: "CATEGORY",
+          p_cash_amount: cash,
+          p_gcash_amount: gcash,
+          p_note: note,
+          p_category: cashoutTargetLabel,
+        });
+
+        if (try1.error) {
+          const try2 = await supabase.rpc("cashout_consignment_oversale", {
+            p_full_name: cashoutTargetLabel,
+            p_cash_amount: cash,
+            p_gcash_amount: gcash,
+            p_note: note,
+          });
+
+          if (try2.error) {
+            alert(`Cash out error: ${try2.error.message}`);
+            return;
+          }
+        }
+      } else {
+        const { error } = await supabase.rpc("cashout_consignment_oversale", {
+          p_full_name: cashoutTargetLabel,
+          p_cash_amount: cash,
+          p_gcash_amount: gcash,
+          p_note: note,
+        });
+
+        if (error) {
+          alert(`Cash out error: ${error.message}`);
+          return;
+        }
       }
 
-      setPaymentTarget(null);
-      await fetchByDate(selectedDate);
+      setCashoutTargetKey(null);
+      setCashoutTargetLabel("");
+      await fetchAll();
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
-      alert("Save payment failed.");
+      alert("Cash out failed.");
     } finally {
-      setSavingPayment(false);
+      setSavingCashout(false);
     }
   };
 
-  const togglePaid = async (r: CustomerConsignmentRow): Promise<void> => {
-    if (toBool(r.voided)) {
-      alert("Cannot change paid status for VOIDED record.");
+  /* ---------------- restock (with record) ---------------- */
+
+  const openRestock = (r: ConsignmentRow): void => {
+    setRestockTarget(r);
+    setRestockQty("");
+  };
+
+  const saveRestock = async (): Promise<void> => {
+    if (!restockTarget) return;
+
+    const addQty = Math.max(0, Math.floor(Number(restockQty) || 0));
+    if (addQty <= 0) {
+      alert("Restock quantity must be > 0");
       return;
     }
 
+    const current = Math.max(0, Math.floor(Number(restockTarget.restocked ?? 0) || 0));
+    const next = current + addQty;
+
     try {
-      setTogglingPaidId(r.id);
+      setSavingRestock(true);
 
-      const nextPaid = !toBool(r.is_paid);
+      // ✅ 1) insert record
+      const insertPayload: ConsignmentRestockInsert = {
+        consignment_id: restockTarget.id,
+        qty: addQty,
+        full_name: show(restockTarget.full_name, "-"),
+        category: restockTarget.category ?? null,
+        item_name: show(restockTarget.item_name, "-"),
+        size: restockTarget.size ?? null,
+        image_url: restockTarget.image_url ?? null,
+      };
 
-      const { error } = await supabase.rpc("set_consignment_paid_status", {
-        p_row_id: r.id,
-        p_is_paid: nextPaid,
-      });
-
-      if (error) {
-        alert(`Toggle paid error: ${error.message}`);
+      const ins = await supabase.from("consignment_restocks").insert(insertPayload).select("id").maybeSingle();
+      if (ins.error) {
+        alert(`Restock record failed: ${ins.error.message}`);
         return;
       }
 
-      await fetchByDate(selectedDate);
-    } catch (e: unknown) {
-      // eslint-disable-next-line no-console
-      console.error(e);
-      alert("Toggle paid failed.");
-    } finally {
-      setTogglingPaidId(null);
-    }
-  };
-
-  const openVoid = (r: CustomerConsignmentRow): void => {
-    setVoidTarget(r);
-    setVoidReason("");
-  };
-
-  const submitVoid = async (): Promise<void> => {
-    if (!voidTarget) return;
-
-    const reason = voidReason.trim();
-    if (!reason) {
-      alert("Void reason is required.");
-      return;
-    }
-
-    if (toBool(voidTarget.voided)) {
-      alert("Already voided.");
-      return;
-    }
-
-    try {
-      setVoiding(true);
-
-      const { error } = await supabase.rpc("void_customer_consignment", {
-        p_row_id: voidTarget.id,
-        p_reason: reason,
-      });
+      // ✅ 2) update consignment.restocked
+      const { error } = await supabase.from("consignment").update({ restocked: next }).eq("id", restockTarget.id);
 
       if (error) {
-        alert(`Void failed: ${error.message}`);
+        alert(`Restock failed: ${error.message}`);
         return;
       }
 
-      setVoidTarget(null);
-      setVoidReason("");
-      setSelectedOrder(null);
-      setPaymentTarget(null);
-      await fetchByDate(selectedDate);
-    } catch (e: unknown) {
-      // eslint-disable-next-line no-console
-      console.error(e);
-      alert("Void failed.");
+      setRestockTarget(null);
+      await fetchAll();
     } finally {
-      setVoiding(false);
+      setSavingRestock(false);
     }
   };
 
-  const openDelete = (r: CustomerConsignmentRow): void => {
-    setDeleteTarget(r);
+  /* ---------------- CANCEL (archive then delete) ---------------- */
+
+  const openCancel = (r: ConsignmentRow): void => {
+    setCancelTarget(r);
+    setCancelNote("");
   };
 
-  const confirmDelete = async (): Promise<void> => {
-    if (!deleteTarget) return;
-
-    // ⚠️ Recommend: delete only if VOIDED (para hindi magulo sold/stock)
-    // If gusto mo allow kahit hindi voided, remove this check.
-    if (!toBool(deleteTarget.voided)) {
-      const ok = window.confirm(
-        "This record is NOT voided.\nDeleting it will NOT return stock automatically.\n\nRecommended: VOID first then DELETE.\n\nContinue delete anyway?"
-      );
-      if (!ok) return;
-    }
+  const doCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
 
     try {
-      setDeleting(true);
+      setCancelling(true);
 
-      const { error } = await supabase.from("customer_session_consignment").delete().eq("id", deleteTarget.id);
+      // best-effort: read missing snapshot fields if you want (category_id/created_by)
+      // ✅ If your consignment table really has category_id/created_by, you can fetch it here.
+      const more = await supabase
+        .from("consignment")
+        .select("id, created_at, created_by, category_id, full_name, category, item_name, size, image_url, price, restocked, sold")
+        .eq("id", cancelTarget.id)
+        .maybeSingle();
 
-      if (error) {
-        alert(`Delete failed: ${error.message}`);
+      if (more.error || !more.data) {
+        alert(`Cancel failed: unable to read item.`);
         return;
       }
 
-      setDeleteTarget(null);
-      setSelectedOrder(null);
-      setPaymentTarget(null);
-      setVoidTarget(null);
+      const d = more.data as unknown as {
+        id: string;
+        created_at: string;
+        created_by: string | null;
+        category_id: string | null;
+        full_name: string;
+        category: string | null;
+        item_name: string;
+        size: string | null;
+        image_url: string | null;
+        price: number | string;
+        restocked: number | null;
+        sold: number | null;
+      };
 
-      await fetchByDate(selectedDate);
+      // ✅ 1) insert into cancelled archive
+      const archivePayload: CancelledInsert = {
+        consignment_id: d.id,
+        original_created_at: d.created_at ?? null,
+        created_by: d.created_by ?? null,
+        category_id: d.category_id ?? null,
+
+        full_name: show(d.full_name, "-"),
+        category: d.category ?? null,
+        item_name: show(d.item_name, "-"),
+        size: d.size ?? null,
+        image_url: d.image_url ?? null,
+
+        price: round2(toNumber(d.price)),
+        restocked: Math.max(0, Math.floor(Number(d.restocked ?? 0) || 0)),
+        sold: Math.max(0, Math.floor(Number(d.sold ?? 0) || 0)),
+
+        note: cancelNote.trim() ? cancelNote.trim() : null,
+      };
+
+      const ins = await supabase.from("consignment_cancelled").insert(archivePayload).select("id").maybeSingle();
+      if (ins.error) {
+        alert(`Cancel failed (archive): ${ins.error.message}`);
+        return;
+      }
+
+      // ✅ 2) delete from consignment
+      const del = await supabase.from("consignment").delete().eq("id", cancelTarget.id);
+      if (del.error) {
+        alert(`Cancel failed (delete): ${del.error.message}`);
+        return;
+      }
+
+      setCancelTarget(null);
+      await fetchAll();
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
-      alert("Delete failed.");
+      alert("Cancel failed.");
     } finally {
-      setDeleting(false);
+      setCancelling(false);
     }
   };
 
@@ -483,14 +656,15 @@ const Customer_Consignment_Record: React.FC = () => {
           {/* TOPBAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
-              <h2 className="customer-lists-title">Customer Consignment Records</h2>
+              <h2 className="customer-lists-title">Consignment Records</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong>
+                Showing: <strong>ALL</strong> • Rows: <strong>{rowsCount}</strong> • Groups: <strong>{perKeyAgg.length}</strong>
               </div>
 
-              <div className="customer-subtext">
-                Rows: <strong>{filtered.length}</strong> • Total: <strong>{moneyText(totals.totalAmount)}</strong> • Cash:{" "}
-                <strong>{moneyText(totals.totalCash)}</strong> • GCash: <strong>{moneyText(totals.totalGcash)}</strong>
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="receipt-btn" onClick={() => setGroupBy("full_name")} style={{ opacity: groupBy === "full_name" ? 1 : 0.6 }}>
+                  Group by Full Name
+                </button>
               </div>
             </div>
 
@@ -505,7 +679,7 @@ const Customer_Consignment_Record: React.FC = () => {
                   <input
                     className="customer-search-input"
                     type="text"
-                    placeholder="Search fullname / seat / item / category..."
+                    placeholder="Search fullname / category / item / size..."
                     value={searchText}
                     onChange={(e) => setSearchText(e.currentTarget.value)}
                   />
@@ -518,26 +692,8 @@ const Customer_Consignment_Record: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE + REFRESH */}
-              <div className="admin-tools-row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <div className="date-pill" style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ fontWeight: 900 }}>Date</span>
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.currentTarget.value)}
-                    style={{
-                      border: "1px solid rgba(0,0,0,0.12)",
-                      borderRadius: 12,
-                      padding: "8px 10px",
-                      fontWeight: 800,
-                      outline: "none",
-                      background: "rgba(255,255,255,0.85)",
-                    }}
-                  />
-                </div>
-
-                <button className="receipt-btn" onClick={() => void fetchByDate(selectedDate)} disabled={loading}>
+              <div className="admin-tools-row">
+                <button className="receipt-btn" onClick={() => void fetchAll()} disabled={loading}>
                   Refresh
                 </button>
               </div>
@@ -546,430 +702,491 @@ const Customer_Consignment_Record: React.FC = () => {
 
           {loading ? (
             <p className="customer-note">Loading...</p>
-          ) : filtered.length === 0 ? (
-            <p className="customer-note">No data found for this date</p>
+          ) : perKeyAgg.length === 0 ? (
+            <p className="customer-note">No consignment data found.</p>
           ) : (
-            <div className="customer-table-wrap">
-              <table className="customer-table">
-                <thead>
-                  <tr>
-                    <th>Image</th>
-                    <th>Item</th>
-                    <th>Category</th>
-                    <th>Date/Time (PH)</th>
-                    <th>Full Name</th>
-                    <th>Seat</th>
-                    <th>Size</th>
-                    <th>Qty</th>
-                    <th>Price</th>
-                    <th>Total</th>
-                    <th>Payment</th>
-                    <th>Paid?</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
+            <>
+              {/* TOP SUMMARY TABLE */}
+              <div className="customer-table-wrap" style={{ marginBottom: 14 }}>
+                <table className="customer-table">
+                  <thead>
+                    <tr>
+                      <th>{groupBy === "category" ? "Category" : "Full Name"}</th>
+                      <th>Total Restock</th>
+                      <th>Total Sold</th>
+                      <th>Expected Sales</th>
+                      <th>Overall Sales</th>
+                      <th>Cash Outs</th>
+                      <th>Remaining</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
 
-                <tbody>
-                  {filtered.map((r) => {
-                    const qty = Number(r.quantity ?? 0) || 0;
-                    const price = round2(toNumber(r.price));
-                    const total = round2(toNumber(r.total));
+                  <tbody>
+                    {perKeyAgg.map((p) => {
+                      const hasHistory = groupHasAnyHistory(p.key);
 
-                    const cash = round2(toNumber(r.cash_amount));
-                    const gcash = round2(toNumber(r.gcash_amount));
+                      return (
+                        <tr key={p.key}>
+                          <td style={{ fontWeight: 1000 }}>{p.label}</td>
+                          <td style={{ fontWeight: 900 }}>{p.total_restock}</td>
+                          <td style={{ fontWeight: 900 }}>{p.total_sold}</td>
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.expected_total)}</td>
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(p.net_total)}</td>
 
-                    const itemName = show(r.consignment?.item_name);
-                    const cat = show(r.consignment?.category);
-                    const img = r.consignment?.image_url ?? null;
-
-                    const isVoided = toBool(r.voided);
-                    const isPaid = toBool(r.is_paid);
-                    const busyPaid = togglingPaidId === r.id;
-
-                    return (
-                      <tr key={r.id} style={isVoided ? { opacity: 0.65 } : undefined}>
-                        <td style={{ width: 86 }}>
-                          {img ? (
-                            <img
-                              src={img}
-                              alt={itemName}
-                              style={{
-                                width: 64,
-                                height: 64,
-                                objectFit: "cover",
-                                borderRadius: 12,
-                                border: "1px solid rgba(0,0,0,0.12)",
-                              }}
-                              loading="lazy"
-                            />
-                          ) : (
-                            <div
-                              style={{
-                                width: 64,
-                                height: 64,
-                                borderRadius: 12,
-                                border: "1px dashed rgba(0,0,0,0.25)",
-                                display: "grid",
-                                placeItems: "center",
-                                fontSize: 12,
-                                opacity: 0.75,
-                              }}
-                            >
-                              No Image
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>
+                            {moneyText(p.cashout_total)}
+                            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+                              Cash: {moneyText(p.cashout_cash)} • GCash: {moneyText(p.cashout_gcash)}
                             </div>
-                          )}
-                        </td>
+                          </td>
 
-                        <td style={{ fontWeight: 900 }}>{itemName}</td>
-                        <td style={{ fontWeight: 800 }}>{cat}</td>
-                        <td>{formatPHDateTime(r.created_at)}</td>
-                        <td style={{ fontWeight: 900 }}>{show(r.full_name)}</td>
-                        <td style={{ fontWeight: 900 }}>{show(r.seat_number)}</td>
-                        <td>{sizeText(r.consignment?.size)}</td>
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1100 }}>{moneyText(p.remaining)}</td>
 
-                        <td style={{ fontWeight: 900 }}>{qty}</td>
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{moneyText(price)}</td>
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(total)}</td>
+                          <td>
+                            <div className="action-stack" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <button className="receipt-btn" onClick={() => openCashout(p)} disabled={p.remaining <= 0} title={p.remaining <= 0 ? "No remaining" : "Cash out"}>
+                                Cash Out
+                              </button>
 
-                        <td>
-                          <div className="cell-stack cell-center">
-                            <span className="cell-strong">
-                              GCash {moneyText(gcash)} / Cash {moneyText(cash)}
-                            </span>
-
-                            <button
-                              className="receipt-btn"
-                              onClick={() => openPaymentModal(r)}
-                              disabled={isVoided || total <= 0}
-                              title={isVoided ? "Voided" : "Set Cash & GCash freely (no limit)"}
-                            >
-                              Payment
-                            </button>
-                          </div>
-                        </td>
-
-                        <td>
-                          <button
-                            className={`receipt-btn pay-badge ${isPaid ? "pay-badge--paid" : "pay-badge--unpaid"}`}
-                            onClick={() => void togglePaid(r)}
-                            disabled={busyPaid || isVoided}
-                            title={isVoided ? "Voided" : isPaid ? "Tap to set UNPAID" : "Tap to set PAID"}
-                          >
-                            {busyPaid ? "Updating..." : isPaid ? "PAID" : "UNPAID"}
-                          </button>
-                        </td>
-
-                        <td>
-                          <div className="action-stack">
-                            <button className="receipt-btn" onClick={() => openReceipt(r)}>
-                              View Receipt
-                            </button>
-
-                            <button
-                              className="receipt-btn"
-                              onClick={() => openVoid(r)}
-                              disabled={isVoided}
-                              title={isVoided ? "Already voided" : "Void (returns stock)"}
-                            >
-                              Void
-                            </button>
-
-                            <button
-                              className="receipt-btn"
-                              onClick={() => openDelete(r)}
-                              title="Delete this record from database"
-                              disabled={deleting}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* ✅ DELETE CONFIRM MODAL */}
-          {deleteTarget && (
-            <div className="receipt-overlay" onClick={() => (deleting ? null : setDeleteTarget(null))}>
-              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <h3 className="receipt-title">DELETE RECORD</h3>
-                <p className="receipt-subtitle">
-                  {show(deleteTarget.consignment?.item_name)} • Qty: <b>{deleteTarget.quantity}</b> • Seat:{" "}
-                  <b>{show(deleteTarget.seat_number)}</b>
-                </p>
-
-                <hr />
-
-                <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.4 }}>
-                  This will permanently remove the record from <b>customer_session_consignment</b>.
-                  <br />
-                  {toBool(deleteTarget.voided) ? (
-                    <>
-                      Status: <b>VOIDED</b> (safe to delete)
-                    </>
-                  ) : (
-                    <>
-                      Status: <b>NOT VOIDED</b> — recommended: <b>Void first</b> so stock is returned.
-                    </>
-                  )}
-                </div>
-
-                <div className="modal-actions" style={{ marginTop: 16 }}>
-                  <button className="receipt-btn" onClick={() => setDeleteTarget(null)} disabled={deleting}>
-                    Cancel
-                  </button>
-                  <button className="receipt-btn" onClick={() => void confirmDelete()} disabled={deleting}>
-                    {deleting ? "Deleting..." : "Confirm Delete"}
-                  </button>
-                </div>
+                              <button
+                                className="receipt-btn"
+                                onClick={() => openHistory(p)}
+                                disabled={!hasHistory}
+                                title={!hasHistory ? "No history" : "View history"}
+                                style={{ opacity: !hasHistory ? 0.7 : 1 }}
+                              >
+                                History
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            </div>
+
+              {/* DETAILS TABLE */}
+              <div className="customer-table-wrap">
+                <table className="customer-table">
+                  <thead>
+                    <tr>
+                      <th>Image</th>
+                      <th>Item Name</th>
+                      <th>Date/Time (PH)</th>
+                      <th>Full Name</th>
+                      <th>Category</th>
+                      <th>Size</th>
+                      <th>Price</th>
+                      <th>Restock</th>
+                      <th>Stock</th>
+                      <th>Sold</th>
+                      <th>Expected Sales</th>
+                      <th>Overall Sales</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {filteredRows.map((r) => {
+                      const price = round2(toNumber(r.price));
+                      const rest = Number(r.restocked ?? 0) || 0;
+                      const sold = Number(r.sold ?? 0) || 0;
+                      const stocks = Number(r.stocks ?? 0) || 0;
+
+                      const expected = round2(toNumber(r.expected_sales));
+                      const gross = round2(toNumber(r.overall_sales));
+                      const netOverall = grossToNet(gross);
+
+                      return (
+                        <tr key={r.id}>
+                          <td style={{ width: 86 }}>
+                            {r.image_url ? (
+                              <img
+                                src={r.image_url}
+                                alt={r.item_name}
+                                style={{
+                                  width: 64,
+                                  height: 64,
+                                  objectFit: "cover",
+                                  borderRadius: 12,
+                                  border: "1px solid rgba(0,0,0,0.12)",
+                                }}
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  width: 64,
+                                  height: 64,
+                                  borderRadius: 12,
+                                  border: "1px dashed rgba(0,0,0,0.25)",
+                                  display: "grid",
+                                  placeItems: "center",
+                                  fontSize: 12,
+                                  opacity: 0.75,
+                                }}
+                              >
+                                No Image
+                              </div>
+                            )}
+                          </td>
+
+                          <td style={{ fontWeight: 900 }}>{r.item_name || "-"}</td>
+                          <td>{formatPHDateTime(r.created_at)}</td>
+                          <td style={{ fontWeight: 900 }}>{show(r.full_name)}</td>
+                          <td style={{ fontWeight: 900 }}>{show(r.category)}</td>
+                          <td>{sizeText(r.size)}</td>
+
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 900 }}>{moneyText(price)}</td>
+                          <td style={{ fontWeight: 900 }}>{rest}</td>
+                          <td style={{ fontWeight: 900 }}>{stocks}</td>
+                          <td style={{ fontWeight: 900 }}>{sold}</td>
+
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(expected)}</td>
+                          <td style={{ whiteSpace: "nowrap", fontWeight: 1000 }}>{moneyText(netOverall)}</td>
+
+                          <td>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              {/* ✅ EDIT REMOVED */}
+
+                              <button className="receipt-btn" onClick={() => openRestock(r)}>
+                                Restock
+                              </button>
+
+                              {/* ✅ DELETE -> CANCEL */}
+                              <button className="receipt-btn" onClick={() => openCancel(r)} style={{ opacity: 0.95 }}>
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
-          {/* ✅ PAYMENT MODAL (NO LIMIT) */}
-          {paymentTarget && (
-            <div className="receipt-overlay" onClick={() => (savingPayment ? null : setPaymentTarget(null))}>
+          {/* ✅ HISTORY MODAL (read-only) */}
+          {historyTargetKey && (
+            <div className="receipt-overlay" onClick={() => setHistoryTargetKey(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <h3 className="receipt-title">PAYMENT</h3>
+                <h3 className="receipt-title">HISTORY</h3>
                 <p className="receipt-subtitle">
-                  {paymentTarget.full_name} • Seat {paymentTarget.seat_number}
+                  {groupBy === "category" ? "Category: " : "Full Name: "}
+                  {historyTargetLabel}
                 </p>
 
                 <hr />
 
                 {(() => {
-                  const due = round2(Math.max(0, paymentTarget.grand_total));
+                  const p = perKeyAggAll.find((x) => x.key === historyTargetKey);
 
-                  const g = round2(Math.max(0, toNumber(gcashInput)));
-                  const c = round2(Math.max(0, toNumber(cashInput)));
-                  const totalPaid = round2(g + c);
+                  const gross = round2(p?.gross_total ?? 0);
+                  const net = grossToNet(gross);
 
-                  const diff = round2(totalPaid - due);
-                  const isPaidAuto = due <= 0 ? true : totalPaid >= due;
-
-                  return (
-                    <>
-                      <div className="receipt-row">
-                        <span>Payment Due</span>
-                        <span>{moneyText(due)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>GCash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={gcashInput}
-                          onChange={(e) => setGcashInput(e.currentTarget.value)}
-                          disabled={savingPayment}
-                        />
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Cash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={cashInput}
-                          onChange={(e) => setCashInput(e.currentTarget.value)}
-                          disabled={savingPayment}
-                        />
-                      </div>
-
-                      <hr />
-
-                      <div className="receipt-row">
-                        <span>Total Paid</span>
-                        <span>{moneyText(totalPaid)}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>{diff >= 0 ? "Change" : "Remaining"}</span>
-                        <span>{moneyText(Math.abs(diff))}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Auto Status</span>
-                        <span className="receipt-status">{isPaidAuto ? "PAID" : "UNPAID"}</span>
-                      </div>
-
-                      <div className="modal-actions">
-                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} disabled={savingPayment}>
-                          Cancel
-                        </button>
-                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment}>
-                          {savingPayment ? "Saving..." : "Save"}
-                        </button>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
-
-          {/* ✅ RECEIPT MODAL */}
-          {selectedOrder && (
-            <div className="receipt-overlay" onClick={() => setSelectedOrder(null)}>
-              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
-
-                <h3 className="receipt-title">ME TYME LOUNGE</h3>
-                <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
-
-                <hr />
-
-                <div className="receipt-row">
-                  <span>Date</span>
-                  <span>{formatPHDateTime(selectedOrder.created_at)}</span>
-                </div>
-
-                <div className="receipt-row">
-                  <span>Customer</span>
-                  <span>{selectedOrder.full_name}</span>
-                </div>
-
-                <div className="receipt-row">
-                  <span>Seat</span>
-                  <span>{selectedOrder.seat_number}</span>
-                </div>
-
-                <hr />
-
-                <div className="items-receipt">
-                  {selectedOrder.items.map((it) => (
-                    <div className="receipt-item-row" key={it.id}>
-                      <div className="receipt-item-left">
-                        <div className="receipt-item-title">
-                          {it.item_name}{" "}
-                          <span className="item-cat">
-                            ({it.category}
-                            {String(it.size ?? "").trim() ? ` • ${sizeText(it.size)}` : ""})
-                          </span>
-                        </div>
-                        <div className="receipt-item-sub">
-                          {it.quantity} × {moneyText(it.price)}
-                        </div>
-                      </div>
-                      <div className="receipt-item-total">{moneyText(it.total)}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <hr />
-
-                {(() => {
-                  const due = round2(Math.max(0, selectedOrder.grand_total));
-                  const gcash = round2(Math.max(0, selectedOrder.gcash_amount));
-                  const cash = round2(Math.max(0, selectedOrder.cash_amount));
-                  const totalPaid = round2(gcash + cash);
-                  const diff = round2(totalPaid - due);
-
-                  const paid = toBool(selectedOrder.is_paid);
-                  const isVoided = selectedOrder.is_voided;
+                  const remaining = round2(p?.remaining ?? 0);
+                  const cash = round2(p?.cashout_cash ?? 0);
+                  const gcash = round2(p?.cashout_gcash ?? 0);
+                  const totalCashouts = round2(p?.cashout_total ?? 0);
+                  const expected = round2(p?.expected_total ?? 0);
 
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>Total</span>
-                        <span>{moneyText(due)}</span>
+                        <span>Expected Total</span>
+                        <span>{moneyText(expected)}</span>
                       </div>
 
-                      <hr />
+                      <div className="receipt-row">
+                        <span>Overall Sales (NET)</span>
+                        <span>{moneyText(net)}</span>
+                      </div>
 
                       <div className="receipt-row">
-                        <span>GCash</span>
+                        <span>Cash Outs (Total)</span>
+                        <span>{moneyText(totalCashouts)}</span>
+                      </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ Cash</span>
+                        <span>{moneyText(cash)}</span>
+                      </div>
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ GCash</span>
                         <span>{moneyText(gcash)}</span>
                       </div>
 
                       <div className="receipt-row">
-                        <span>Cash</span>
-                        <span>{moneyText(cash)}</span>
+                        <span>Remaining</span>
+                        <span style={{ fontWeight: 1000 }}>{moneyText(remaining)}</span>
                       </div>
 
-                      <div className="receipt-row">
-                        <span>Total Paid</span>
-                        <span>{moneyText(totalPaid)}</span>
+                      <hr />
+
+                      <div style={{ marginTop: 6, fontWeight: 900 }}>Cash Out History (all time)</div>
+
+                      <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                        {historyForTarget.length === 0 ? (
+                          <div style={{ opacity: 0.8, fontSize: 13 }}>No cash outs yet.</div>
+                        ) : (
+                          historyForTarget.map((h) => (
+                            <div
+                              key={h.id}
+                              style={{
+                                border: "1px solid rgba(0,0,0,0.10)",
+                                borderRadius: 12,
+                                padding: 10,
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 10,
+                                alignItems: "flex-start",
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontWeight: 1000 }}>
+                                  {formatPHDateTime(h.created_at)} • {labelPay(h.payment_method)}
+                                </div>
+                                {h.note ? <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>{h.note}</div> : null}
+                              </div>
+
+                              <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>{moneyText(round2(toNumber(h.cashout_amount)))}</div>
+                            </div>
+                          ))
+                        )}
                       </div>
 
-                      <div className="receipt-row">
-                        <span>{diff >= 0 ? "Change" : "Remaining"}</span>
-                        <span>{moneyText(Math.abs(diff))}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Status</span>
-                        <span className="receipt-status">{isVoided ? "VOIDED" : paid ? "PAID" : "UNPAID"}</span>
-                      </div>
-
-                      {paid && !isVoided && (
-                        <div className="receipt-row">
-                          <span>Paid at</span>
-                          <span>{selectedOrder.paid_at ? formatPHDateTime(selectedOrder.paid_at) : "-"}</span>
-                        </div>
-                      )}
-
-                      {isVoided && (
-                        <>
-                          <div className="receipt-row">
-                            <span>Voided at</span>
-                            <span>{selectedOrder.voided_at ? formatPHDateTime(selectedOrder.voided_at) : "-"}</span>
-                          </div>
-                          <div className="receipt-row">
-                            <span>Void note</span>
-                            <span style={{ textAlign: "right", maxWidth: 220 }}>{show(selectedOrder.void_note, "-")}</span>
-                          </div>
-                        </>
-                      )}
-
-                      <div className="receipt-total">
-                        <span>TOTAL</span>
-                        <span>{moneyText(due)}</span>
+                      <div className="modal-actions" style={{ marginTop: 16 }}>
+                        <button className="receipt-btn" onClick={() => setHistoryTargetKey(null)}>
+                          Close
+                        </button>
                       </div>
                     </>
                   );
                 })()}
-
-                <p className="receipt-footer">
-                  Thank you for choosing <br />
-                  <strong>Me Tyme Lounge</strong>
-                </p>
-
-                <button className="close-btn" onClick={() => setSelectedOrder(null)}>
-                  Close
-                </button>
               </div>
             </div>
           )}
 
-          {/* ✅ VOID MODAL */}
-          {voidTarget && (
-            <div className="receipt-overlay" onClick={() => (voiding ? null : setVoidTarget(null))}>
+          {/* CASH OUT MODAL */}
+          {cashoutTargetKey && (
+            <div className="receipt-overlay" onClick={() => (savingCashout ? null : setCashoutTargetKey(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <h3 className="receipt-title">VOID CONSIGNMENT</h3>
+                <h3 className="receipt-title">CASH OUT</h3>
                 <p className="receipt-subtitle">
-                  {show(voidTarget.consignment?.item_name)} • Qty: <b>{voidTarget.quantity}</b> • Seat:{" "}
-                  <b>{show(voidTarget.seat_number)}</b>
+                  {groupBy === "category" ? "Category: " : "Full Name: "}
+                  {cashoutTargetLabel}
                 </p>
 
                 <hr />
 
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 6 }}>
-                    Reason <span style={{ color: "crimson" }}>*</span>
+                {(() => {
+                  const p = perKeyAggAll.find((x) => x.key === cashoutTargetKey);
+
+                  const gross = round2(p?.gross_total ?? 0);
+                  const net = grossToNet(gross);
+
+                  const remaining = round2(p?.remaining ?? 0);
+                  const cash = round2(p?.cashout_cash ?? 0);
+                  const gcash = round2(p?.cashout_gcash ?? 0);
+                  const totalCashouts = round2(p?.cashout_total ?? 0);
+                  const expected = round2(p?.expected_total ?? 0);
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>Expected Total</span>
+                        <span>{moneyText(expected)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Overall Sales (NET)</span>
+                        <span>{moneyText(net)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash Outs (Total)</span>
+                        <span>{moneyText(totalCashouts)}</span>
+                      </div>
+
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ Cash</span>
+                        <span>{moneyText(cash)}</span>
+                      </div>
+                      <div className="receipt-row" style={{ opacity: 0.9 }}>
+                        <span> └ GCash</span>
+                        <span>{moneyText(gcash)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Remaining</span>
+                        <span style={{ fontWeight: 1000 }}>{moneyText(remaining)}</span>
+                      </div>
+
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>Cash Amount</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={cashAmount}
+                          onChange={(e) => setCashAmount(e.currentTarget.value)}
+                          placeholder="0.00"
+                          disabled={savingCashout}
+                        />
+                      </div>
+
+                      <div className="receipt-row" style={{ marginTop: 8 }}>
+                        <span>GCash Amount</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={gcashAmount}
+                          onChange={(e) => setGcashAmount(e.currentTarget.value)}
+                          placeholder="0.00"
+                          disabled={savingCashout}
+                        />
+                      </div>
+
+                      <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+                        Total Cashout: <b>{moneyText(round2((Number(cashAmount) || 0) + (Number(gcashAmount) || 0)))}</b>
+                      </div>
+
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ fontWeight: 800, marginBottom: 6 }}>Note (optional)</div>
+                        <textarea
+                          value={cashoutNote}
+                          onChange={(e) => setCashoutNote(e.currentTarget.value)}
+                          placeholder="Example: payout / release / partial cashout..."
+                          style={{
+                            width: "100%",
+                            minHeight: 90,
+                            resize: "vertical",
+                            padding: 12,
+                            borderRadius: 12,
+                            border: "1px solid rgba(0,0,0,0.15)",
+                            outline: "none",
+                            fontSize: 14,
+                          }}
+                          disabled={savingCashout}
+                        />
+                      </div>
+
+                      <div style={{ marginTop: 14, fontWeight: 900 }}>Cash Out History (all time)</div>
+                      <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                        {cashoutHistoryForTarget.length === 0 ? (
+                          <div style={{ opacity: 0.8, fontSize: 13 }}>No cash outs yet.</div>
+                        ) : (
+                          cashoutHistoryForTarget.map((h) => (
+                            <div
+                              key={h.id}
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 12,
+                                padding: 10,
+                                border: "1px solid rgba(0,0,0,0.10)",
+                                borderRadius: 12,
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontWeight: 900 }}>
+                                  {formatPHDateTime(h.created_at)} • {labelPay(h.payment_method)}
+                                </div>
+                                {h.note ? <div style={{ fontSize: 12, opacity: 0.8 }}>{h.note}</div> : null}
+                              </div>
+                              <div style={{ fontWeight: 1100, whiteSpace: "nowrap" }}>{moneyText(round2(toNumber(h.cashout_amount)))}</div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="modal-actions" style={{ marginTop: 16 }}>
+                        <button className="receipt-btn" onClick={() => setCashoutTargetKey(null)} disabled={savingCashout}>
+                          Close
+                        </button>
+                        <button className="receipt-btn" onClick={() => void submitCashout()} disabled={savingCashout}>
+                          {savingCashout ? "Saving..." : "Cash Out"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* RESTOCK MODAL */}
+          {restockTarget && (
+            <div className="receipt-overlay" onClick={() => (savingRestock ? null : setRestockTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">RESTOCK</h3>
+                <p className="receipt-subtitle">
+                  {restockTarget.item_name} • Current Restock: <b>{Math.max(0, Math.floor(Number(restockTarget.restocked ?? 0) || 0))}</b>
+                </p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Add Qty</span>
+                  <input className="money-input" type="number" min="1" step="1" value={restockQty} onChange={(e) => setRestockQty(e.currentTarget.value)} placeholder="0" disabled={savingRestock} />
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>This will create a restock RECORD and add to restocked.</div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => setRestockTarget(null)} disabled={savingRestock}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void saveRestock()} disabled={savingRestock}>
+                    {savingRestock ? "Saving..." : "Restock"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ✅ CANCEL MODAL */}
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancelling ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL ITEM</h3>
+                <p className="receipt-subtitle">
+                  Cancel <b>{cancelTarget.item_name}</b>?
+                </p>
+
+                <hr />
+
+                <div style={{ display: "grid", gap: 8, fontSize: 13, opacity: 0.95 }}>
+                  <div>
+                    Full Name: <b>{show(cancelTarget.full_name)}</b>
                   </div>
+                  <div>
+                    Category: <b>{show(cancelTarget.category)}</b>
+                  </div>
+                  <div>
+                    Restocked: <b>{Math.max(0, Math.floor(Number(cancelTarget.restocked ?? 0) || 0))}</b> • Sold:{" "}
+                    <b>{Math.max(0, Math.floor(Number(cancelTarget.sold ?? 0) || 0))}</b>
+                  </div>
+                  <div style={{ opacity: 0.85 }}>
+                    Image: <b>{cancelTarget.image_url ? "kept (archived url)" : "none"}</b>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>Note (optional)</div>
                   <textarea
-                    value={voidReason}
-                    onChange={(e) => setVoidReason(e.currentTarget.value)}
-                    placeholder="Example: wrong item / mistaken quantity / cancelled..."
+                    value={cancelNote}
+                    onChange={(e) => setCancelNote(e.currentTarget.value)}
+                    placeholder="Reason / remarks..."
                     style={{
                       width: "100%",
                       minHeight: 90,
@@ -980,31 +1197,27 @@ const Customer_Consignment_Record: React.FC = () => {
                       outline: "none",
                       fontSize: 14,
                     }}
-                    disabled={voiding}
+                    disabled={cancelling}
                   />
                 </div>
 
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-                  Note: Voiding will <b>return stock</b> by reducing <b>consignment.sold</b>.
-                </div>
-
                 <div className="modal-actions" style={{ marginTop: 16 }}>
-                  <button className="receipt-btn" onClick={() => setVoidTarget(null)} disabled={voiding}>
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancelling}>
                     Close
                   </button>
-                  <button className="receipt-btn" onClick={() => void submitVoid()} disabled={voiding}>
-                    {voiding ? "Voiding..." : "Confirm Void"}
+                  <button className="receipt-btn" onClick={() => void doCancel()} disabled={cancelling} style={{ opacity: 0.95 }}>
+                    {cancelling ? "Cancelling..." : "Confirm Cancel"}
                   </button>
                 </div>
               </div>
             </div>
           )}
 
-          {!loading && filtered.length === 0 && <IonText />}
+          {!loading && perKeyAgg.length === 0 && <IonText />}
         </div>
       </IonContent>
     </IonPage>
   );
 };
 
-export default Customer_Consignment_Record;
+export default Staff_Consignment_Record;
