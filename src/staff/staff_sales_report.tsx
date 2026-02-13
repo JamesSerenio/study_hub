@@ -23,6 +23,10 @@
 //         - within selected Manila day
 //         - not voided
 //         - sum(expense_amount)
+// ✅ NEW (YOUR REQUEST): Total Time now INCLUDES PROMO (same idea as Admin Sales Report)
+//         - promo_bookings paid within selected Manila day (paid_at preferred)
+//         - adds promo base price into Total Time amount
+//         - adds promo discount into Discount total (PAID ONLY)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -167,6 +171,18 @@ type AddOnExpenseRow = {
   expense_type: string;
   expense_amount: number | string | null;
   voided: boolean | null;
+};
+
+// ✅ promo rows for Total Time + Discount
+type PromoForTimeRow = {
+  created_at: string;
+  paid_at: string | null;
+  is_paid: boolean | null;
+  start_at: string;
+  end_at: string;
+  price: number | string | null;
+  discount_kind: string | null;
+  discount_value: number | string | null;
 };
 
 /* =========================
@@ -351,16 +367,16 @@ const computeCostWithFreeMinutes = (startIso: string, endIso: string): number =>
   return round2(chargeMinutes * perMinute);
 };
 
-const computeDiscountAmountFromTimeCost = (
-  timeCost: number,
+const computeDiscountAmountFromBaseCost = (
+  baseCost: number,
   kindRaw: string | null | undefined,
   valueRaw: number | string | null | undefined
 ): number => {
   const kind = (kindRaw ?? "none").toLowerCase().trim();
   const v = Math.max(0, toNumber(valueRaw));
 
-  if (kind === "amount") return round2(v);
-  if (kind === "percent") return round2(timeCost * (v / 100));
+  if (kind === "amount") return round2(Math.min(baseCost, v));
+  if (kind === "percent") return round2(baseCost * (Math.min(100, v) / 100));
   return 0;
 };
 
@@ -388,10 +404,10 @@ const StaffSalesReport: React.FC = () => {
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
-  // ✅ Total Time amount (₱) — PAID ONLY
+  // ✅ Total Time amount (₱) — PAID ONLY (includes PROMO now)
   const [totalTimeAmount, setTotalTimeAmount] = useState<number>(0);
 
-  // ✅ Discount total — PAID ONLY
+  // ✅ Discount total — PAID ONLY (includes PROMO now)
   const [discountPaid, setDiscountPaid] = useState<number>(0);
 
   // ✅ NEW: Inventory Loss (amount) from add_on_expenses (expense_type='inventory_loss')
@@ -681,6 +697,7 @@ const StaffSalesReport: React.FC = () => {
 
   /**
    * ✅ TOTAL TIME AMOUNT + DISCOUNT (PAID ONLY)
+   * ✅ NOW INCLUDES PROMO (PAID ONLY)
    */
   const loadTimeAndDiscountPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -690,6 +707,10 @@ const StaffSalesReport: React.FC = () => {
     }
 
     const nowIso = new Date().toISOString();
+
+    // Manila day range (timestamptz safe)
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
     const selectCols =
       "date,reservation,reservation_date,time_started,time_ended,hour_avail,is_paid,discount_kind,discount_value";
@@ -726,28 +747,62 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    const all: SessionForTimeRow[] = ([] as SessionForTimeRow[]).concat(
+    const allSessions: SessionForTimeRow[] = ([] as SessionForTimeRow[]).concat(
       (walkinRes.data ?? []) as SessionForTimeRow[],
       (reservRes.data ?? []) as SessionForTimeRow[]
     );
 
+    // 3) PROMO BOOKINGS (PAID only)
+    // Prefer paid_at within Manila day; fallback also include created_at within day (in case paid_at missing)
+    const promoRes = await supabase
+      .from("promo_bookings")
+      .select("created_at, paid_at, is_paid, start_at, end_at, price, discount_kind, discount_value")
+      .eq("is_paid", true)
+      .or(
+        `paid_at.gte.${start.toISOString()},paid_at.lt.${end.toISOString()},and(paid_at.is.null,created_at.gte.${start.toISOString()},created_at.lt.${end.toISOString()})`
+      );
+
+    if (promoRes.error) {
+      // eslint-disable-next-line no-console
+      console.error("promo time/discount query error:", promoRes.error.message);
+      setTotalTimeAmount(0);
+      setDiscountPaid(0);
+      return;
+    }
+
+    const promoRows = (promoRes.data ?? []) as PromoForTimeRow[];
+
     let timeSum = 0;
     let discountSum = 0;
 
-    for (const s of all) {
+    // Sessions: compute time cost based on time consumed
+    for (const s of allSessions) {
       if (!s.is_paid) continue;
 
-      const start = String(s.time_started ?? "").trim();
-      if (!start) continue;
+      const startIso = String(s.time_started ?? "").trim();
+      if (!startIso) continue;
 
       const open = isOpenTimeSession(s.hour_avail, s.time_ended);
-      const end = open ? nowIso : String(s.time_ended ?? "").trim();
-      if (!end) continue;
+      const endIso = open ? nowIso : String(s.time_ended ?? "").trim();
+      if (!endIso) continue;
 
-      const timeCost = computeCostWithFreeMinutes(start, end);
+      const timeCost = computeCostWithFreeMinutes(startIso, endIso);
       timeSum += timeCost;
 
-      const dAmt = computeDiscountAmountFromTimeCost(timeCost, s.discount_kind, s.discount_value);
+      const dAmt = computeDiscountAmountFromBaseCost(timeCost, s.discount_kind, s.discount_value);
+      discountSum += dAmt;
+    }
+
+    // Promo: include promo base price as "Total Time" contribution, and promo discount as discount total
+    for (const p of promoRows) {
+      if (!p.is_paid) continue;
+
+      const base = round2(Math.max(0, toNumber(p.price)));
+      if (base <= 0) continue;
+
+      timeSum += base;
+
+      const dAmt = computeDiscountAmountFromBaseCost(base, p.discount_kind, p.discount_value);
       discountSum += dAmt;
     }
 
@@ -948,8 +1003,8 @@ const StaffSalesReport: React.FC = () => {
         void loadConsignment(selectedDate);
         void loadAddonsPaid(selectedDate);
         void loadCashOutsTotal(selectedDate);
-        void loadTimeAndDiscountPaid(selectedDate);
-        void loadInventoryLossAmount(selectedDate); // ✅ NEW
+        void loadTimeAndDiscountPaid(selectedDate); // ✅ includes PROMO now
+        void loadInventoryLossAmount(selectedDate);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1014,6 +1069,7 @@ const StaffSalesReport: React.FC = () => {
   /**
    * ✅ Sales System (computed)
    * add-ons + total time (PAID ONLY) + consignment NET - discount (PAID ONLY)
+   * (total time includes PROMO now)
    */
   const salesSystemComputed = addons + totalTimeAmount + consignment.net - discount;
 
