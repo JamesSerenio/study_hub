@@ -2,6 +2,9 @@
 // ✅ ADMIN = SAME UI/FUNCTIONS as Customer_Cancelled (Add-Ons / Walk-in / Reservation / Promo)
 // ✅ Admin ONLY extras: Delete by Date (ALL tabs) + Export Excel (ALL tabs)
 // ✅ Promo tab works WITHOUT FK (3-query merge: promo_bookings_cancelled + packages + package_options)
+// ✅ NEW: Consignment tab (consignment_cancelled) + grouped view + receipt modal
+// ✅ Delete by Date includes Consignment
+// ✅ Export Excel includes Consignment + summary
 // ✅ STRICT TS (no any)
 // ✅ ExcelJS clearRow TS-safe (no undefined for border/fill)
 
@@ -269,6 +272,112 @@ type CancelledPromo = {
 };
 
 /* =========================
+   TYPES (Consignment Cancelled)
+========================= */
+type ConsignmentCancelledDB = {
+  id: string;
+  cancelled_at: string;
+  cancelled_by: string;
+  original_id: string;
+  original_created_at: string | null;
+
+  consignment_id: string;
+  quantity: number;
+  price: NumericLike;
+  total: NumericLike;
+
+  full_name: string;
+  seat_number: string;
+
+  gcash_amount: NumericLike;
+  cash_amount: NumericLike;
+  is_paid: boolean | number | string | null;
+  paid_at: string | null;
+
+  was_voided: boolean | number | string | null;
+  voided_at: string | null;
+  void_note: string | null;
+
+  item_name: string;
+  category: string | null;
+  size: string | null;
+  image_url: string | null;
+
+  cancel_note: string;
+
+  stock_returned: boolean | number | string | null;
+};
+
+type CancelItemConsignment = {
+  id: string;
+  cancelled_at: string;
+  original_id: string;
+  original_created_at: string | null;
+
+  consignment_id: string;
+  item_name: string;
+  category: string;
+  size: string | null;
+  image_url: string | null;
+
+  quantity: number;
+  price: number;
+  total: number;
+
+  full_name: string;
+  seat_number: string;
+
+  gcash_amount: number;
+  cash_amount: number;
+  is_paid: boolean;
+  paid_at: string | null;
+
+  was_voided: boolean;
+  voided_at: string | null;
+  void_note: string | null;
+
+  cancel_note: string;
+  stock_returned: boolean;
+};
+
+type CancelGroupItemConsignment = {
+  id: string;
+  original_id: string;
+  consignment_id: string;
+
+  item_name: string;
+  category: string;
+  size: string | null;
+
+  quantity: number;
+  price: number;
+  total: number;
+};
+
+type CancelGroupConsignment = {
+  key: string;
+  cancelled_at: string;
+  full_name: string;
+  seat_number: string;
+
+  cancel_note: string;
+
+  items: CancelGroupItemConsignment[];
+  grand_total: number;
+
+  gcash_amount: number;
+  cash_amount: number;
+  is_paid: boolean;
+  paid_at: string | null;
+
+  was_voided: boolean;
+  voided_at: string | null;
+  void_note: string | null;
+
+  stock_returned: boolean;
+};
+
+/* =========================
    HELPERS
 ========================= */
 const toNumber = (v: NumericLike | null | undefined): number => {
@@ -423,20 +532,22 @@ const GROUP_WINDOW_MS = 10_000;
 /* =========================
    COMPONENT
 ========================= */
-type CancelTab = "addons" | "walkin" | "reservation" | "promo";
+type CancelTab = "addons" | "walkin" | "reservation" | "promo" | "consignment";
 
 const TAB_LABEL: Record<CancelTab, string> = {
   addons: "Add-Ons",
   walkin: "Walk-in",
   reservation: "Reservation",
   promo: "Promo (Membership)",
+  consignment: "Consignment",
 };
 
 const tabTitleFrom = (tab: CancelTab): string => {
   if (tab === "addons") return "Cancelled Add-Ons";
   if (tab === "walkin") return "Cancelled Walk-in";
   if (tab === "reservation") return "Cancelled Reservation";
-  return "Cancelled Promo Membership";
+  if (tab === "promo") return "Cancelled Promo Membership";
+  return "Cancelled Consignment";
 };
 
 const Admin_Customer_Cancelled: React.FC = () => {
@@ -455,6 +566,10 @@ const Admin_Customer_Cancelled: React.FC = () => {
   // Promo
   const [rowsPromo, setRowsPromo] = useState<CancelledPromo[]>([]);
   const [selectedPromo, setSelectedPromo] = useState<CancelledPromo | null>(null);
+
+  // Consignment
+  const [rowsConsignment, setRowsConsignment] = useState<CancelItemConsignment[]>([]);
+  const [selectedGroupConsignment, setSelectedGroupConsignment] = useState<CancelGroupConsignment | null>(null);
 
   // Admin actions
   const [confirmDeleteDate, setConfirmDeleteDate] = useState<boolean>(false);
@@ -475,11 +590,13 @@ const Admin_Customer_Cancelled: React.FC = () => {
     setSelectedGroupAddOns(null);
     setSelectedSession(null);
     setSelectedPromo(null);
+    setSelectedGroupConsignment(null);
 
     if (tab === "addons") await fetchCancelledAddOns(selectedDate);
     else if (tab === "walkin") await fetchCancelledSessions(selectedDate, "no");
     else if (tab === "reservation") await fetchCancelledSessions(selectedDate, "yes");
-    else await fetchCancelledPromo(selectedDate);
+    else if (tab === "promo") await fetchCancelledPromo(selectedDate);
+    else await fetchCancelledConsignment(selectedDate);
   };
 
   /* =========================
@@ -547,6 +664,84 @@ const Admin_Customer_Cancelled: React.FC = () => {
 
     return groups.sort((a, b) => ms(b.cancelled_at) - ms(a.cancelled_at));
   }, [rowsAddOns]);
+
+  /* =========================
+     GROUP (Consignment)
+  ========================= */
+  const groupedConsignment = useMemo<CancelGroupConsignment[]>(() => {
+    if (rowsConsignment.length === 0) return [];
+
+    const sorted = [...rowsConsignment].sort((a, b) => ms(a.cancelled_at) - ms(b.cancelled_at));
+
+    const groups: CancelGroupConsignment[] = [];
+    let current: CancelGroupConsignment | null = null;
+    let last: CancelItemConsignment | null = null;
+
+    const sameKey = (a: CancelItemConsignment, b: CancelItemConsignment): boolean =>
+      norm(a.full_name) === norm(b.full_name) &&
+      norm(a.seat_number) === norm(b.seat_number) &&
+      norm(a.cancel_note) === norm(b.cancel_note);
+
+    for (const r of sorted) {
+      const startNew =
+        current === null ||
+        last === null ||
+        !sameKey(r, last) ||
+        Math.abs(ms(r.cancelled_at) - ms(last.cancelled_at)) > GROUP_WINDOW_MS;
+
+      if (startNew) {
+        const key = `${norm(r.full_name)}|${norm(r.seat_number)}|${ms(r.cancelled_at)}|${norm(r.cancel_note)}`;
+        current = {
+          key,
+          cancelled_at: r.cancelled_at,
+          full_name: r.full_name,
+          seat_number: r.seat_number,
+          cancel_note: r.cancel_note || "-",
+          items: [],
+          grand_total: 0,
+          gcash_amount: 0,
+          cash_amount: 0,
+          is_paid: false,
+          paid_at: null,
+          was_voided: false,
+          voided_at: null,
+          void_note: null,
+          stock_returned: false,
+        };
+        groups.push(current);
+      }
+
+      if (!current) continue;
+
+      current.items.push({
+        id: r.id,
+        original_id: r.original_id,
+        consignment_id: r.consignment_id,
+        item_name: r.item_name,
+        category: r.category,
+        size: r.size,
+        quantity: r.quantity,
+        price: r.price,
+        total: r.total,
+      });
+
+      current.grand_total = round2(current.grand_total + r.total);
+      current.gcash_amount = round2(current.gcash_amount + r.gcash_amount);
+      current.cash_amount = round2(current.cash_amount + r.cash_amount);
+      current.is_paid = current.is_paid || r.is_paid;
+      current.paid_at = current.paid_at ?? r.paid_at;
+
+      current.was_voided = current.was_voided || r.was_voided;
+      current.voided_at = current.voided_at ?? r.voided_at;
+      current.void_note = current.void_note ?? r.void_note;
+
+      current.stock_returned = current.stock_returned || r.stock_returned;
+
+      last = r;
+    }
+
+    return groups.sort((a, b) => ms(b.cancelled_at) - ms(a.cancelled_at));
+  }, [rowsConsignment]);
 
   /* =========================
      FETCH: ADD-ONS CANCELLED
@@ -866,6 +1061,101 @@ const Admin_Customer_Cancelled: React.FC = () => {
   };
 
   /* =========================
+     FETCH: CONSIGNMENT CANCELLED
+  ========================= */
+  const fetchCancelledConsignment = async (dateStr: string): Promise<void> => {
+    setLoading(true);
+    const { startIso, endIso } = manilaDayRange(dateStr);
+
+    const { data, error } = await supabase
+      .from("consignment_cancelled")
+      .select(
+        `
+        id,
+        cancelled_at,
+        cancelled_by,
+        original_id,
+        original_created_at,
+        consignment_id,
+        quantity,
+        price,
+        total,
+        full_name,
+        seat_number,
+        gcash_amount,
+        cash_amount,
+        is_paid,
+        paid_at,
+        was_voided,
+        voided_at,
+        void_note,
+        item_name,
+        category,
+        size,
+        image_url,
+        cancel_note,
+        stock_returned
+      `
+      )
+      .gte("cancelled_at", startIso)
+      .lt("cancelled_at", endIso)
+      .order("cancelled_at", { ascending: true })
+      .returns<ConsignmentCancelledDB[]>();
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error("FETCH CONSIGNMENT CANCELLED ERROR:", error);
+      setRowsConsignment([]);
+      setLoading(false);
+      return;
+    }
+
+    const mapped: CancelItemConsignment[] = (data ?? []).map((r) => {
+      const qty = Math.max(0, Math.floor(Number(r.quantity) || 0));
+      const price = round2(Math.max(0, toNumber(r.price)));
+      const total = round2(Math.max(0, toNumber(r.total)));
+
+      // if total is 0 but qty/price exist, compute fallback
+      const fixedTotal = total > 0 ? total : round2(qty * price);
+
+      return {
+        id: r.id,
+        cancelled_at: r.cancelled_at,
+        original_id: r.original_id,
+        original_created_at: r.original_created_at ?? null,
+
+        consignment_id: r.consignment_id,
+        item_name: String(r.item_name ?? "-"),
+        category: String(r.category ?? "-") || "-",
+        size: r.size ?? null,
+        image_url: r.image_url ?? null,
+
+        quantity: qty,
+        price,
+        total: fixedTotal,
+
+        full_name: String(r.full_name ?? "-"),
+        seat_number: String(r.seat_number ?? "-"),
+
+        gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
+        cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
+        is_paid: toBool(r.is_paid),
+        paid_at: r.paid_at ?? null,
+
+        was_voided: toBool(r.was_voided),
+        voided_at: r.voided_at ?? null,
+        void_note: r.void_note ?? null,
+
+        cancel_note: String(r.cancel_note ?? "").trim() || "-",
+        stock_returned: toBool(r.stock_returned),
+      };
+    });
+
+    setRowsConsignment(mapped);
+    setLoading(false);
+  };
+
+  /* =========================
      ADMIN: DELETE BY DATE (ALL TABLES)
   ========================= */
   const deleteByDateAll = async (): Promise<void> => {
@@ -903,6 +1193,16 @@ const Admin_Customer_Cancelled: React.FC = () => {
         return;
       }
 
+      const { error: e4 } = await supabase
+        .from("consignment_cancelled")
+        .delete()
+        .gte("cancelled_at", startIso)
+        .lt("cancelled_at", endIso);
+      if (e4) {
+        alert(`Delete Consignment by date failed: ${e4.message}`);
+        return;
+      }
+
       setConfirmDeleteDate(false);
       await refresh();
     } catch (err) {
@@ -922,8 +1222,8 @@ const Admin_Customer_Cancelled: React.FC = () => {
       setBusyExport(true);
       const { startIso, endIso } = manilaDayRange(selectedDate);
 
-      // ====== Pull all 3 datasets for selectedDate
-      const [addRes, walkRes, resRes, promoRes] = await Promise.all([
+      // ====== Pull all datasets for selectedDate
+      const [addRes, walkRes, resRes, promoRes, conRes] = await Promise.all([
         supabase
           .from("customer_session_add_ons_cancelled")
           .select(
@@ -1070,12 +1370,48 @@ const Admin_Customer_Cancelled: React.FC = () => {
           .lt("cancelled_at", endIso)
           .order("cancelled_at", { ascending: false })
           .returns<CancelledPromoDB[]>(),
+
+        supabase
+          .from("consignment_cancelled")
+          .select(
+            `
+            id,
+            cancelled_at,
+            cancelled_by,
+            original_id,
+            original_created_at,
+            consignment_id,
+            quantity,
+            price,
+            total,
+            full_name,
+            seat_number,
+            gcash_amount,
+            cash_amount,
+            is_paid,
+            paid_at,
+            was_voided,
+            voided_at,
+            void_note,
+            item_name,
+            category,
+            size,
+            image_url,
+            cancel_note,
+            stock_returned
+          `
+          )
+          .gte("cancelled_at", startIso)
+          .lt("cancelled_at", endIso)
+          .order("cancelled_at", { ascending: true })
+          .returns<ConsignmentCancelledDB[]>(),
       ]);
 
       if (addRes.error) throw addRes.error;
       if (walkRes.error) throw walkRes.error;
       if (resRes.error) throw resRes.error;
       if (promoRes.error) throw promoRes.error;
+      if (conRes.error) throw conRes.error;
 
       // ====== Map Add-ons
       const addMapped: CancelItemAddOn[] = (addRes.data ?? []).map((r) => {
@@ -1269,6 +1605,114 @@ const Admin_Customer_Cancelled: React.FC = () => {
         });
       }
 
+      // ====== Map consignment + group
+      const conMapped: CancelItemConsignment[] = (conRes.data ?? []).map((r) => {
+        const qty = Math.max(0, Math.floor(Number(r.quantity) || 0));
+        const price = round2(Math.max(0, toNumber(r.price)));
+        const total = round2(Math.max(0, toNumber(r.total)));
+        const fixedTotal = total > 0 ? total : round2(qty * price);
+
+        return {
+          id: r.id,
+          cancelled_at: r.cancelled_at,
+          original_id: r.original_id,
+          original_created_at: r.original_created_at ?? null,
+          consignment_id: r.consignment_id,
+          item_name: String(r.item_name ?? "-"),
+          category: String(r.category ?? "-") || "-",
+          size: r.size ?? null,
+          image_url: r.image_url ?? null,
+          quantity: qty,
+          price,
+          total: fixedTotal,
+          full_name: String(r.full_name ?? "-"),
+          seat_number: String(r.seat_number ?? "-"),
+          gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount))),
+          cash_amount: round2(Math.max(0, toNumber(r.cash_amount))),
+          is_paid: toBool(r.is_paid),
+          paid_at: r.paid_at ?? null,
+          was_voided: toBool(r.was_voided),
+          voided_at: r.voided_at ?? null,
+          void_note: r.void_note ?? null,
+          cancel_note: String(r.cancel_note ?? "").trim() || "-",
+          stock_returned: toBool(r.stock_returned),
+        };
+      });
+
+      const conGroups: CancelGroupConsignment[] = (() => {
+        if (conMapped.length === 0) return [];
+        const sorted = [...conMapped].sort((a, b) => ms(a.cancelled_at) - ms(b.cancelled_at));
+
+        const groups: CancelGroupConsignment[] = [];
+        let current: CancelGroupConsignment | null = null;
+        let last: CancelItemConsignment | null = null;
+
+        const sameKey = (a: CancelItemConsignment, b: CancelItemConsignment): boolean =>
+          norm(a.full_name) === norm(b.full_name) &&
+          norm(a.seat_number) === norm(b.seat_number) &&
+          norm(a.cancel_note) === norm(b.cancel_note);
+
+        for (const r of sorted) {
+          const startNew =
+            current === null ||
+            last === null ||
+            !sameKey(r, last) ||
+            Math.abs(ms(r.cancelled_at) - ms(last.cancelled_at)) > GROUP_WINDOW_MS;
+
+          if (startNew) {
+            const key = `${norm(r.full_name)}|${norm(r.seat_number)}|${ms(r.cancelled_at)}|${norm(r.cancel_note)}`;
+            current = {
+              key,
+              cancelled_at: r.cancelled_at,
+              full_name: r.full_name,
+              seat_number: r.seat_number,
+              cancel_note: r.cancel_note || "-",
+              items: [],
+              grand_total: 0,
+              gcash_amount: 0,
+              cash_amount: 0,
+              is_paid: false,
+              paid_at: null,
+              was_voided: false,
+              voided_at: null,
+              void_note: null,
+              stock_returned: false,
+            };
+            groups.push(current);
+          }
+
+          if (!current) continue;
+
+          current.items.push({
+            id: r.id,
+            original_id: r.original_id,
+            consignment_id: r.consignment_id,
+            item_name: r.item_name,
+            category: r.category,
+            size: r.size,
+            quantity: r.quantity,
+            price: r.price,
+            total: r.total,
+          });
+
+          current.grand_total = round2(current.grand_total + r.total);
+          current.gcash_amount = round2(current.gcash_amount + r.gcash_amount);
+          current.cash_amount = round2(current.cash_amount + r.cash_amount);
+          current.is_paid = current.is_paid || r.is_paid;
+          current.paid_at = current.paid_at ?? r.paid_at;
+
+          current.was_voided = current.was_voided || r.was_voided;
+          current.voided_at = current.voided_at ?? r.voided_at;
+          current.void_note = current.void_note ?? r.void_note;
+
+          current.stock_returned = current.stock_returned || r.stock_returned;
+
+          last = r;
+        }
+
+        return groups.sort((a, b) => ms(b.cancelled_at) - ms(a.cancelled_at));
+      })();
+
       // ====== Build workbook
       const wb = new ExcelJS.Workbook();
       wb.creator = "Me Tyme Lounge";
@@ -1280,7 +1724,6 @@ const Admin_Customer_Cancelled: React.FC = () => {
         views: [{ state: "frozen", ySplit: 5 }],
       });
 
-      ws.columns = Array.from({ length: 18 }, () => ({ width: 18 }));
       ws.columns = [
         { width: 22 }, // 1
         { width: 14 }, // 2
@@ -1596,6 +2039,61 @@ const Admin_Customer_Cancelled: React.FC = () => {
       for (let c = 11; c <= 18; c++) setCell(r, c, "", { fill: "FFF9FAFB" });
       r += 2;
 
+      // ====== 5) Consignment
+      sectionTitle(r, "5) CANCELLED CONSIGNMENT (Grouped)");
+      r++;
+
+      header(r, [
+        { c: 1, label: "Cancelled At" },
+        { c: 2, label: "Full Name" },
+        { c: 3, label: "Seat" },
+        { c: 4, label: "Item" },
+        { c: 5, label: "Category" },
+        { c: 6, label: "Size" },
+        { c: 7, label: "Qty" },
+        { c: 8, label: "Price" },
+        { c: 9, label: "Total" },
+        { c: 10, label: "Paid" },
+        { c: 11, label: "Cancel Note" },
+        { c: 12, label: "Voided" },
+        { c: 13, label: "Void Note" },
+        { c: 14, label: "Stock Returned" },
+      ]);
+      r++;
+
+      let conTotal = 0;
+      let conItemCount = 0;
+
+      for (const g of conGroups) {
+        for (const it of g.items) {
+          conItemCount += 1;
+          conTotal = round2(conTotal + it.total);
+
+          setCell(r, 1, formatDateTime(g.cancelled_at));
+          setCell(r, 2, g.full_name || "-");
+          setCell(r, 3, g.seat_number || "-", { center: true });
+          setCell(r, 4, it.item_name || "-");
+          setCell(r, 5, it.category || "-");
+          setCell(r, 6, sizeText(it.size), { center: true });
+          setCell(r, 7, it.quantity, { center: true });
+          setCell(r, 8, it.price, { right: true, numFmt: "₱#,##0.00" });
+          setCell(r, 9, it.total, { right: true, numFmt: "₱#,##0.00" });
+          setCell(r, 10, g.is_paid ? "PAID" : "UNPAID", { center: true });
+          setCell(r, 11, g.cancel_note || "-");
+          setCell(r, 12, g.was_voided ? "YES" : "NO", { center: true });
+          setCell(r, 13, String(g.void_note ?? "").trim() || "—");
+          setCell(r, 14, g.stock_returned ? "YES" : "NO", { center: true });
+          for (let c = 15; c <= 18; c++) setCell(r, c, "");
+          r++;
+        }
+      }
+
+      ws.mergeCells(r, 1, r, 8);
+      setCell(r, 1, "CONSIGNMENT TOTAL", { bold: true, right: true, fill: "FFF9FAFB" });
+      setCell(r, 9, conTotal, { bold: true, right: true, fill: "FFF9FAFB", numFmt: "₱#,##0.00" });
+      for (let c = 10; c <= 18; c++) setCell(r, c, "", { fill: "FFF9FAFB" });
+      r += 2;
+
       // ====== SUMMARY
       sectionTitle(r, "SUMMARY");
       r++;
@@ -1631,9 +2129,15 @@ const Admin_Customer_Cancelled: React.FC = () => {
       for (let c = 4; c <= 18; c++) setCell(r, c, "");
       r++;
 
+      setCell(r, 1, "Consignment (items)", { bold: true });
+      setCell(r, 2, conItemCount, { center: true });
+      setCell(r, 3, conTotal, { right: true, numFmt: "₱#,##0.00" });
+      for (let c = 4; c <= 18; c++) setCell(r, c, "");
+      r++;
+
       ws.mergeCells(r, 1, r, 2);
       setCell(r, 1, "GRAND TOTAL", { bold: true, right: true, fill: "FFF3F4F6" });
-      setCell(r, 3, round2(addTotal + wTotal + resTotal + promoTotal), {
+      setCell(r, 3, round2(addTotal + wTotal + resTotal + promoTotal + conTotal), {
         bold: true,
         right: true,
         fill: "FFF3F4F6",
@@ -1661,7 +2165,15 @@ const Admin_Customer_Cancelled: React.FC = () => {
      UI
   ========================= */
   const tabTitle = tabTitleFrom(tab);
-  const countText = tab === "addons" ? groupedAddOns.length : tab === "promo" ? rowsPromo.length : rowsSessions.length;
+
+  const countText =
+    tab === "addons"
+      ? groupedAddOns.length
+      : tab === "consignment"
+      ? groupedConsignment.length
+      : tab === "promo"
+      ? rowsPromo.length
+      : rowsSessions.length;
 
   return (
     <IonPage>
@@ -1670,7 +2182,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
           isOpen={confirmDeleteDate}
           onDidDismiss={() => setConfirmDeleteDate(false)}
           header="Delete Cancelled Records"
-          message={`Delete ALL cancelled records for ${selectedDate}? (Add-Ons + Walk-in + Reservation + Promo)`}
+          message={`Delete ALL cancelled records for ${selectedDate}? (Add-Ons + Walk-in + Reservation + Promo + Consignment)`}
           buttons={[
             { text: "Cancel", role: "cancel" },
             { text: busyDelete ? "Deleting..." : "Delete", role: "destructive", handler: () => void deleteByDateAll() },
@@ -1705,6 +2217,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
                   <option value="walkin">{TAB_LABEL.walkin}</option>
                   <option value="reservation">{TAB_LABEL.reservation}</option>
                   <option value="promo">{TAB_LABEL.promo}</option>
+                  <option value="consignment">{TAB_LABEL.consignment}</option>
                 </select>
                 <span className="date-pill-icon" aria-hidden="true">
                   ▾
@@ -1913,7 +2426,7 @@ const Admin_Customer_Cancelled: React.FC = () => {
           {/* =========================
               TAB: WALK-IN / RESERVATION
           ========================= */}
-          {tab !== "addons" && tab !== "promo" && (
+          {tab !== "addons" && tab !== "promo" && tab !== "consignment" && (
             <>
               {loading ? (
                 <p className="customer-note">Loading...</p>
@@ -2349,6 +2862,190 @@ const Admin_Customer_Cancelled: React.FC = () => {
                     </p>
 
                     <button className="close-btn" onClick={() => setSelectedPromo(null)} type="button">
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* =========================
+              TAB: CONSIGNMENT
+          ========================= */}
+          {tab === "consignment" && (
+            <>
+              {loading ? (
+                <p className="customer-note">Loading...</p>
+              ) : groupedConsignment.length === 0 ? (
+                <p className="customer-note">No cancelled consignment records found for this date</p>
+              ) : (
+                <div className="customer-table-wrap" key={`${selectedDate}-consignment`}>
+                  <table className="customer-table">
+                    <thead>
+                      <tr>
+                        <th>Cancelled At</th>
+                        <th>Full Name</th>
+                        <th>Seat</th>
+                        <th>Items</th>
+                        <th>Grand Total</th>
+                        <th>Cancel Note</th>
+                        <th>Paid</th>
+                        <th>Voided</th>
+                        <th>Stock Returned</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {groupedConsignment.map((g) => (
+                        <tr key={g.key}>
+                          <td>{formatDateTime(g.cancelled_at)}</td>
+                          <td>{g.full_name || "-"}</td>
+                          <td>{g.seat_number || "-"}</td>
+
+                          <td>
+                            <div style={{ display: "grid", gap: 6, minWidth: 280 }}>
+                              {g.items.map((it) => (
+                                <div
+                                  key={it.id}
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    gap: 10,
+                                    borderBottom: "1px solid rgba(0,0,0,0.08)",
+                                    paddingBottom: 6,
+                                  }}
+                                >
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 900 }}>
+                                      {it.item_name}{" "}
+                                      <span style={{ fontWeight: 700, opacity: 0.7 }}>
+                                        ({it.category}
+                                        {String(it.size ?? "").trim() ? ` • ${sizeText(it.size)}` : ""})
+                                      </span>
+                                    </div>
+                                    <div style={{ opacity: 0.85, fontSize: 13 }}>
+                                      Qty: {it.quantity} • {moneyText(it.price)}
+                                    </div>
+                                  </div>
+                                  <div style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+
+                          <td style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(g.grand_total)}</td>
+
+                          <td style={{ minWidth: 220 }}>
+                            <div className="cancel-desc">{g.cancel_note || "-"}</div>
+                          </td>
+
+                          <td>
+                            <ReadOnlyBadge paid={g.is_paid} />
+                          </td>
+
+                          <td style={{ fontWeight: 900, textAlign: "center" }}>{g.was_voided ? "YES" : "NO"}</td>
+                          <td style={{ fontWeight: 900, textAlign: "center" }}>{g.stock_returned ? "YES" : "NO"}</td>
+
+                          <td>
+                            <div className="action-stack">
+                              <button className="receipt-btn" onClick={() => setSelectedGroupConsignment(g)} type="button">
+                                View Receipt
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* RECEIPT MODAL (CONSIGNMENT) */}
+              {selectedGroupConsignment && (
+                <div className="receipt-overlay" onClick={() => setSelectedGroupConsignment(null)}>
+                  <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                    <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+
+                    <h3 className="receipt-title">ME TYME LOUNGE</h3>
+                    <p className="receipt-subtitle">CANCELLED CONSIGNMENT RECEIPT</p>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Cancelled At</span>
+                      <span>{formatDateTime(selectedGroupConsignment.cancelled_at)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Customer</span>
+                      <span>{selectedGroupConsignment.full_name}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Seat</span>
+                      <span>{selectedGroupConsignment.seat_number}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Cancel Note</span>
+                      <span style={{ fontWeight: 800 }}>{selectedGroupConsignment.cancel_note || "-"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Status</span>
+                      <span className="receipt-status">{selectedGroupConsignment.is_paid ? "PAID" : "UNPAID"}</span>
+                    </div>
+
+                    <hr />
+
+                    {selectedGroupConsignment.items.map((it) => (
+                      <div key={it.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 900 }}>
+                            {it.item_name}{" "}
+                            <span style={{ fontWeight: 700, opacity: 0.7 }}>
+                              ({it.category}
+                              {String(it.size ?? "").trim() ? ` • ${sizeText(it.size)}` : ""})
+                            </span>
+                          </div>
+                          <div style={{ opacity: 0.8, fontSize: 13 }}>
+                            {it.quantity} × {moneyText(it.price)}
+                          </div>
+                        </div>
+                        <div style={{ fontWeight: 1000, whiteSpace: "nowrap" }}>{moneyText(it.total)}</div>
+                      </div>
+                    ))}
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Total</span>
+                      <span style={{ fontWeight: 900 }}>{moneyText(selectedGroupConsignment.grand_total)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Voided</span>
+                      <span style={{ fontWeight: 900 }}>{selectedGroupConsignment.was_voided ? "YES" : "NO"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Void Note</span>
+                      <span>{String(selectedGroupConsignment.void_note ?? "").trim() || "—"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Stock Returned</span>
+                      <span style={{ fontWeight: 900 }}>{selectedGroupConsignment.stock_returned ? "YES" : "NO"}</span>
+                    </div>
+
+                    <p className="receipt-footer">
+                      Cancelled record archived <br />
+                      <strong>Me Tyme Lounge</strong>
+                    </p>
+
+                    <button className="close-btn" onClick={() => setSelectedGroupConsignment(null)} type="button">
                       Close
                     </button>
                   </div>
