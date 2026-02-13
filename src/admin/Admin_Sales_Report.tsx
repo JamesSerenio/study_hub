@@ -2,19 +2,19 @@
 // ✅ STRICT TS, NO any
 // ✅ Admin matches Staff logic:
 //    - Cash Outs split CASH/GCASH via cash_outs.payment_method (fallback all CASH if old schema)
-//    - "Inventory Loss" = totals.expenses_amount
+//    - "Inventory Loss" = SUM(add_on_expenses.expense_amount) where expense_type='inventory_loss' AND NOT voided
+//      (Manila day range)
 //    - "Actual System" (same as staff actual)
 //    - "Sales System" (computed) = addonsPaid + totals.total_time + consignment.gross - discount
 //    - Sales Collected = Actual System - Bilin
-// ✅ FIX (your request):
-//    - Add-ons (Paid) is now based on PAYMENT amounts (gcash_amount + cash_amount) from Admin_Customer_Add_ons
+// ✅ FIX:
+//    - Add-ons (Paid) is now based on PAYMENT amounts (gcash_amount + cash_amount)
 //    - Grouped per order (same full_name+seat within 10s) and uses MAX(gcash)+MAX(cash) to avoid double counting
 // ✅ UI UPDATE:
-//    - Inventory Loss moved to BOTTOM section, placed beside "Consignment Net" (same row)
-// ✅ PDF + Excel exports still include Inventory Loss
-// ✅ CONSIGNMENT FIX (NEW):
-//    - Uses RPC: get_consignment_totals_for_day(p_date) reading customer_session_consignment (paid + not voided)
-//    - Manila date handled inside RPC (paid_at at time zone 'Asia/Manila')
+//    - Inventory Loss moved to BOTTOM section, beside "Consignment Net" (same row)
+// ✅ PDF + Excel exports include Inventory Loss
+// ✅ CONSIGNMENT FIX:
+//    - Uses RPC: get_consignment_totals_for_day(p_date)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -135,6 +135,14 @@ type AddOnPaymentRow = {
   cash_amount: number | string | null;
 };
 
+// ✅ for inventory loss sum
+type AddOnExpenseRow = {
+  created_at: string;
+  expense_type: string;
+  expense_amount: number | string | null;
+  voided: boolean | null;
+};
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -148,6 +156,8 @@ const toNumber = (v: string | number | null | undefined): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 };
+
+const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
 
 const todayYMD = (): string => {
   const d = new Date();
@@ -176,10 +186,7 @@ const getDetailValue = (ev: unknown): unknown => {
   return (detail as { value?: unknown }).value ?? null;
 };
 
-const valueToString = (v: unknown): string => {
-  if (typeof v === "string") return v;
-  return "";
-};
+const valueToString = (v: unknown): string => (typeof v === "string" ? v : "");
 
 const valueToNonNegInt = (v: unknown): number => {
   const s = valueToString(v).trim();
@@ -231,8 +238,6 @@ const buildZeroLines = (reportId: string): CashLine[] => {
 
 /* =========================
    ADD-ONS PAYMENT GROUPING
-   - same full_name + seat_number within 10 seconds = 1 order
-   - payment per order = MAX(gcash_amount) + MAX(cash_amount)
 ========================= */
 
 const GROUP_WINDOW_MS = 10_000;
@@ -253,9 +258,7 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
   let maxC = 0;
 
   const flush = (): void => {
-    const payment = Math.max(0, maxG) + Math.max(0, maxC);
-    total += payment;
-
+    total += Math.max(0, maxG) + Math.max(0, maxC);
     maxG = 0;
     maxC = 0;
   };
@@ -287,9 +290,7 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
     maxC = Math.max(maxC, c);
   }
 
-  // last group
   flush();
-
   return total;
 };
 
@@ -314,6 +315,9 @@ const AdminSalesReport: React.FC = () => {
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
+  // ✅ Inventory Loss amount (from add_on_expenses)
+  const [inventoryLossAmount, setInventoryLossAmount] = useState<number>(0);
+
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(() => ({
     open: false,
@@ -330,7 +334,10 @@ const AdminSalesReport: React.FC = () => {
   const ensureReportRow = async (dateYMD: string): Promise<void> => {
     const upsertRes = await supabase
       .from("daily_sales_reports")
-      .upsert({ report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 }, { onConflict: "report_date", ignoreDuplicates: true });
+      .upsert(
+        { report_date: dateYMD, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 },
+        { onConflict: "report_date", ignoreDuplicates: true }
+      );
 
     if (upsertRes.error) console.error("daily_sales_reports ensure(upsert) error:", upsertRes.error.message);
   };
@@ -346,6 +353,7 @@ const AdminSalesReport: React.FC = () => {
       setAddonsPaid(0);
       setCashOutsCash(0);
       setCashOutsGcash(0);
+      setInventoryLossAmount(0);
       setLoading(false);
       return;
     }
@@ -367,6 +375,7 @@ const AdminSalesReport: React.FC = () => {
       setAddonsPaid(0);
       setCashOutsCash(0);
       setCashOutsGcash(0);
+      setInventoryLossAmount(0);
       setLoading(false);
       return;
     }
@@ -376,7 +385,10 @@ const AdminSalesReport: React.FC = () => {
   };
 
   const loadCashLines = async (reportId: string): Promise<void> => {
-    const res = await supabase.from("daily_cash_count_lines").select("report_id, money_kind, denomination, qty").eq("report_id", reportId);
+    const res = await supabase
+      .from("daily_cash_count_lines")
+      .select("report_id, money_kind, denomination, qty")
+      .eq("report_id", reportId);
 
     if (res.error) {
       console.error("daily_cash_count_lines select error:", res.error.message);
@@ -406,7 +418,11 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("v_daily_sales_report_totals").select("*").eq("report_date", dateYMD).single<SalesTotalsRow>();
+    const res = await supabase
+      .from("v_daily_sales_report_totals")
+      .select("*")
+      .eq("report_date", dateYMD)
+      .single<SalesTotalsRow>();
 
     if (res.error) {
       console.error("v_daily_sales_report_totals error:", res.error.message);
@@ -446,11 +462,44 @@ const AdminSalesReport: React.FC = () => {
   };
 
   /**
+   * ✅ INVENTORY LOSS (FIXED)
+   * - Sum add_on_expenses.expense_amount for expense_type='inventory_loss'
+   * - Manila day range
+   * - NOT voided
+   */
+  const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setInventoryLossAmount(0);
+      return;
+    }
+
+    const { startIso, endIso } = manilaDayRange(dateYMD);
+
+    const res = await supabase
+      .from("add_on_expenses")
+      .select("created_at, expense_type, expense_amount, voided")
+      .eq("expense_type", "inventory_loss")
+      .gte("created_at", startIso)
+      .lt("created_at", endIso);
+
+    if (res.error) {
+      console.error("inventory loss query error:", res.error.message);
+      // fallback (old logic)
+      const fallback = totals ? toNumber(totals.expenses_amount) : 0;
+      setInventoryLossAmount(round2(fallback));
+      return;
+    }
+
+    const rows = (res.data ?? []) as AddOnExpenseRow[];
+    const sum = rows
+      .filter((r) => !r.voided)
+      .reduce((acc, r) => acc + Math.max(0, toNumber(r.expense_amount)), 0);
+
+    setInventoryLossAmount(round2(sum));
+  };
+
+  /**
    * ✅ ADD-ONS (PAID) — FIXED
-   * - Based on PAYMENT INPUTS (gcash_amount + cash_amount)
-   * - Uses created_at day range in Manila (+08)
-   * - Groups per order (same full_name+seat within 10s)
-   * - Payment per order = MAX(gcash)+MAX(cash) to avoid double counting (since each row in the order gets same values)
    */
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -474,14 +523,11 @@ const AdminSalesReport: React.FC = () => {
 
     const rows = (res.data ?? []) as AddOnPaymentRow[];
     const onlyWithAnyPayment = rows.filter((r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0);
-    const totalPayments = computeAddonsPaidFromPayments(onlyWithAnyPayment);
-    setAddonsPaid(totalPayments);
+    setAddonsPaid(computeAddonsPaidFromPayments(onlyWithAnyPayment));
   };
 
   /**
    * ✅ CASH OUTS (ADMIN split CASH/GCASH like STAFF)
-   * - Prefer: cash_outs.payment_method ('cash' | 'gcash')
-   * - If column doesn't exist, fallback to old schema -> all CASH
    */
   const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -490,7 +536,10 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
-    const res = await supabase.from("cash_outs").select("amount, cashout_date, payment_method").eq("cashout_date", dateYMD);
+    const res = await supabase
+      .from("cash_outs")
+      .select("amount, cashout_date, payment_method")
+      .eq("cashout_date", dateYMD);
 
     if (res.error) {
       const fallback = await supabase.from("cash_outs").select("amount, cashout_date").eq("cashout_date", dateYMD);
@@ -523,18 +572,26 @@ const AdminSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("daily_cash_count_lines")
-      .upsert({ report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty }, { onConflict: "report_id,money_kind,denomination" });
+      .upsert(
+        { report_id: line.report_id, money_kind: line.money_kind, denomination: line.denomination, qty },
+        { onConflict: "report_id,money_kind,denomination" }
+      );
 
     if (res.error) {
       console.error("daily_cash_count_lines upsert error:", res.error.message);
       return;
     }
 
-    setLines((prev) => prev.map((x) => (x.money_kind === line.money_kind && x.denomination === line.denomination ? { ...x, qty } : x)));
+    setLines((prev) =>
+      prev.map((x) => (x.money_kind === line.money_kind && x.denomination === line.denomination ? { ...x, qty } : x))
+    );
     await loadTotals(selectedDate);
   };
 
-  const updateReportField = async (field: "starting_cash" | "starting_gcash" | "bilin_amount", valueNum: number): Promise<void> => {
+  const updateReportField = async (
+    field: "starting_cash" | "starting_gcash" | "bilin_amount",
+    valueNum: number
+  ): Promise<void> => {
     if (!report || submitting) return;
 
     const safe = Math.max(0, valueNum);
@@ -586,7 +643,9 @@ const AdminSalesReport: React.FC = () => {
     }));
 
     if (payload.length > 0) {
-      const r2 = await supabase.from("daily_cash_count_lines").upsert(payload, { onConflict: "report_id,money_kind,denomination" });
+      const r2 = await supabase
+        .from("daily_cash_count_lines")
+        .upsert(payload, { onConflict: "report_id,money_kind,denomination" });
       if (r2.error) {
         setToast({ open: true, msg: `Save lines failed: ${r2.error.message}`, color: "danger" });
         setSubmitting(false);
@@ -594,7 +653,10 @@ const AdminSalesReport: React.FC = () => {
       }
     }
 
-    const res = await supabase.from("daily_sales_reports").update({ is_submitted: true, submitted_at: new Date().toISOString() }).eq("id", report.id);
+    const res = await supabase
+      .from("daily_sales_reports")
+      .update({ is_submitted: true, submitted_at: new Date().toISOString() })
+      .eq("id", report.id);
 
     if (res.error) {
       setToast({ open: true, msg: `Submit failed: ${res.error.message}`, color: "danger" });
@@ -607,6 +669,7 @@ const AdminSalesReport: React.FC = () => {
     await loadConsignment(selectedDate);
     await loadAddonsPaid(selectedDate);
     await loadCashOutsTotal(selectedDate);
+    await loadInventoryLossAmount(selectedDate);
 
     setToast({ open: true, msg: `Saved for ${selectedDate}.`, color: "success" });
     setSubmitting(false);
@@ -624,7 +687,11 @@ const AdminSalesReport: React.FC = () => {
 
     setSubmitting(true);
 
-    const find = await supabase.from("daily_sales_reports").select("id").eq("report_date", selectedDate).maybeSingle<{ id: string }>();
+    const find = await supabase
+      .from("daily_sales_reports")
+      .select("id")
+      .eq("report_date", selectedDate)
+      .maybeSingle<{ id: string }>();
 
     if (find.error) {
       setToast({ open: true, msg: `Delete failed: ${find.error.message}`, color: "danger" });
@@ -660,6 +727,8 @@ const AdminSalesReport: React.FC = () => {
     await loadConsignment(selectedDate);
     await loadAddonsPaid(selectedDate);
     await loadCashOutsTotal(selectedDate);
+    await loadInventoryLossAmount(selectedDate);
+
     setSubmitting(false);
   };
 
@@ -679,7 +748,7 @@ const AdminSalesReport: React.FC = () => {
     const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
     const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
-    const inventoryLossLocal = totals ? toNumber(totals.expenses_amount) : 0;
+    const inventoryLossLocal = inventoryLossAmount; // ✅ FIXED
     const cashSalesLocal = totals ? toNumber(totals.cash_sales) : 0;
     const gcashSalesLocal = totals ? toNumber(totals.gcash_sales) : 0;
 
@@ -704,7 +773,7 @@ const AdminSalesReport: React.FC = () => {
 
     const salesCollectedDisplayLocal = actualSystemLocal - bilinLocal;
 
-    const addons = addonsPaid; // ✅ PAYMENT-based now
+    const addons = addonsPaid;
     const discount = totals ? toNumber(totals.discount_total) : 0;
     const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
     const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
@@ -871,7 +940,7 @@ const AdminSalesReport: React.FC = () => {
     const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
     const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
-    const inventoryLossLocal = totals ? toNumber(totals.expenses_amount) : 0;
+    const inventoryLossLocal = inventoryLossAmount; // ✅ FIXED
     const cashSalesLocal = totals ? toNumber(totals.cash_sales) : 0;
     const gcashSalesLocal = totals ? toNumber(totals.gcash_sales) : 0;
 
@@ -896,7 +965,7 @@ const AdminSalesReport: React.FC = () => {
 
     const salesCollectedDisplayLocal = actualSystemLocal - bilinLocal;
 
-    const addons = addonsPaid; // ✅ PAYMENT-based now
+    const addons = addonsPaid;
     const discount = totals ? toNumber(totals.discount_total) : 0;
     const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
     const salesSystemComputed = addons + totalTimeAmount + consignment.gross - discount;
@@ -927,7 +996,7 @@ const AdminSalesReport: React.FC = () => {
     ws.addRow(["Sales Collected (Actual System - Bilin)", salesCollectedDisplayLocal]);
     ws.addRow([]);
 
-    // ✅ bottom summary (requested)
+    // ✅ bottom summary
     ws.addRow(["Consignment Net", consignment.net]);
     ws.addRow(["Inventory Loss", inventoryLossLocal]);
     ws.addRow([]);
@@ -964,9 +1033,10 @@ const AdminSalesReport: React.FC = () => {
   useEffect(() => {
     void loadReport(selectedDate);
     void loadTotals(selectedDate);
-    void loadConsignment(selectedDate); // ✅ rpc
-    void loadAddonsPaid(selectedDate); // ✅ payments-based
+    void loadConsignment(selectedDate);
+    void loadAddonsPaid(selectedDate);
     void loadCashOutsTotal(selectedDate);
+    void loadInventoryLossAmount(selectedDate); // ✅ FIXED
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
@@ -988,7 +1058,7 @@ const AdminSalesReport: React.FC = () => {
     return lines.filter((l) => l.money_kind === "coin").reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
-  const inventoryLoss = totals ? toNumber(totals.expenses_amount) : 0;
+  const inventoryLoss = inventoryLossAmount; // ✅ FIXED
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
@@ -1009,15 +1079,12 @@ const AdminSalesReport: React.FC = () => {
 
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 
-  // ✅ Actual System (same as staff)
   const actualSystem = cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
 
-  // ✅ Sales System (computed like staff) — uses PAYMENT-based addonsPaid now
   const totalTimeAmount = totals ? toNumber(totals.total_time) : 0;
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const salesSystemComputed = addonsPaid + totalTimeAmount + consignment.gross - discount;
 
-  // ✅ Sales Collected = Actual System - Bilin
   const salesCollectedDisplay = actualSystem - bilin;
 
   if (loading) {
@@ -1092,7 +1159,9 @@ const AdminSalesReport: React.FC = () => {
 
                 <div className="ssr-status">
                   Status: <b>{report?.is_submitted ? "SUBMITTED" : "DRAFT"}</b>
-                  {report?.submitted_at ? <span className="ssr-status-sub">(last submit: {new Date(report.submitted_at).toLocaleString()})</span> : null}
+                  {report?.submitted_at ? (
+                    <span className="ssr-status-sub">(last submit: {new Date(report.submitted_at).toLocaleString()})</span>
+                  ) : null}
                 </div>
               </div>
 
