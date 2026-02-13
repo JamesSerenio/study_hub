@@ -1,10 +1,10 @@
 // src/pages/Customer_Cancelled.tsx
-// ✅ Cancelled Records page (DROPDOWN: Add-Ons / Walk-in / Reservation / Promo Membership)
-// ✅ Add-Ons tab: your existing logic (Asia/Manila day range +08:00)
+// ✅ Cancelled Records page (DROPDOWN: Add-Ons / Walk-in / Reservation / Promo Membership / Consignment)
+// ✅ Add-Ons tab: Asia/Manila day range +08:00
 // ✅ Walk-in tab: reads public.customer_sessions_cancelled where reservation='no'
 // ✅ Reservation tab: reads public.customer_sessions_cancelled where reservation='yes'
-// ✅ Promo tab: reads public.promo_bookings_cancelled (your cancelled promo/membership)
-// ✅ FIX: Promo Membership now works EVEN WITHOUT FK relationships (no nested select required)
+// ✅ Promo tab: reads public.promo_bookings_cancelled (cancelled promo/membership) — NO FK needed (manual lookup)
+// ✅ Consignment tab: reads public.consignment_cancelled (read-only) ✅ matches your table columns
 // ✅ Same layout/classnames style as your other tables (customer-*)
 // ✅ Receipt modal (view details)
 // ✅ READ-ONLY (NOT EDITABLE; no clickable "paid" badge / no updates)
@@ -270,6 +270,78 @@ type CancelledPromo = {
 };
 
 /* =========================
+   TYPES (Consignment Cancelled)
+   ✅ matches your table public.consignment_cancelled
+========================= */
+type ConsignmentCancelledDB = {
+  id: string;
+  cancelled_at: string;
+  original_id: string;
+
+  original_created_at: string | null;
+
+  consignment_id: string;
+  quantity: number | string;
+  price: number | string;
+  total: number | string;
+
+  full_name: string;
+  seat_number: string;
+
+  gcash_amount: number | string;
+  cash_amount: number | string;
+  is_paid: boolean | number | string | null;
+  paid_at: string | null;
+
+  was_voided: boolean | number | string | null;
+  voided_at: string | null;
+  void_note: string | null;
+
+  item_name: string;
+  category: string | null;
+  size: string | null;
+  image_url: string | null;
+
+  cancel_note: string;
+
+  stock_returned: boolean | number | string | null;
+};
+
+type ConsignmentCancelled = {
+  id: string;
+  cancelled_at: string;
+  original_id: string;
+
+  original_created_at: string | null;
+
+  consignment_id: string;
+  quantity: number;
+  price: number;
+  total: number;
+
+  full_name: string;
+  seat_number: string;
+
+  gcash_amount: number;
+  cash_amount: number;
+  is_paid: boolean;
+  paid_at: string | null;
+
+  was_voided: boolean;
+  voided_at: string | null;
+  void_note: string | null;
+
+  item_name: string;
+  category: string;
+  size: string | null;
+  image_url: string | null;
+
+  cancel_note: string;
+
+  stock_returned: boolean;
+};
+
+/* =========================
    HELPERS
 ========================= */
 const toNumber = (v: NumericLike | null | undefined): number => {
@@ -424,20 +496,22 @@ const GROUP_WINDOW_MS = 10_000;
 /* =========================
    COMPONENT
 ========================= */
-type CancelTab = "addons" | "walkin" | "reservation" | "promo";
+type CancelTab = "addons" | "walkin" | "reservation" | "promo" | "consignment";
 
 const TAB_LABEL: Record<CancelTab, string> = {
   addons: "Add-Ons",
   walkin: "Walk-in",
   reservation: "Reservation",
   promo: "Promo (Membership)",
+  consignment: "Consignment",
 };
 
 const tabTitleFrom = (tab: CancelTab): string => {
   if (tab === "addons") return "Cancelled Add-Ons";
   if (tab === "walkin") return "Cancelled Walk-in";
   if (tab === "reservation") return "Cancelled Reservation";
-  return "Cancelled Promo Membership";
+  if (tab === "promo") return "Cancelled Promo Membership";
+  return "Cancelled Consignment";
 };
 
 const Customer_Cancelled: React.FC = () => {
@@ -458,6 +532,10 @@ const Customer_Cancelled: React.FC = () => {
   const [rowsPromo, setRowsPromo] = useState<CancelledPromo[]>([]);
   const [selectedPromo, setSelectedPromo] = useState<CancelledPromo | null>(null);
 
+  // Consignment cancelled data
+  const [rowsConsignment, setRowsConsignment] = useState<ConsignmentCancelled[]>([]);
+  const [selectedConsignment, setSelectedConsignment] = useState<ConsignmentCancelled | null>(null);
+
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -472,6 +550,7 @@ const Customer_Cancelled: React.FC = () => {
     setSelectedGroupAddOns(null);
     setSelectedSession(null);
     setSelectedPromo(null);
+    setSelectedConsignment(null);
 
     if (tab === "addons") {
       await fetchCancelledAddOns(selectedDate);
@@ -479,8 +558,10 @@ const Customer_Cancelled: React.FC = () => {
       await fetchCancelledSessions(selectedDate, "no");
     } else if (tab === "reservation") {
       await fetchCancelledSessions(selectedDate, "yes");
-    } else {
+    } else if (tab === "promo") {
       await fetchCancelledPromo(selectedDate);
+    } else {
+      await fetchCancelledConsignment(selectedDate);
     }
   };
 
@@ -735,17 +816,12 @@ const Customer_Cancelled: React.FC = () => {
   };
 
   /* -----------------------------
-     FETCH: Promo Cancelled  ✅ FIXED
-     IMPORTANT:
-     - Your promo_bookings_cancelled has NO FK constraints by default.
-     - Supabase nested select (packages:package_id / package_options:package_option_id) only works if FK exists.
-     - So we do 3 queries: cancelled rows + packages + package_options, then merge.
+     FETCH: Promo Cancelled ✅ FIXED (no FK needed)
   ------------------------------ */
   const fetchCancelledPromo = async (dateStr: string): Promise<void> => {
     setLoading(true);
     const { startIso, endIso } = manilaDayRange(dateStr);
 
-    // 1) get cancelled rows
     const { data, error } = await supabase
       .from("promo_bookings_cancelled")
       .select(
@@ -795,7 +871,6 @@ const Customer_Cancelled: React.FC = () => {
       return;
     }
 
-    // 2) lookup packages + options
     const pkgIds = Array.from(new Set(rows.map((r) => String(r.package_id)).filter((x) => x.length > 0)));
     const optIds = Array.from(new Set(rows.map((r) => String(r.package_option_id)).filter((x) => x.length > 0)));
 
@@ -812,7 +887,6 @@ const Customer_Cancelled: React.FC = () => {
         : Promise.resolve({ data: [] as PackageOptionRow[], error: null as unknown }),
     ]);
 
-    // if these fail, still show promo rows with fallback names
     if ((pkgRes as { error: unknown }).error) {
       // eslint-disable-next-line no-console
       console.error("FETCH PACKAGES LOOKUP ERROR:", (pkgRes as { error: unknown }).error);
@@ -828,7 +902,6 @@ const Customer_Cancelled: React.FC = () => {
     const optMap = new Map<string, PackageOptionRow>();
     ((optRes as { data: PackageOptionRow[] }).data ?? []).forEach((o) => optMap.set(o.id, o));
 
-    // 3) map to UI type
     const mapped: CancelledPromo[] = rows.map((r) => {
       const kind = normalizeDiscountKind(r.discount_kind);
       const price = round2(Math.max(0, toNumber(r.price as NumericLike)));
@@ -876,8 +949,112 @@ const Customer_Cancelled: React.FC = () => {
     setLoading(false);
   };
 
+  /* -----------------------------
+     FETCH: Consignment Cancelled ✅ NEW (uses your schema)
+  ------------------------------ */
+  const fetchCancelledConsignment = async (dateStr: string): Promise<void> => {
+    setLoading(true);
+
+    const { startIso, endIso } = manilaDayRange(dateStr);
+
+    const { data, error } = await supabase
+      .from("consignment_cancelled")
+      .select(
+        `
+        id,
+        cancelled_at,
+        original_id,
+        original_created_at,
+        consignment_id,
+        quantity,
+        price,
+        total,
+        full_name,
+        seat_number,
+        gcash_amount,
+        cash_amount,
+        is_paid,
+        paid_at,
+        was_voided,
+        voided_at,
+        void_note,
+        item_name,
+        category,
+        size,
+        image_url,
+        cancel_note,
+        stock_returned
+      `
+      )
+      .gte("cancelled_at", startIso)
+      .lt("cancelled_at", endIso)
+      .order("cancelled_at", { ascending: false })
+      .returns<ConsignmentCancelledDB[]>();
+
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error("FETCH CANCELLED CONSIGNMENT ERROR:", error);
+      setRowsConsignment([]);
+      setLoading(false);
+      return;
+    }
+
+    const mapped: ConsignmentCancelled[] = (data ?? []).map((r) => {
+      const qty = Math.max(0, Math.floor(Number(r.quantity) || 0));
+      const price = round2(Math.max(0, toNumber(r.price as NumericLike)));
+
+      // use DB total if present; else qty * price
+      const totalDb = round2(Math.max(0, toNumber(r.total as NumericLike)));
+      const total = totalDb > 0 ? totalDb : round2(qty * price);
+
+      return {
+        id: r.id,
+        cancelled_at: r.cancelled_at,
+        original_id: r.original_id,
+
+        original_created_at: r.original_created_at ?? null,
+
+        consignment_id: r.consignment_id,
+        quantity: qty,
+        price,
+        total,
+
+        full_name: String(r.full_name ?? "-"),
+        seat_number: String(r.seat_number ?? "-"),
+
+        gcash_amount: round2(Math.max(0, toNumber(r.gcash_amount as NumericLike))),
+        cash_amount: round2(Math.max(0, toNumber(r.cash_amount as NumericLike))),
+        is_paid: toBool(r.is_paid),
+        paid_at: r.paid_at ?? null,
+
+        was_voided: toBool(r.was_voided),
+        voided_at: r.voided_at ?? null,
+        void_note: r.void_note ?? null,
+
+        item_name: String(r.item_name ?? "-"),
+        category: String(r.category ?? "").trim() || "—",
+        size: r.size ?? null,
+        image_url: r.image_url ?? null,
+
+        cancel_note: String(r.cancel_note ?? "").trim() || "-",
+
+        stock_returned: toBool(r.stock_returned),
+      };
+    });
+
+    setRowsConsignment(mapped);
+    setLoading(false);
+  };
+
   const tabTitle = tabTitleFrom(tab);
-  const countText = tab === "addons" ? groupedAddOns.length : tab === "promo" ? rowsPromo.length : rowsSessions.length;
+  const countText =
+    tab === "addons"
+      ? groupedAddOns.length
+      : tab === "promo"
+      ? rowsPromo.length
+      : tab === "consignment"
+      ? rowsConsignment.length
+      : rowsSessions.length;
 
   return (
     <IonPage>
@@ -895,7 +1072,10 @@ const Customer_Cancelled: React.FC = () => {
               </div>
             </div>
 
-            <div className="customer-topbar-right" style={{ gap: 10, display: "flex", alignItems: "center", flexWrap: "wrap" }}>
+            <div
+              className="customer-topbar-right"
+              style={{ gap: 10, display: "flex", alignItems: "center", flexWrap: "wrap" }}
+            >
               {/* DROPDOWN */}
               <label className="date-pill" style={{ minWidth: 240 }}>
                 <span className="date-pill-label">Type</span>
@@ -910,6 +1090,7 @@ const Customer_Cancelled: React.FC = () => {
                   <option value="walkin">{TAB_LABEL.walkin}</option>
                   <option value="reservation">{TAB_LABEL.reservation}</option>
                   <option value="promo">{TAB_LABEL.promo}</option>
+                  <option value="consignment">{TAB_LABEL.consignment}</option>
                 </select>
                 <span className="date-pill-icon" aria-hidden="true">
                   ▾
@@ -1103,7 +1284,7 @@ const Customer_Cancelled: React.FC = () => {
           {/* =========================
               TAB: WALK-IN / RESERVATION
           ========================= */}
-          {tab !== "addons" && tab !== "promo" && (
+          {tab !== "addons" && tab !== "promo" && tab !== "consignment" && (
             <>
               {loading ? (
                 <p className="customer-note">Loading...</p>
@@ -1542,6 +1723,190 @@ const Customer_Cancelled: React.FC = () => {
                     </p>
 
                     <button className="close-btn" onClick={() => setSelectedPromo(null)} type="button">
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* =========================
+              TAB: CONSIGNMENT ✅ NEW
+          ========================= */}
+          {tab === "consignment" && (
+            <>
+              {loading ? (
+                <p className="customer-note">Loading...</p>
+              ) : rowsConsignment.length === 0 ? (
+                <p className="customer-note">No cancelled consignment records found for this date</p>
+              ) : (
+                <div className="customer-table-wrap" key={`${selectedDate}-consignment`}>
+                  <table className="customer-table">
+                    <thead>
+                      <tr>
+                        <th>Cancelled At</th>
+                        <th>Full Name</th>
+                        <th>Seat</th>
+                        <th>Item</th>
+                        <th>Category</th>
+                        <th>Size</th>
+                        <th>Qty</th>
+                        <th>Price</th>
+                        <th>Total</th>
+                        <th>Paid</th>
+                        <th>Stock Returned</th>
+                        <th>Void</th>
+                        <th>Cancel Note</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {rowsConsignment.map((c) => (
+                        <tr key={c.id}>
+                          <td>{formatDateTime(c.cancelled_at)}</td>
+                          <td>{c.full_name}</td>
+                          <td>{c.seat_number}</td>
+                          <td style={{ fontWeight: 900 }}>{c.item_name}</td>
+                          <td>{c.category}</td>
+                          <td>{sizeText(c.size)}</td>
+                          <td>{c.quantity}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>{moneyText(c.price)}</td>
+                          <td style={{ fontWeight: 900, whiteSpace: "nowrap" }}>{moneyText(c.total)}</td>
+                          <td>
+                            <ReadOnlyBadge paid={c.is_paid} />
+                          </td>
+                          <td>{c.stock_returned ? "Yes" : "No"}</td>
+                          <td>{c.was_voided ? "VOIDED" : "—"}</td>
+                          <td style={{ minWidth: 220 }}>
+                            <div className="cancel-desc">{c.cancel_note || "-"}</div>
+                          </td>
+                          <td>
+                            <div className="action-stack">
+                              <button className="receipt-btn" onClick={() => setSelectedConsignment(c)} type="button">
+                                View Receipt
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* RECEIPT MODAL (CONSIGNMENT) */}
+              {selectedConsignment && (
+                <div className="receipt-overlay" onClick={() => setSelectedConsignment(null)}>
+                  <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                    <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+
+                    <h3 className="receipt-title">ME TYME LOUNGE</h3>
+                    <p className="receipt-subtitle">CANCELLED CONSIGNMENT RECEIPT</p>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Cancelled At</span>
+                      <span>{formatDateTime(selectedConsignment.cancelled_at)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Customer</span>
+                      <span>{selectedConsignment.full_name}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Seat</span>
+                      <span>{selectedConsignment.seat_number}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Cancel Note</span>
+                      <span style={{ fontWeight: 800 }}>{selectedConsignment.cancel_note || "-"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Status</span>
+                      <span className="receipt-status">{selectedConsignment.is_paid ? "PAID" : "UNPAID"}</span>
+                    </div>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Item</span>
+                      <span style={{ fontWeight: 900 }}>{selectedConsignment.item_name}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Category</span>
+                      <span>{selectedConsignment.category}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Size</span>
+                      <span>{sizeText(selectedConsignment.size)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Quantity</span>
+                      <span>{selectedConsignment.quantity}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Price</span>
+                      <span>{moneyText(selectedConsignment.price)}</span>
+                    </div>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>Total</span>
+                      <span style={{ fontWeight: 900 }}>{moneyText(selectedConsignment.total)}</span>
+                    </div>
+
+                    <hr />
+
+                    <div className="receipt-row">
+                      <span>GCash</span>
+                      <span>{moneyText(selectedConsignment.gcash_amount)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Cash</span>
+                      <span>{moneyText(selectedConsignment.cash_amount)}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Stock Returned</span>
+                      <span>{selectedConsignment.stock_returned ? "Yes" : "No"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Void</span>
+                      <span>{selectedConsignment.was_voided ? "VOIDED" : "—"}</span>
+                    </div>
+
+                    {selectedConsignment.was_voided && (
+                      <>
+                        <div className="receipt-row">
+                          <span>Voided At</span>
+                          <span>{formatDateTime(selectedConsignment.voided_at)}</span>
+                        </div>
+                        <div className="receipt-row">
+                          <span>Void Note</span>
+                          <span style={{ fontWeight: 800 }}>{selectedConsignment.void_note ?? "-"}</span>
+                        </div>
+                      </>
+                    )}
+
+                    <p className="receipt-footer">
+                      Cancelled record archived <br />
+                      <strong>Me Tyme Lounge</strong>
+                    </p>
+
+                    <button className="close-btn" onClick={() => setSelectedConsignment(null)} type="button">
                       Close
                     </button>
                   </div>
