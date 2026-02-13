@@ -1,22 +1,22 @@
 // src/pages/Admin_customer_reservation.tsx
 // ✅ Same classnames/layout as Admin_customer_list.tsx (one CSS)
-// ✅ Date filter (reservation_date)
-// ✅ Export EXCEL (.xlsx) selected date only (Date/Time as TEXT, Amount as NUMBER only)
+// ✅ Date filter now supports RANGE: Day / Week / Month (uses reservation_date)
+// ✅ Export EXCEL (.xlsx) supports Day / Week / Month
+// ✅ Delete supports Day / Week / Month ✅ ALSO deletes related seat_blocked_times
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both) in table + receipt
 // ✅ Discount + Discount Reason (saved, NOT shown on receipt UI)  (still stored in DB)
-// ✅ ✅ UPDATED: Down Payment is EDITABLE (per reservation) like Admin_customer_list.tsx
-// ✅ ✅ UPDATED: Payment modal = FREE INPUTS (NO LIMIT) like Admin_customer_list.tsx
+// ✅ Down Payment is EDITABLE (per reservation) like Admin_customer_list.tsx
+// ✅ Payment modal = FREE INPUTS (NO LIMIT) like Admin_customer_list.tsx
 // ✅ Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
 // ✅ Manual PAID/UNPAID toggle still works
-// ✅ Delete single row  ✅ ALSO deletes related seat_blocked_times
-// ✅ Delete by DATE (deletes ALL records with reservation_date = selectedDate) ✅ ALSO deletes related seat_blocked_times
+// ✅ Delete single row ✅ ALSO deletes related seat_blocked_times
 // ✅ Promo filtered out (DB + frontend)
 // ✅ OPEN sessions auto-update display
 // ✅ Stop Time (OPEN) releases seat_blocked_times (end_at = now)
 // ✅ No "any"
 // ✅ Phone Number column (table + receipt + excel)
-// ✅ NEW: Refresh button (same classname "receipt-btn")
-// ✅ ✅ UPDATED UI: Search bar EXACT SAME UI as Admin_customer_list.tsx (customer-searchbar-inline + icon + clear)
+// ✅ Refresh button (same classname "receipt-btn")
+// ✅ Search bar EXACT SAME UI as Admin_customer_list.tsx (customer-searchbar-inline + icon + clear)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -30,6 +30,7 @@ const HOURLY_RATE = 20;
 const FREE_MINUTES = 0; // hidden
 
 type DiscountKind = "none" | "percent" | "amount";
+type RangeMode = "day" | "week" | "month";
 
 interface CustomerSession {
   id: string;
@@ -81,6 +82,57 @@ const yyyyMmDdLocal = (d: Date): string => {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+};
+
+const parseYmd = (ymd: string): Date => {
+  const [yS, mS, dS] = String(ymd ?? "").split("-");
+  const y = Number(yS);
+  const m = Number(mS);
+  const d = Number(dS);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return new Date();
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+};
+
+const startOfWeekMonday = (ymd: string): string => {
+  const dt = parseYmd(ymd);
+  const day = dt.getDay(); // 0=Sun..6=Sat
+  const diffToMonday = (day + 6) % 7; // Mon =>0, Sun=>6
+  dt.setDate(dt.getDate() - diffToMonday);
+  return yyyyMmDdLocal(dt);
+};
+
+const endOfWeekMonday = (ymd: string): string => {
+  const start = parseYmd(startOfWeekMonday(ymd));
+  start.setDate(start.getDate() + 6);
+  return yyyyMmDdLocal(start);
+};
+
+const startOfMonth = (ymd: string): string => {
+  const dt = parseYmd(ymd);
+  const s = new Date(dt.getFullYear(), dt.getMonth(), 1);
+  return yyyyMmDdLocal(s);
+};
+
+const endOfMonth = (ymd: string): string => {
+  const dt = parseYmd(ymd);
+  const e = new Date(dt.getFullYear(), dt.getMonth() + 1, 0);
+  return yyyyMmDdLocal(e);
+};
+
+const getRange = (mode: RangeMode, anchorYmd: string): { start: string; end: string; label: string } => {
+  if (mode === "week") {
+    const start = startOfWeekMonday(anchorYmd);
+    const end = endOfWeekMonday(anchorYmd);
+    return { start, end, label: `Week (${start} → ${end})` };
+  }
+  if (mode === "month") {
+    const start = startOfMonth(anchorYmd);
+    const end = endOfMonth(anchorYmd);
+    const dt = parseYmd(anchorYmd);
+    const monthName = dt.toLocaleString([], { month: "long", year: "numeric" });
+    return { start, end, label: `Month (${monthName})` };
+  }
+  return { start: anchorYmd, end: anchorYmd, label: `Day (${anchorYmd})` };
 };
 
 const formatTimeText = (iso: string): string => {
@@ -160,6 +212,18 @@ const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
 
 const isLikelyUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v.trim());
 
+const colToLetter = (col: number): string => {
+  // 1 -> A
+  let n = col;
+  let s = "";
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+};
+
 const Admin_customer_reservation: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -167,11 +231,11 @@ const Admin_customer_reservation: React.FC = () => {
 
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deletingDate, setDeletingDate] = useState<string | null>(null);
 
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
-  // date filter (reservation_date)
+  // ✅ RANGE MODE + date anchor
+  const [rangeMode, setRangeMode] = useState<RangeMode>("day");
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   // ✅ Search (same UI as Admin_customer_list)
@@ -179,6 +243,10 @@ const Admin_customer_reservation: React.FC = () => {
 
   // ✅ Refresh busy
   const [refreshing, setRefreshing] = useState<boolean>(false);
+
+  // ✅ Export/Delete busy
+  const [exporting, setExporting] = useState<boolean>(false);
+  const [deletingRange, setDeletingRange] = useState<boolean>(false);
 
   // Discount modal
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
@@ -270,19 +338,27 @@ const Admin_customer_reservation: React.FC = () => {
     setLoading(false);
   };
 
-  // ✅ filter by selectedDate + search (Full Name + Phone)
+  const currentRange = useMemo(() => getRange(rangeMode, selectedDate), [rangeMode, selectedDate]);
+
+  // ✅ filter by RANGE (reservation_date) + search (Full Name + Phone)
   const filteredSessions = useMemo(() => {
-    const byDate = sessions.filter((s) => (s.reservation_date ?? "") === selectedDate);
+    const { start, end } = currentRange;
+
+    const byRange = sessions.filter((s) => {
+      const d = String(s.reservation_date ?? "");
+      if (!d) return false;
+      return d >= start && d <= end;
+    });
 
     const q = searchText.trim().toLowerCase();
-    if (!q) return byDate;
+    if (!q) return byRange;
 
-    return byDate.filter((s) => {
+    return byRange.filter((s) => {
       const name = String(s.full_name ?? "").toLowerCase();
       const phone = String(s.phone_number ?? "").toLowerCase();
       return name.includes(q) || phone.includes(q);
     });
-  }, [sessions, selectedDate, searchText]);
+  }, [sessions, currentRange, searchText]);
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -445,7 +521,7 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // ✅ delete seat blocks for a reservation session (delete single + delete by date)
+  // ✅ delete seat blocks for a reservation session
   const deleteSeatBlocksForSession = async (session: CustomerSession): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
@@ -463,10 +539,8 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  const deleteSeatBlocksForDate = async (dateStr: string, list: CustomerSession[]): Promise<void> => {
-    if (!dateStr) return;
-    const rows = list.filter((s) => (s.reservation_date ?? "") === dateStr);
-    for (const s of rows) {
+  const deleteSeatBlocksForList = async (list: CustomerSession[]): Promise<void> => {
+    for (const s of list) {
       // eslint-disable-next-line no-await-in-loop
       await deleteSeatBlocksForSession(s);
     }
@@ -550,44 +624,69 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // delete ALL rows by selectedDate
-  const deleteByDate = async (): Promise<void> => {
+  // ✅ Delete by RANGE (day/week/month) using reservation_date
+  const deleteByRange = async (): Promise<void> => {
     if (!selectedDate) {
       alert("Please select a date first.");
       return;
     }
 
-    const count = filteredSessions.length;
+    const { start, end, label } = currentRange;
+
+    // only delete rows *in current range* (and current search filter is not used for deletion)
+    const rangeRows = sessions.filter((s) => {
+      const d = String(s.reservation_date ?? "");
+      return d && d >= start && d <= end && String(s.reservation ?? "") === "yes" && !isPromoType(s.customer_type);
+    });
+
+    if (rangeRows.length === 0) {
+      alert("No reservation records found for this range.");
+      return;
+    }
+
     const ok = window.confirm(
-      `Delete ALL reservation records on ${selectedDate}?\n\nThis will delete ${count} record(s) from the database.`
+      `Delete ALL reservation records for:\n${label}\n\nThis will delete ${rangeRows.length} record(s) from the database.\n\n⚠️ This also deletes related seat_blocked_times.`
     );
     if (!ok) return;
 
     try {
-      setDeletingDate(selectedDate);
+      setDeletingRange(true);
 
-      await deleteSeatBlocksForDate(selectedDate, filteredSessions);
+      // delete seat blocks first (exact match on start_at + seat + source)
+      await deleteSeatBlocksForList(rangeRows);
 
-      const { error } = await supabase
-        .from("customer_sessions")
-        .delete()
-        .eq("reservation", "yes")
-        .eq("reservation_date", selectedDate)
-        .neq("customer_type", "promo");
+      // delete sessions by reservation_date range
+      let q = supabase.from("customer_sessions").delete().eq("reservation", "yes").neq("customer_type", "promo");
+      q = q.gte("reservation_date", start).lte("reservation_date", end);
 
+      const { error } = await q;
       if (error) {
-        alert(`Delete by date error: ${error.message}`);
+        alert(`Delete range error: ${error.message}`);
         return;
       }
 
-      setSessions((prev) => prev.filter((s) => (s.reservation_date ?? "") !== selectedDate));
-      setSelectedSession((prev) => ((prev?.reservation_date ?? "") === selectedDate ? null : prev));
+      setSessions((prev) =>
+        prev.filter((s) => {
+          const d = String(s.reservation_date ?? "");
+          if (!d) return true;
+          if (String(s.reservation ?? "") !== "yes") return true;
+          if (isPromoType(s.customer_type)) return true;
+          return !(d >= start && d <= end);
+        })
+      );
+
+      setSelectedSession((prev) => {
+        const d = String(prev?.reservation_date ?? "");
+        if (!prev) return null;
+        if (!d) return prev;
+        return d >= start && d <= end ? null : prev;
+      });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
-      alert("Delete by date failed.");
+      alert("Delete range failed.");
     } finally {
-      setDeletingDate(null);
+      setDeletingRange(false);
     }
   };
 
@@ -804,6 +903,7 @@ const Admin_customer_reservation: React.FC = () => {
 
   /* =========================
      Export Excel (.xlsx) - NICE LAYOUT (Phone # + DP)
+     ✅ supports Day / Week / Month
      - Date/Time as TEXT
      - Amount columns as NUMBER
   ========================= */
@@ -813,218 +913,236 @@ const Admin_customer_reservation: React.FC = () => {
       return;
     }
     if (filteredSessions.length === 0) {
-      alert("No records for selected date.");
+      alert("No records for this range.");
       return;
     }
 
-    const wb = new ExcelJS.Workbook();
-    wb.creator = "Me Tyme Lounge";
-    wb.created = new Date();
+    try {
+      setExporting(true);
 
-    const ws = wb.addWorksheet("Reservations", {
-      views: [{ state: "frozen", ySplit: 6 }],
-      pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
-    });
+      const { start, end, label } = currentRange;
 
-    ws.columns = [
-      { header: "Reservation Date", key: "reservation_date", width: 16 },
-      { header: "Full Name", key: "full_name", width: 26 },
-      { header: "Phone Number", key: "phone_number", width: 16 },
-      { header: "Field", key: "field", width: 18 },
-      { header: "Has ID", key: "has_id", width: 10 },
-      { header: "Specific ID", key: "id_number", width: 16 },
-      { header: "Hours", key: "hours", width: 10 },
-      { header: "Time In", key: "time_in", width: 10 },
-      { header: "Time Out", key: "time_out", width: 10 },
-      { header: "Total Time", key: "total_time", width: 14 },
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "Me Tyme Lounge";
+      wb.created = new Date();
 
-      { header: "Amount Label", key: "amount_label", width: 14 },
-      { header: "Amount", key: "amount", width: 12 },
-
-      { header: "Discount", key: "discount", width: 12 },
-      { header: "Discount Amount", key: "discount_amount", width: 16 },
-
-      { header: "Down Payment", key: "down_payment", width: 14 },
-      { header: "System Cost", key: "system_cost", width: 14 },
-
-      { header: "GCash", key: "gcash", width: 12 },
-      { header: "Cash", key: "cash", width: 12 },
-      { header: "Total Paid", key: "total_paid", width: 12 },
-
-      { header: "Remaining (After DP)", key: "remaining", width: 18 },
-      { header: "Paid?", key: "paid", width: 10 },
-      { header: "Seat", key: "seat", width: 12 },
-      { header: "Status", key: "status", width: 12 },
-    ];
-
-    // Title rows
-    ws.mergeCells("A1", "W1");
-    ws.getCell("A1").value = "ME TYME LOUNGE — RESERVATIONS REPORT";
-    ws.getCell("A1").font = { bold: true, size: 16 };
-    ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(1).height = 26;
-
-    ws.mergeCells("A2", "W2");
-    ws.getCell("A2").value = `Date: ${selectedDate}`;
-    ws.getCell("A2").font = { size: 11 };
-    ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(2).height = 18;
-
-    const generatedAt = new Date();
-    ws.mergeCells("A3", "W3");
-    ws.getCell("A3").value = `Generated: ${generatedAt.toLocaleString()}`;
-    ws.getCell("A3").font = { size: 11 };
-    ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
-    ws.getRow(3).height = 18;
-
-    ws.getRow(5).height = 6;
-
-    // Optional logo embed (top-right)
-    if (isLikelyUrl(logo)) {
-      const ab = await fetchAsArrayBuffer(logo);
-      if (ab) {
-        const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
-        const imgId = wb.addImage({ buffer: ab, extension: ext });
-        ws.addImage(imgId, {
-          tl: { col: 18.2, row: 0.2 },
-          ext: { width: 160, height: 60 },
-        });
-      }
-    }
-
-    // Header row index
-    const headerRowIndex = 6;
-    const headerRow = ws.getRow(headerRowIndex);
-    headerRow.values = ws.columns.map((c) => String(c.header ?? ""));
-    headerRow.height = 20;
-
-    headerRow.eachCell((cell) => {
-      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
-      cell.border = {
-        top: { style: "thin", color: { argb: "FF9CA3AF" } },
-        left: { style: "thin", color: { argb: "FF9CA3AF" } },
-        bottom: { style: "thin", color: { argb: "FF9CA3AF" } },
-        right: { style: "thin", color: { argb: "FF9CA3AF" } },
-      };
-    });
-
-    const moneyCols = new Set([
-      "amount",
-      "discount_amount",
-      "down_payment",
-      "system_cost",
-      "gcash",
-      "cash",
-      "total_paid",
-      "remaining",
-    ]);
-
-    filteredSessions.forEach((s, idx) => {
-      const open = isOpenTimeSession(s);
-      const mins = getDisplayedTotalMinutes(s);
-      const disp = getDisplayAmount(s);
-
-      const base = getBaseSystemCost(s);
-      const di = getDiscountInfo(s);
-      const calc = applyDiscount(base, di.kind, di.value);
-
-      const dp = getDownPayment(s);
-
-      const pi = getPaidInfo(s);
-      const dueAfterDp = getSessionBalanceAfterDP(s);
-      const remaining = round2(Math.max(0, dueAfterDp - pi.totalPaid));
-      const status = getStatus(s);
-
-      const row = ws.addRow({
-        reservation_date: String(s.reservation_date ?? ""),
-        full_name: s.full_name,
-        phone_number: safePhone(s.phone_number),
-        field: s.customer_field ?? "",
-        has_id: s.has_id ? "Yes" : "No",
-        id_number: s.id_number ?? "N/A",
-        hours: s.hour_avail,
-        time_in: String(formatTimeText(s.time_started)),
-        time_out: open ? "OPEN" : String(formatTimeText(s.time_ended)),
-        total_time: formatMinutesToTime(mins),
-
-        amount_label: disp.label,
-        amount: disp.value,
-
-        discount: getDiscountTextFrom(di.kind, di.value),
-        discount_amount: calc.discountAmount,
-
-        down_payment: dp,
-        system_cost: calc.discountedCost,
-
-        gcash: pi.gcash,
-        cash: pi.cash,
-        total_paid: pi.totalPaid,
-
-        remaining,
-        paid: toBool(s.is_paid) ? "PAID" : "UNPAID",
-        seat: s.seat_number,
-        status,
+      const ws = wb.addWorksheet("Reservations", {
+        views: [{ state: "frozen", ySplit: 6 }],
+        pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
       });
 
-      const rowIndex = row.number;
-      ws.getRow(rowIndex).height = 18;
+      ws.columns = [
+        { header: "Reservation Date", key: "reservation_date", width: 16 },
+        { header: "Full Name", key: "full_name", width: 26 },
+        { header: "Phone Number", key: "phone_number", width: 16 },
+        { header: "Field", key: "field", width: 18 },
+        { header: "Has ID", key: "has_id", width: 10 },
+        { header: "Specific ID", key: "id_number", width: 16 },
+        { header: "Hours", key: "hours", width: 10 },
+        { header: "Time In", key: "time_in", width: 10 },
+        { header: "Time Out", key: "time_out", width: 10 },
+        { header: "Total Time", key: "total_time", width: 14 },
 
-      row.eachCell((cell, colNumber) => {
-        cell.alignment = { vertical: "middle", horizontal: colNumber === 2 ? "left" : "center", wrapText: true };
+        { header: "Amount Label", key: "amount_label", width: 14 },
+        { header: "Amount", key: "amount", width: 12 },
+
+        { header: "Discount", key: "discount", width: 12 },
+        { header: "Discount Amount", key: "discount_amount", width: 16 },
+
+        { header: "Down Payment", key: "down_payment", width: 14 },
+        { header: "System Cost", key: "system_cost", width: 14 },
+
+        { header: "GCash", key: "gcash", width: 12 },
+        { header: "Cash", key: "cash", width: 12 },
+        { header: "Total Paid", key: "total_paid", width: 12 },
+
+        { header: "Remaining (After DP)", key: "remaining", width: 18 },
+        { header: "Paid?", key: "paid", width: 10 },
+        { header: "Seat", key: "seat", width: 12 },
+        { header: "Status", key: "status", width: 12 },
+      ];
+
+      const lastColLetter = colToLetter(ws.columns.length);
+
+      // Title rows
+      ws.mergeCells(`A1:${lastColLetter}1`);
+      ws.getCell("A1").value = "ME TYME LOUNGE — RESERVATIONS REPORT";
+      ws.getCell("A1").font = { bold: true, size: 16 };
+      ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
+      ws.getRow(1).height = 26;
+
+      ws.mergeCells(`A2:${lastColLetter}2`);
+      ws.getCell("A2").value = `Range: ${label}${rangeMode === "day" ? "" : `  •  (${start} → ${end})`}   •   Records: ${
+        filteredSessions.length
+      }`;
+      ws.getCell("A2").font = { size: 11 };
+      ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
+      ws.getRow(2).height = 18;
+
+      const generatedAt = new Date();
+      ws.mergeCells(`A3:${lastColLetter}3`);
+      ws.getCell("A3").value = `Generated: ${generatedAt.toLocaleString()}`;
+      ws.getCell("A3").font = { size: 11 };
+      ws.getCell("A3").alignment = { vertical: "middle", horizontal: "left" };
+      ws.getRow(3).height = 18;
+
+      ws.getRow(5).height = 6;
+
+      // Optional logo embed (top-right)
+      if (isLikelyUrl(logo)) {
+        const ab = await fetchAsArrayBuffer(logo);
+        if (ab) {
+          const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
+          const imgId = wb.addImage({ buffer: ab, extension: ext });
+          ws.addImage(imgId, {
+            tl: { col: Math.max(0, ws.columns.length - 5.8), row: 0.2 },
+            ext: { width: 160, height: 60 },
+          });
+        }
+      }
+
+      // Header row index
+      const headerRowIndex = 6;
+      const headerRow = ws.getRow(headerRowIndex);
+      headerRow.values = ws.columns.map((c) => String(c.header ?? ""));
+      headerRow.height = 20;
+
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
         cell.border = {
-          top: { style: "thin", color: { argb: "FFE5E7EB" } },
-          left: { style: "thin", color: { argb: "FFE5E7EB" } },
-          bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
-          right: { style: "thin", color: { argb: "FFE5E7EB" } },
+          top: { style: "thin", color: { argb: "FF9CA3AF" } },
+          left: { style: "thin", color: { argb: "FF9CA3AF" } },
+          bottom: { style: "thin", color: { argb: "FF9CA3AF" } },
+          right: { style: "thin", color: { argb: "FF9CA3AF" } },
         };
-
-        const zebra = idx % 2 === 0 ? "FFFFFFFF" : "FFF9FAFB";
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
       });
 
-      // Force Date/Time as TEXT (Reservation Date, Phone, Time In, Time Out)
-      const textCols = [1, 3, 8, 9];
-      textCols.forEach((c) => {
-        const cell = ws.getCell(rowIndex, c);
-        cell.numFmt = "@";
-        if (cell.value != null) cell.value = String(cell.value);
-        cell.alignment = { vertical: "middle", horizontal: "center" };
-      });
+      const moneyCols = new Set([
+        "amount",
+        "discount_amount",
+        "down_payment",
+        "system_cost",
+        "gcash",
+        "cash",
+        "total_paid",
+        "remaining",
+      ]);
 
-      // Money formatting
-      ws.columns.forEach((c, i) => {
-        const key = String(c.key ?? "");
-        if (moneyCols.has(key)) {
-          const cell = ws.getCell(rowIndex, i + 1);
-          cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
-          cell.alignment = { vertical: "middle", horizontal: "right" };
+      filteredSessions.forEach((s, idx) => {
+        const open = isOpenTimeSession(s);
+        const mins = getDisplayedTotalMinutes(s);
+        const disp = getDisplayAmount(s);
+
+        const base = getBaseSystemCost(s);
+        const di = getDiscountInfo(s);
+        const calc = applyDiscount(base, di.kind, di.value);
+
+        const dp = getDownPayment(s);
+
+        const pi = getPaidInfo(s);
+        const dueAfterDp = getSessionBalanceAfterDP(s);
+        const remaining = round2(Math.max(0, dueAfterDp - pi.totalPaid));
+        const status = getStatus(s);
+
+        const row = ws.addRow({
+          reservation_date: String(s.reservation_date ?? ""),
+          full_name: s.full_name,
+          phone_number: safePhone(s.phone_number),
+          field: s.customer_field ?? "",
+          has_id: s.has_id ? "Yes" : "No",
+          id_number: s.id_number ?? "N/A",
+          hours: s.hour_avail,
+          time_in: String(formatTimeText(s.time_started)),
+          time_out: open ? "OPEN" : String(formatTimeText(s.time_ended)),
+          total_time: formatMinutesToTime(mins),
+
+          amount_label: disp.label,
+          amount: disp.value,
+
+          discount: getDiscountTextFrom(di.kind, di.value),
+          discount_amount: calc.discountAmount,
+
+          down_payment: dp,
+          system_cost: calc.discountedCost,
+
+          gcash: pi.gcash,
+          cash: pi.cash,
+          total_paid: pi.totalPaid,
+
+          remaining,
+          paid: toBool(s.is_paid) ? "PAID" : "UNPAID",
+          seat: s.seat_number,
+          status,
+        });
+
+        const rowIndex = row.number;
+        ws.getRow(rowIndex).height = 18;
+
+        row.eachCell((cell, colNumber) => {
+          cell.alignment = { vertical: "middle", horizontal: colNumber === 2 ? "left" : "center", wrapText: true };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFE5E7EB" } },
+            left: { style: "thin", color: { argb: "FFE5E7EB" } },
+            bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+            right: { style: "thin", color: { argb: "FFE5E7EB" } },
+          };
+
+          const zebra = idx % 2 === 0 ? "FFFFFFFF" : "FFF9FAFB";
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
+        });
+
+        // Force Date/Time as TEXT (Reservation Date, Phone, Time In, Time Out)
+        const textCols = [1, 3, 8, 9];
+        textCols.forEach((c) => {
+          const cell = ws.getCell(rowIndex, c);
+          cell.numFmt = "@";
+          if (cell.value != null) cell.value = String(cell.value);
+          cell.alignment = { vertical: "middle", horizontal: "center" };
+        });
+
+        // Money formatting
+        ws.columns.forEach((c, i) => {
+          const key = String(c.key ?? "");
+          if (moneyCols.has(key)) {
+            const cell = ws.getCell(rowIndex, i + 1);
+            cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
+            cell.alignment = { vertical: "middle", horizontal: "right" };
+          }
+        });
+
+        // Paid badge coloring (Paid? column)
+        const paidColIndex = ws.columns.findIndex((c) => String(c.key) === "paid") + 1;
+        if (paidColIndex > 0) {
+          const paidCell = ws.getCell(rowIndex, paidColIndex);
+          if (String(paidCell.value) === "PAID") {
+            paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
+            paidCell.font = { bold: true, color: { argb: "FF166534" } };
+          } else {
+            paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+            paidCell.font = { bold: true, color: { argb: "FF991B1B" } };
+          }
         }
       });
 
-      // Paid badge coloring (Paid? column)
-      const paidColIndex = ws.columns.findIndex((c) => String(c.key) === "paid") + 1;
-      if (paidColIndex > 0) {
-        const paidCell = ws.getCell(rowIndex, paidColIndex);
-        if (String(paidCell.value) === "PAID") {
-          paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
-          paidCell.font = { bold: true, color: { argb: "FF166534" } };
-        } else {
-          paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
-          paidCell.font = { bold: true, color: { argb: "FF991B1B" } };
-        }
-      }
-    });
+      ws.autoFilter = {
+        from: { row: headerRowIndex, column: 1 },
+        to: { row: headerRowIndex, column: ws.columns.length },
+      };
 
-    ws.autoFilter = {
-      from: { row: headerRowIndex, column: 1 },
-      to: { row: headerRowIndex, column: ws.columns.length },
-    };
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
-    const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    saveAs(blob, `admin-reservations-${selectedDate}.xlsx`);
+      const fileTag = rangeMode === "day" ? selectedDate : `${currentRange.start}_to_${currentRange.end}`;
+      saveAs(blob, `admin-reservations-${rangeMode}-${fileTag}.xlsx`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Export failed.");
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -1036,8 +1154,13 @@ const Admin_customer_reservation: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Customer Reservations</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong> ({filteredSessions.length})
+                Showing records for: <strong>{currentRange.label}</strong> ({filteredSessions.length})
               </div>
+              {rangeMode !== "day" && (
+                <div className="customer-subtext" style={{ opacity: 0.8, fontSize: 12 }}>
+                  Range: <strong>{currentRange.start}</strong> → <strong>{currentRange.end}</strong>
+                </div>
+              )}
             </div>
 
             <div className="customer-topbar-right">
@@ -1064,35 +1187,56 @@ const Admin_customer_reservation: React.FC = () => {
                 </div>
               </div>
 
-              <label className="date-pill">
-                <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
-                <span className="date-pill-icon" aria-hidden="true">
-                  📅
-                </span>
-              </label>
+              {/* ✅ RANGE MODE + DATE */}
+              <div className="admin-tools-row" style={{ alignItems: "center" }}>
+                <label className="date-pill" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="date-pill-label">Range</span>
+                  <select
+                    className="date-pill-input"
+                    value={rangeMode}
+                    onChange={(e) => setRangeMode(e.currentTarget.value as RangeMode)}
+                    style={{ padding: "6px 10px" }}
+                  >
+                    <option value="day">Day</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                  </select>
+                </label>
 
-              <div className="admin-tools-row">
+                <label className="date-pill">
+                  <span className="date-pill-label">Date</span>
+                  <input
+                    className="date-pill-input"
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                  />
+                  <span className="date-pill-icon" aria-hidden="true">
+                    📅
+                  </span>
+                </label>
+
                 {/* ✅ REFRESH */}
                 <button className="receipt-btn" onClick={() => void refreshAll()} disabled={refreshing || loading}>
                   {refreshing ? "Refreshing..." : "Refresh"}
                 </button>
 
-                <button className="receipt-btn" onClick={() => void exportToExcel()} disabled={filteredSessions.length === 0}>
-                  Export to Excel
+                <button
+                  className="receipt-btn"
+                  onClick={() => void exportToExcel()}
+                  disabled={filteredSessions.length === 0 || exporting}
+                  title={filteredSessions.length === 0 ? "No data to export" : "Export .xlsx for Day/Week/Month"}
+                >
+                  {exporting ? "Exporting..." : "Export to Excel"}
                 </button>
 
                 <button
                   className="receipt-btn admin-danger"
-                  onClick={() => void deleteByDate()}
-                  disabled={filteredSessions.length === 0 || deletingDate === selectedDate}
+                  onClick={() => void deleteByRange()}
+                  disabled={deletingRange || filteredSessions.length === 0}
+                  title={filteredSessions.length === 0 ? "No data to delete" : "Delete ALL records for selected range"}
                 >
-                  {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
+                  {deletingRange ? "Deleting..." : "Delete"}
                 </button>
               </div>
             </div>
@@ -1102,9 +1246,9 @@ const Admin_customer_reservation: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
-            <p className="customer-note">No reservation records found for this date</p>
+            <p className="customer-note">No reservation records found for this range</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}>
+            <div className="customer-table-wrap" key={`${rangeMode}-${selectedDate}`}>
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -1245,7 +1389,7 @@ const Admin_customer_reservation: React.FC = () => {
                               disabled={deletingId === session.id}
                               onClick={() => void deleteSession(session)}
                             >
-                              {deletingId === session.id ? "Canceling..." : "Cancel"}
+                              {deletingId === session.id ? "Deleting..." : "Delete"}
                             </button>
                           </div>
                         </td>
