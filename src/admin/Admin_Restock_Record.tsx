@@ -8,6 +8,9 @@
 // ✅ UI FIX (YOUR REQUEST):
 // - EDIT modal now SAME STYLE as Staff_Consignment_Record EDIT (receipt-overlay / receipt-container)
 // - SAME classnames (receipt-* / money-input / modal-actions / receipt-btn)
+// ✅ NEW (YOUR REQUEST):
+// - Export/Filter mode now supports: DAY / WEEK / MONTH
+// - Delete By filter now supports: DAY / WEEK / MONTH
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -43,7 +46,7 @@ import { supabase } from "../utils/supabaseClient";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
-type FilterMode = "day" | "month";
+type FilterMode = "day" | "week" | "month";
 type SourceKind = "add_ons" | "consignment";
 
 /* =========================
@@ -245,19 +248,28 @@ const normalizeConsRow = (raw: unknown): ConsRestockRow | null => {
 /* =========================
    DATE HELPERS
 ========================= */
-const todayKey = (): string => {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-};
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+const ymd = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+const todayKey = (): string => ymd(new Date());
 
 const monthKeyNow = (): string => {
   const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+};
+
+const dateKeyFromISO = (iso: string): string => iso.split("T")[0] || "";
+
+const monthKeyFromISO = (iso: string): string => {
+  const d = dateKeyFromISO(iso);
+  return d.slice(0, 7);
+};
+
+const normalizeMonthValue = (v: string): string => {
+  const base = v.split("T")[0];
+  if (base.length >= 7) return base.slice(0, 7);
+  return base;
 };
 
 const formatDateTime = (iso: string): string => {
@@ -271,24 +283,28 @@ const formatDateTime = (iso: string): string => {
   });
 };
 
-const dateKeyFromISO = (iso: string): string => iso.split("T")[0] || "";
-const monthKeyFromISO = (iso: string): string => {
-  const d = dateKeyFromISO(iso);
-  return d.slice(0, 7);
+// ✅ Week helpers (Monday-start week)
+const startOfWeekISO = (ymdStr: string): string => {
+  const [yy, mm, dd] = ymdStr.split("-").map((x) => Number(x));
+  if (!yy || !mm || !dd) return ymdStr;
+
+  const d = new Date(yy, mm - 1, dd);
+  // JS: Sun=0..Sat=6 ; we want Monday=0..Sunday=6
+  const dow = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - dow);
+  return ymd(d);
 };
 
-const normalizeMonthValue = (v: string): string => {
-  const base = v.split("T")[0];
-  if (base.length >= 7) return base.slice(0, 7);
-  return base;
+const addDaysISO = (ymdStr: string, days: number): string => {
+  const [yy, mm, dd] = ymdStr.split("-").map((x) => Number(x));
+  if (!yy || !mm || !dd) return ymdStr;
+  const d = new Date(yy, mm - 1, dd);
+  d.setDate(d.getDate() + days);
+  return ymd(d);
 };
 
-const ymd = (d: Date): string => {
-  const yy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
-};
+const inInclusiveRange = (targetISODate: string, startISO: string, endISO: string): boolean =>
+  targetISODate >= startISO && targetISODate <= endISO;
 
 /* =========================
    EXCEL IMAGE HELPERS
@@ -333,6 +349,7 @@ const Admin_Restock_Record: React.FC = () => {
 
   const [filterMode, setFilterMode] = useState<FilterMode>("day");
   const [selectedDate, setSelectedDate] = useState<string>("");
+  const [selectedWeek, setSelectedWeek] = useState<string>(""); // store an anchor date (YYYY-MM-DD)
   const [selectedMonth, setSelectedMonth] = useState<string>("");
 
   const [dateModalOpen, setDateModalOpen] = useState<boolean>(false);
@@ -431,20 +448,49 @@ const Admin_Restock_Record: React.FC = () => {
     void fetchRecords().then(() => event.detail.complete());
   };
 
+  // ✅ Active filter label (DAY / WEEK RANGE / MONTH)
   const activeDateLabel = useMemo(() => {
     if (filterMode === "day") return selectedDate || todayKey();
+
+    if (filterMode === "week") {
+      const anchor = selectedWeek || todayKey();
+      const start = startOfWeekISO(anchor);
+      const end = addDaysISO(start, 6);
+      return `${start} to ${end}`;
+    }
+
     return selectedMonth || monthKeyNow();
-  }, [filterMode, selectedDate, selectedMonth]);
+  }, [filterMode, selectedDate, selectedWeek, selectedMonth]);
+
+  // ✅ helper: check if row matches active filter
+  const rowMatchesFilter = (createdAtISO: string): boolean => {
+    const d = dateKeyFromISO(createdAtISO);
+
+    if (filterMode === "day") {
+      const key = selectedDate || "";
+      if (!key) return true; // no filter chosen -> show all
+      return d === key;
+    }
+
+    if (filterMode === "week") {
+      const anchor = selectedWeek || "";
+      if (!anchor) return true; // no filter chosen -> show all
+      const start = startOfWeekISO(anchor);
+      const end = addDaysISO(start, 6);
+      return inInclusiveRange(d, start, end);
+    }
+
+    // month
+    const mk = selectedMonth || "";
+    if (!mk) return true;
+    return monthKeyFromISO(createdAtISO) === mk;
+  };
 
   const filteredAddOn = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return recordsAddOn.filter((r) => {
-      if (filterMode === "day") {
-        if (selectedDate && dateKeyFromISO(r.created_at) !== selectedDate) return false;
-      } else {
-        if (selectedMonth && monthKeyFromISO(r.created_at) !== selectedMonth) return false;
-      }
+      if (!rowMatchesFilter(r.created_at)) return false;
 
       if (!q) return true;
 
@@ -452,17 +498,13 @@ const Admin_Restock_Record: React.FC = () => {
       const category = (r.add_ons?.category ?? "").toLowerCase();
       return name.includes(q) || category.includes(q);
     });
-  }, [recordsAddOn, search, filterMode, selectedDate, selectedMonth]);
+  }, [recordsAddOn, search, filterMode, selectedDate, selectedWeek, selectedMonth]);
 
   const filteredCons = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return recordsCons.filter((r) => {
-      if (filterMode === "day") {
-        if (selectedDate && dateKeyFromISO(r.created_at) !== selectedDate) return false;
-      } else {
-        if (selectedMonth && monthKeyFromISO(r.created_at) !== selectedMonth) return false;
-      }
+      if (!rowMatchesFilter(r.created_at)) return false;
 
       if (!q) return true;
 
@@ -471,7 +513,7 @@ const Admin_Restock_Record: React.FC = () => {
       const owner = (r.full_name ?? "").toLowerCase();
       return item.includes(q) || cat.includes(q) || owner.includes(q);
     });
-  }, [recordsCons, search, filterMode, selectedDate, selectedMonth]);
+  }, [recordsCons, search, filterMode, selectedDate, selectedWeek, selectedMonth]);
 
   const activeRowsCount = source === "add_ons" ? filteredAddOn.length : filteredCons.length;
 
@@ -482,8 +524,15 @@ const Admin_Restock_Record: React.FC = () => {
 
   const clearFilterValue = (): void => {
     if (filterMode === "day") setSelectedDate("");
+    else if (filterMode === "week") setSelectedWeek("");
     else setSelectedMonth("");
   };
+
+  const hasActiveFilter = useMemo(() => {
+    if (filterMode === "day") return !!selectedDate;
+    if (filterMode === "week") return !!selectedWeek;
+    return !!selectedMonth;
+  }, [filterMode, selectedDate, selectedWeek, selectedMonth]);
 
   /* ==========================
      DB HELPERS (ADD-ONS)
@@ -541,7 +590,6 @@ const Admin_Restock_Record: React.FC = () => {
       if (delErr) throw delErr;
 
       setRecordsCons((prev) => prev.filter((x) => x.id !== row.id));
-      notify("Failed to void consignment record.");
       notify("Voided. Consignment restock reverted.");
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -635,6 +683,8 @@ const Admin_Restock_Record: React.FC = () => {
 
   const deleteByFilter = async (): Promise<void> => {
     try {
+      const mode = filterMode;
+
       if (source === "add_ons") {
         const rowsToDelete = filteredAddOn;
         if (rowsToDelete.length === 0) {
@@ -650,7 +700,7 @@ const Admin_Restock_Record: React.FC = () => {
         if (delErr) throw delErr;
 
         setRecordsAddOn((prev) => prev.filter((x) => !ids.includes(x.id)));
-        notify("Deleted add-ons records and reverted restock/stocks.");
+        notify(`Deleted add-ons records by ${mode.toUpperCase()} and reverted restock/stocks.`);
       } else {
         const rowsToDelete = filteredCons;
         if (rowsToDelete.length === 0) {
@@ -666,7 +716,7 @@ const Admin_Restock_Record: React.FC = () => {
         if (delErr) throw delErr;
 
         setRecordsCons((prev) => prev.filter((x) => !ids.includes(x.id)));
-        notify("Deleted consignment restock records and reverted restock.");
+        notify(`Deleted consignment restock records by ${mode.toUpperCase()} and reverted restock.`);
       }
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -680,12 +730,24 @@ const Admin_Restock_Record: React.FC = () => {
   const exportExcel = async (): Promise<void> => {
     try {
       const now = new Date();
-      const modeLabel = filterMode === "day" ? "DAY" : "MONTH";
-      const filterLabel = filterMode === "day" ? selectedDate || todayKey() : selectedMonth || monthKeyNow();
+      const modeLabel = filterMode.toUpperCase();
+
+      // ✅ Export label depends on day/week/month
+      let filterLabel = "";
+      if (filterMode === "day") {
+        filterLabel = selectedDate || todayKey();
+      } else if (filterMode === "week") {
+        const anchor = selectedWeek || todayKey();
+        const start = startOfWeekISO(anchor);
+        const end = addDaysISO(start, 6);
+        filterLabel = `${start}_to_${end}`;
+      } else {
+        filterLabel = selectedMonth || monthKeyNow();
+      }
 
       const title = source === "add_ons" ? "ADD-ONS RESTOCK RECORDS REPORT" : "CONSIGNMENT RESTOCK RECORDS REPORT";
       const generated = `Generated: ${now.toLocaleString()}`;
-      const info = `Source: ${source.toUpperCase()}   Mode: ${modeLabel}   Filter: ${filterLabel}   Search: ${
+      const info = `Source: ${source.toUpperCase()}   Mode: ${modeLabel}   Filter: ${filterLabel.replaceAll("_", " ")}   Search: ${
         search.trim() ? search.trim() : "—"
       }`;
       const summary = `Total Rows: ${activeRowsCount}   Total Restock Qty: ${totalQty}`;
@@ -831,7 +893,7 @@ const Admin_Restock_Record: React.FC = () => {
 
       const buf = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      saveAs(blob, `restock_records_${source}_${filterLabel}.xlsx`);
+      saveAs(blob, `restock_records_${source}_${modeLabel}_${filterLabel}.xlsx`);
       notify("Exported Excel successfully.");
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -844,6 +906,26 @@ const Admin_Restock_Record: React.FC = () => {
 
   // ✅ label for edit overlay
   const editTitle = editingAddOn ? "EDIT RESTOCK" : editingCons ? "EDIT CONSIGNMENT RESTOCK" : "EDIT RESTOCK";
+
+  // ✅ Delete alert message per mode
+  const deleteAlertMessage = useMemo(() => {
+    const src = source === "add_ons" ? "ADD-ONS" : "CONSIGNMENT";
+
+    if (filterMode === "day") {
+      const d = selectedDate || todayKey();
+      return `This will DELETE all ${src} restock records for ${d} and REVERT restock. Continue?`;
+    }
+
+    if (filterMode === "week") {
+      const anchor = selectedWeek || todayKey();
+      const start = startOfWeekISO(anchor);
+      const end = addDaysISO(start, 6);
+      return `This will DELETE all ${src} restock records for WEEK ${start} to ${end} and REVERT restock. Continue?`;
+    }
+
+    const m = selectedMonth || monthKeyNow();
+    return `This will DELETE all ${src} restock records for ${m} and REVERT restock. Continue?`;
+  }, [filterMode, selectedDate, selectedWeek, selectedMonth, source]);
 
   return (
     <IonPage>
@@ -884,8 +966,13 @@ const Admin_Restock_Record: React.FC = () => {
 
               <label className="date-pill" style={{ marginLeft: 10 }}>
                 <span className="date-pill-label">Mode</span>
-                <select className="date-pill-input" value={filterMode} onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}>
+                <select
+                  className="date-pill-input"
+                  value={filterMode}
+                  onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}
+                >
                   <option value="day">Day</option>
+                  <option value="week">Week</option>
                   <option value="month">Month</option>
                 </select>
                 <span className="date-pill-icon" aria-hidden="true">
@@ -899,9 +986,16 @@ const Admin_Restock_Record: React.FC = () => {
               </IonButton>
 
               <label className="date-pill restock-datepill" style={{ marginLeft: 10 }}>
-                <span className="date-pill-label">{filterMode === "day" ? "Date" : "Month"}</span>
+                <span className="date-pill-label">
+                  {filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}
+                </span>
 
-                <button type="button" className="date-pill-input restock-datebtn" onClick={() => setDateModalOpen(true)} title="Open calendar">
+                <button
+                  type="button"
+                  className="date-pill-input restock-datebtn"
+                  onClick={() => setDateModalOpen(true)}
+                  title="Open calendar"
+                >
                   {activeDateLabel}
                 </button>
 
@@ -912,7 +1006,7 @@ const Admin_Restock_Record: React.FC = () => {
                 <button
                   type="button"
                   className="restock-iconbtn"
-                  disabled={filterMode === "day" ? !selectedDate : !selectedMonth}
+                  disabled={!hasActiveFilter}
                   onClick={clearFilterValue}
                   title="Clear filter"
                 >
@@ -927,7 +1021,7 @@ const Admin_Restock_Record: React.FC = () => {
 
               <IonButton className="receipt-btn" color="danger" fill="outline" onClick={() => setShowDeleteFilterAlert(true)}>
                 <IonIcon icon={trashOutline} slot="start" />
-                Delete By {filterMode === "day" ? "Date" : "Month"}
+                Delete By {filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}
               </IonButton>
             </div>
           </div>
@@ -1080,7 +1174,9 @@ const Admin_Restock_Record: React.FC = () => {
           <IonModal isOpen={dateModalOpen} onDidDismiss={() => setDateModalOpen(false)}>
             <IonHeader>
               <IonToolbar>
-                <IonTitle>{filterMode === "day" ? "Select Date" : "Select Month"}</IonTitle>
+                <IonTitle>
+                  {filterMode === "day" ? "Select Date" : filterMode === "week" ? "Select Week (Pick any day)" : "Select Month"}
+                </IonTitle>
                 <IonButtons slot="end">
                   <IonButton onClick={() => setDateModalOpen(false)}>
                     <IonIcon icon={closeOutline} />
@@ -1098,6 +1194,16 @@ const Admin_Restock_Record: React.FC = () => {
                     const val = (e.detail.value ?? "").toString();
                     if (!val) return;
                     setSelectedDate(val.split("T")[0]);
+                  }}
+                />
+              ) : filterMode === "week" ? (
+                <IonDatetime
+                  presentation="date"
+                  value={(selectedWeek || todayKey()) + "T00:00:00"}
+                  onIonChange={(e) => {
+                    const val = (e.detail.value ?? "").toString();
+                    if (!val) return;
+                    setSelectedWeek(val.split("T")[0]);
                   }}
                 />
               ) : (
@@ -1122,16 +1228,8 @@ const Admin_Restock_Record: React.FC = () => {
           <IonAlert
             isOpen={showDeleteFilterAlert}
             onDidDismiss={() => setShowDeleteFilterAlert(false)}
-            header={`Delete by ${filterMode === "day" ? "Date" : "Month"}?`}
-            message={
-              filterMode === "day"
-                ? `This will DELETE all ${source === "add_ons" ? "ADD-ONS" : "CONSIGNMENT"} restock records for ${
-                    selectedDate || todayKey()
-                  } and REVERT restock. Continue?`
-                : `This will DELETE all ${source === "add_ons" ? "ADD-ONS" : "CONSIGNMENT"} restock records for ${
-                    selectedMonth || monthKeyNow()
-                  } and REVERT restock. Continue?`
-            }
+            header={`Delete by ${filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}?`}
+            message={deleteAlertMessage}
             buttons={[
               { text: "Cancel", role: "cancel" },
               { text: "Delete", role: "destructive", handler: () => void deleteByFilter() },
