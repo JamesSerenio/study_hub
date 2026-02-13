@@ -13,6 +13,8 @@
 // ✅ Edit supports IMAGE UPLOAD (Supabase Storage) + replacing auto deletes old image
 // ✅ Deleting row deletes image in Storage + DB row
 // ✅ STRICT TS: NO any
+//
+// ✅ FIX: RESTOCK action now logs into public.consignment_restocks AND updates consignment.restocked via RPC (consignment_restock)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
@@ -245,6 +247,7 @@ const Staff_Consignment_Record: React.FC = () => {
 
   const [restockTarget, setRestockTarget] = useState<ConsignmentRow | null>(null);
   const [restockQty, setRestockQty] = useState<string>("");
+  const [restockNote, setRestockNote] = useState<string>(""); // ✅ NEW
   const [savingRestock, setSavingRestock] = useState<boolean>(false);
 
   const [deleteTarget, setDeleteTarget] = useState<ConsignmentRow | null>(null);
@@ -681,8 +684,10 @@ const Staff_Consignment_Record: React.FC = () => {
   const openRestock = (r: ConsignmentRow): void => {
     setRestockTarget(r);
     setRestockQty("");
+    setRestockNote(""); // ✅ NEW
   };
 
+  // ✅ FIXED: RESTOCK now uses RPC that also inserts into consignment_restocks
   const saveRestock = async (): Promise<void> => {
     if (!restockTarget) return;
 
@@ -692,13 +697,15 @@ const Staff_Consignment_Record: React.FC = () => {
       return;
     }
 
-    const current = Math.max(0, Math.floor(Number(restockTarget.restocked ?? 0) || 0));
-    const next = current + addQty;
-
     try {
       setSavingRestock(true);
 
-      const { error } = await supabase.from("consignment").update({ restocked: next }).eq("id", restockTarget.id);
+      // ✅ 1 call: update consignment.restocked AND log into consignment_restocks
+      const { error } = await supabase.rpc("consignment_restock", {
+        p_consignment_id: restockTarget.id,
+        p_qty: addQty,
+        p_note: restockNote.trim() ? restockNote.trim() : null,
+      });
 
       if (error) {
         alert(`Restock failed: ${error.message}`);
@@ -706,6 +713,9 @@ const Staff_Consignment_Record: React.FC = () => {
       }
 
       setRestockTarget(null);
+      setRestockQty("");
+      setRestockNote("");
+
       await fetchAll();
     } finally {
       setSavingRestock(false);
@@ -832,7 +842,12 @@ const Staff_Consignment_Record: React.FC = () => {
 
                           <td>
                             <div className="action-stack" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                              <button className="receipt-btn" onClick={() => openCashout(p)} disabled={p.remaining <= 0} title={p.remaining <= 0 ? "No remaining" : "Cash out"}>
+                              <button
+                                className="receipt-btn"
+                                onClick={() => openCashout(p)}
+                                disabled={p.remaining <= 0}
+                                title={p.remaining <= 0 ? "No remaining" : "Cash out"}
+                              >
                                 Cash Out
                               </button>
 
@@ -1284,27 +1299,60 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Full Name *</span>
-                  <input className="money-input" value={editForm.full_name} onChange={(e) => setEditForm((p) => ({ ...p, full_name: e.currentTarget.value }))} disabled={savingEdit} placeholder="Owner full name" />
+                  <input
+                    className="money-input"
+                    value={editForm.full_name}
+                    onChange={(e) => setEditForm((p) => ({ ...p, full_name: e.currentTarget.value }))}
+                    disabled={savingEdit}
+                    placeholder="Owner full name"
+                  />
                 </div>
 
                 <div className="receipt-row">
                   <span>Category</span>
-                  <input className="money-input" value={editForm.category} onChange={(e) => setEditForm((p) => ({ ...p, category: e.currentTarget.value }))} disabled={savingEdit} placeholder="Optional category" />
+                  <input
+                    className="money-input"
+                    value={editForm.category}
+                    onChange={(e) => setEditForm((p) => ({ ...p, category: e.currentTarget.value }))}
+                    disabled={savingEdit}
+                    placeholder="Optional category"
+                  />
                 </div>
 
                 <div className="receipt-row">
                   <span>Item Name *</span>
-                  <input className="money-input" value={editForm.item_name} onChange={(e) => setEditForm((p) => ({ ...p, item_name: e.currentTarget.value }))} disabled={savingEdit} placeholder="Item name" />
+                  <input
+                    className="money-input"
+                    value={editForm.item_name}
+                    onChange={(e) => setEditForm((p) => ({ ...p, item_name: e.currentTarget.value }))}
+                    disabled={savingEdit}
+                    placeholder="Item name"
+                  />
                 </div>
 
                 <div className="receipt-row">
                   <span>Size</span>
-                  <input className="money-input" value={editForm.size} onChange={(e) => setEditForm((p) => ({ ...p, size: e.currentTarget.value }))} disabled={savingEdit} placeholder="Optional size" />
+                  <input
+                    className="money-input"
+                    value={editForm.size}
+                    onChange={(e) => setEditForm((p) => ({ ...p, size: e.currentTarget.value }))}
+                    disabled={savingEdit}
+                    placeholder="Optional size"
+                  />
                 </div>
 
                 <div className="receipt-row">
                   <span>Price *</span>
-                  <input className="money-input" type="number" min="0" step="0.01" value={editForm.price} onChange={(e) => setEditForm((p) => ({ ...p, price: e.currentTarget.value }))} disabled={savingEdit} placeholder="0.00" />
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editForm.price}
+                    onChange={(e) => setEditForm((p) => ({ ...p, price: e.currentTarget.value }))}
+                    disabled={savingEdit}
+                    placeholder="0.00"
+                  />
                 </div>
 
                 <div className="modal-actions" style={{ marginTop: 16 }}>
@@ -1319,7 +1367,7 @@ const Staff_Consignment_Record: React.FC = () => {
             </div>
           )}
 
-          {/* RESTOCK MODAL */}
+          {/* ✅ RESTOCK MODAL (NOW WITH NOTE + DB LOG) */}
           {restockTarget && (
             <div className="receipt-overlay" onClick={() => (savingRestock ? null : setRestockTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1332,10 +1380,39 @@ const Staff_Consignment_Record: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Add Qty</span>
-                  <input className="money-input" type="number" min="1" step="1" value={restockQty} onChange={(e) => setRestockQty(e.currentTarget.value)} placeholder="0" disabled={savingRestock} />
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={restockQty}
+                    onChange={(e) => setRestockQty(e.currentTarget.value)}
+                    placeholder="0"
+                    disabled={savingRestock}
+                  />
                 </div>
 
-                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>Example: current 10 + input 5 = 15</div>
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>Note (optional)</div>
+                  <textarea
+                    value={restockNote}
+                    onChange={(e) => setRestockNote(e.currentTarget.value)}
+                    placeholder="Example: new stocks delivered / replenishment..."
+                    style={{
+                      width: "100%",
+                      minHeight: 90,
+                      resize: "vertical",
+                      padding: 12,
+                      borderRadius: 12,
+                      border: "1px solid rgba(0,0,0,0.15)",
+                      outline: "none",
+                      fontSize: 14,
+                    }}
+                    disabled={savingRestock}
+                  />
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>✅ This will also be recorded in Restock Logs.</div>
 
                 <div className="modal-actions" style={{ marginTop: 16 }}>
                   <button className="receipt-btn" onClick={() => setRestockTarget(null)} disabled={savingRestock}>

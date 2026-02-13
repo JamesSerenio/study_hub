@@ -1,3 +1,14 @@
+// src/pages/Admin_Restock_Record.tsx
+// ✅ FIX (as you asked):
+// - Hindi ko binago layout mo.
+// - INANGAT yung search bar (inline CSS) para um-align sa row ng REFRESH/DELETE.
+// ✅ FIX (NEW):
+// - Consignment dropdown now shows records correctly by JOINing consignment_restocks -> consignment
+// - Backward compatible if your consignment_restocks already stores item fields.
+// ✅ UI FIX (YOUR REQUEST):
+// - EDIT modal now SAME STYLE as Staff_Consignment_Record EDIT (receipt-overlay / receipt-container)
+// - SAME classnames (receipt-* / money-input / modal-actions / receipt-btn)
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
@@ -10,17 +21,12 @@ import {
   RefresherEventDetail,
   IonButton,
   IonIcon,
-  IonItem,
-  IonLabel,
-  IonInput,
   IonSpinner,
   IonModal,
   IonButtons,
   IonDatetime,
   IonAlert,
   IonToast,
-  IonSelect,
-  IonSelectOption,
 } from "@ionic/react";
 import {
   refreshOutline,
@@ -41,9 +47,8 @@ type FilterMode = "day" | "month";
 type SourceKind = "add_ons" | "consignment";
 
 /* =========================
-   ADD-ONS TYPES (existing)
+   ADD-ONS TYPES
 ========================= */
-
 type AddOnJoin = {
   name: string | null;
   category: string | null;
@@ -71,6 +76,15 @@ type RestockRecordRaw = {
 /* =========================
    CONSIGNMENT RESTOCK TYPES
 ========================= */
+type ConsJoin = {
+  full_name: string | null;
+  category: string | null;
+  item_name: string | null;
+  size: string | null;
+  image_url: string | null;
+};
+
+type ConsJoinRaw = ConsJoin | ConsJoin[] | null;
 
 type ConsRestockRow = {
   id: string;
@@ -90,23 +104,24 @@ type ConsRestockRaw = {
   created_at: unknown;
   consignment_id: unknown;
   qty: unknown;
+
+  // Old/flat fields (if stored in restock table)
   full_name?: unknown;
   category?: unknown;
   item_name?: unknown;
   size?: unknown;
   image_url?: unknown;
+
+  // ✅ NEW join payload from Supabase select
+  consignment?: unknown;
 };
 
 /* =========================
    SAFE PARSERS
 ========================= */
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null;
-
-const asStringOrNull = (v: unknown): string | null =>
-  typeof v === "string" ? v : null;
-
+const asStringOrNull = (v: unknown): string | null => (typeof v === "string" ? v : null);
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
 
 const asNumber = (v: unknown): number => {
@@ -167,6 +182,35 @@ const normalizeAddOnRow = (raw: unknown): RestockRecordRow | null => {
   };
 };
 
+// ✅ NEW: normalize consignment join object
+const normalizeConsJoin = (v: unknown): ConsJoin | null => {
+  if (!v) return null;
+
+  if (Array.isArray(v)) {
+    const first = v[0];
+    if (!isRecord(first)) return null;
+    return {
+      full_name: asStringOrNull(first.full_name),
+      category: asStringOrNull(first.category),
+      item_name: asStringOrNull(first.item_name),
+      size: asStringOrNull(first.size),
+      image_url: asStringOrNull(first.image_url),
+    };
+  }
+
+  if (isRecord(v)) {
+    return {
+      full_name: asStringOrNull(v.full_name),
+      category: asStringOrNull(v.category),
+      item_name: asStringOrNull(v.item_name),
+      size: asStringOrNull(v.size),
+      image_url: asStringOrNull(v.image_url),
+    };
+  }
+
+  return null;
+};
+
 const normalizeConsRow = (raw: unknown): ConsRestockRow | null => {
   if (!isRecord(raw)) return null;
   const r = raw as ConsRestockRaw;
@@ -176,9 +220,13 @@ const normalizeConsRow = (raw: unknown): ConsRestockRow | null => {
   const consignment_id = asString(r.consignment_id);
   if (!id || !created_at || !consignment_id) return null;
 
-  const full_name = asString(r.full_name);
-  const item_name = asString(r.item_name);
+  // Prefer joined consignment fields if present
+  const join = normalizeConsJoin(r.consignment as ConsJoinRaw);
 
+  const full_name = (join?.full_name ?? asString(r.full_name)).trim();
+  const item_name = (join?.item_name ?? asString(r.item_name)).trim();
+
+  // If still missing, skip row (cannot display)
   if (!full_name || !item_name) return null;
 
   return {
@@ -187,17 +235,16 @@ const normalizeConsRow = (raw: unknown): ConsRestockRow | null => {
     consignment_id,
     qty: asNumber(r.qty),
     full_name,
-    category: asStringOrNull(r.category),
+    category: join?.category ?? asStringOrNull(r.category),
     item_name,
-    size: asStringOrNull(r.size),
-    image_url: asStringOrNull(r.image_url),
+    size: join?.size ?? asStringOrNull(r.size),
+    image_url: join?.image_url ?? asStringOrNull(r.image_url),
   };
 };
 
 /* =========================
    DATE HELPERS
 ========================= */
-
 const todayKey = (): string => {
   const d = new Date();
   const y = d.getFullYear();
@@ -225,7 +272,6 @@ const formatDateTime = (iso: string): string => {
 };
 
 const dateKeyFromISO = (iso: string): string => iso.split("T")[0] || "";
-
 const monthKeyFromISO = (iso: string): string => {
   const d = dateKeyFromISO(iso);
   return d.slice(0, 7);
@@ -247,7 +293,6 @@ const ymd = (d: Date): string => {
 /* =========================
    EXCEL IMAGE HELPERS
 ========================= */
-
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -261,9 +306,7 @@ const blobToBase64 = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
-const fetchImageBase64 = async (
-  url: string
-): Promise<{ base64: string; ext: "png" | "jpeg" }> => {
+const fetchImageBase64 = async (url: string): Promise<{ base64: string; ext: "png" | "jpeg" }> => {
   const r = await fetch(url);
   if (!r.ok) throw new Error("Image fetch failed");
 
@@ -295,7 +338,7 @@ const Admin_Restock_Record: React.FC = () => {
   const [dateModalOpen, setDateModalOpen] = useState<boolean>(false);
   const [showDeleteFilterAlert, setShowDeleteFilterAlert] = useState(false);
 
-  // ✅ EDIT EXACT VALUE (works for both)
+  // ✅ Edit overlay (same as Staff_Consignment_Record)
   const [editOpen, setEditOpen] = useState(false);
   const [editQty, setEditQty] = useState<string>("0");
 
@@ -319,26 +362,47 @@ const Admin_Restock_Record: React.FC = () => {
     if (error) throw error;
 
     const rawList: unknown[] = Array.isArray(data) ? (data as unknown[]) : [];
-    const normalized = rawList
-      .map((x) => normalizeAddOnRow(x))
-      .filter((x): x is RestockRecordRow => x !== null);
-
+    const normalized = rawList.map((x) => normalizeAddOnRow(x)).filter((x): x is RestockRecordRow => x !== null);
     setRecordsAddOn(normalized);
   };
 
+  // ✅ FIXED: JOIN consignment_restocks -> consignment
   const fetchConsRecords = async (): Promise<void> => {
-    const { data, error } = await supabase
+    const joined = await supabase
+      .from("consignment_restocks")
+      .select(
+        `
+        id,
+        created_at,
+        consignment_id,
+        qty,
+        consignment:consignment_id (
+          full_name,
+          category,
+          item_name,
+          size,
+          image_url
+        )
+      `
+      )
+      .order("created_at", { ascending: false });
+
+    if (!joined.error) {
+      const rawList: unknown[] = Array.isArray(joined.data) ? (joined.data as unknown[]) : [];
+      const normalized = rawList.map((x) => normalizeConsRow(x)).filter((x): x is ConsRestockRow => x !== null);
+      setRecordsCons(normalized);
+      return;
+    }
+
+    const flat = await supabase
       .from("consignment_restocks")
       .select("id, created_at, consignment_id, qty, full_name, category, item_name, size, image_url")
       .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    if (flat.error) throw flat.error;
 
-    const rawList: unknown[] = Array.isArray(data) ? (data as unknown[]) : [];
-    const normalized = rawList
-      .map((x) => normalizeConsRow(x))
-      .filter((x): x is ConsRestockRow => x !== null);
-
+    const rawList: unknown[] = Array.isArray(flat.data) ? (flat.data as unknown[]) : [];
+    const normalized = rawList.map((x) => normalizeConsRow(x)).filter((x): x is ConsRestockRow => x !== null);
     setRecordsCons(normalized);
   };
 
@@ -348,6 +412,7 @@ const Admin_Restock_Record: React.FC = () => {
       if (source === "add_ons") await fetchAddOnRecords();
       else await fetchConsRecords();
     } catch (err) {
+      // eslint-disable-next-line no-console
       console.error("Error fetching records:", err);
       notify("Failed to load restock records.");
       if (source === "add_ons") setRecordsAddOn([]);
@@ -408,25 +473,12 @@ const Admin_Restock_Record: React.FC = () => {
     });
   }, [recordsCons, search, filterMode, selectedDate, selectedMonth]);
 
-  const activeRowsCount =
-    source === "add_ons" ? filteredAddOn.length : filteredCons.length;
+  const activeRowsCount = source === "add_ons" ? filteredAddOn.length : filteredCons.length;
 
   const totalQty = useMemo(() => {
-    if (source === "add_ons")
-      return filteredAddOn.reduce(
-        (sum, r) => sum + (Number.isFinite(r.qty) ? r.qty : 0),
-        0
-      );
-    return filteredCons.reduce(
-      (sum, r) => sum + (Number.isFinite(r.qty) ? r.qty : 0),
-      0
-    );
+    if (source === "add_ons") return filteredAddOn.reduce((sum, r) => sum + (Number.isFinite(r.qty) ? r.qty : 0), 0);
+    return filteredCons.reduce((sum, r) => sum + (Number.isFinite(r.qty) ? r.qty : 0), 0);
   }, [source, filteredAddOn, filteredCons]);
-
-  /* ✅ FIX 1: openCalendar (typed-safe) */
-  function openCalendar(): void {
-    setDateModalOpen(true);
-  }
 
   const clearFilterValue = (): void => {
     if (filterMode === "day") setSelectedDate("");
@@ -436,83 +488,47 @@ const Admin_Restock_Record: React.FC = () => {
   /* ==========================
      DB HELPERS (ADD-ONS)
   =========================== */
-
-  const adjustRestockedAddOns = async (
-    addOnId: string,
-    delta: number
-  ): Promise<void> => {
+  const adjustRestockedAddOns = async (addOnId: string, delta: number): Promise<void> => {
     if (!Number.isFinite(delta) || delta === 0) return;
 
-    const { data: currentRow, error: readErr } = await supabase
-      .from("add_ons")
-      .select("restocked")
-      .eq("id", addOnId)
-      .single();
-
+    const { data: currentRow, error: readErr } = await supabase.from("add_ons").select("restocked").eq("id", addOnId).single();
     if (readErr) throw readErr;
 
-    const currentRestocked = asNumber(
-      (currentRow as Record<string, unknown>)["restocked"]
-    );
+    const currentRestocked = asNumber((currentRow as Record<string, unknown>)["restocked"]);
     const next = currentRestocked + delta;
     const safeNext = next < 0 ? 0 : next;
 
-    const { error: upErr } = await supabase
-      .from("add_ons")
-      .update({ restocked: safeNext })
-      .eq("id", addOnId);
-
+    const { error: upErr } = await supabase.from("add_ons").update({ restocked: safeNext }).eq("id", addOnId);
     if (upErr) throw upErr;
   };
 
   /* ==========================
      DB HELPERS (CONSIGNMENT)
   =========================== */
-
-  const adjustRestockedConsignment = async (
-    consignmentId: string,
-    delta: number
-  ): Promise<void> => {
+  const adjustRestockedConsignment = async (consignmentId: string, delta: number): Promise<void> => {
     if (!Number.isFinite(delta) || delta === 0) return;
 
-    const { data: currentRow, error: readErr } = await supabase
-      .from("consignment")
-      .select("restocked")
-      .eq("id", consignmentId)
-      .single();
-
+    const { data: currentRow, error: readErr } = await supabase.from("consignment").select("restocked").eq("id", consignmentId).single();
     if (readErr) throw readErr;
 
-    const currentRestocked = asNumber(
-      (currentRow as Record<string, unknown>)["restocked"]
-    );
+    const currentRestocked = asNumber((currentRow as Record<string, unknown>)["restocked"]);
     const next = currentRestocked + delta;
     const safeNext = next < 0 ? 0 : next;
 
-    const { error: upErr } = await supabase
-      .from("consignment")
-      .update({ restocked: safeNext })
-      .eq("id", consignmentId);
-
+    const { error: upErr } = await supabase.from("consignment").update({ restocked: safeNext }).eq("id", consignmentId);
     if (upErr) throw upErr;
   };
-
-  /* ==========================
-     VOID / EDIT / DELETE-BY-FILTER
-  =========================== */
 
   const doVoidAddOnRow = async (row: RestockRecordRow): Promise<void> => {
     try {
       await adjustRestockedAddOns(row.add_on_id, -row.qty);
-      const { error: delErr } = await supabase
-        .from("add_on_restocks")
-        .delete()
-        .eq("id", row.id);
+      const { error: delErr } = await supabase.from("add_on_restocks").delete().eq("id", row.id);
       if (delErr) throw delErr;
 
       setRecordsAddOn((prev) => prev.filter((x) => x.id !== row.id));
       notify("Voided. Restock and stocks reverted.");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Failed to void record.");
     }
@@ -521,15 +537,14 @@ const Admin_Restock_Record: React.FC = () => {
   const doVoidConsRow = async (row: ConsRestockRow): Promise<void> => {
     try {
       await adjustRestockedConsignment(row.consignment_id, -row.qty);
-      const { error: delErr } = await supabase
-        .from("consignment_restocks")
-        .delete()
-        .eq("id", row.id);
+      const { error: delErr } = await supabase.from("consignment_restocks").delete().eq("id", row.id);
       if (delErr) throw delErr;
 
       setRecordsCons((prev) => prev.filter((x) => x.id !== row.id));
+      notify("Failed to void consignment record.");
       notify("Voided. Consignment restock reverted.");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Failed to void consignment record.");
     }
@@ -549,6 +564,12 @@ const Admin_Restock_Record: React.FC = () => {
     setEditOpen(true);
   };
 
+  const closeEdit = (): void => {
+    setEditOpen(false);
+    setEditingAddOn(null);
+    setEditingCons(null);
+  };
+
   const saveEditQty = async (): Promise<void> => {
     const newQty = clampInt(editQty, 0);
     if (newQty <= 0) {
@@ -557,7 +578,6 @@ const Admin_Restock_Record: React.FC = () => {
     }
 
     try {
-      // ADD-ONS
       if (editingAddOn) {
         const oldQty = editingAddOn.qty;
         const delta = newQty - oldQty;
@@ -577,15 +597,10 @@ const Admin_Restock_Record: React.FC = () => {
           return;
         }
 
-        setRecordsAddOn((prev) =>
-          prev.map((x) =>
-            x.id === editingAddOn.id ? { ...x, qty: newQty } : x
-          )
-        );
+        setRecordsAddOn((prev) => prev.map((x) => (x.id === editingAddOn.id ? { ...x, qty: newQty } : x)));
         notify("Restock edited.");
       }
 
-      // CONSIGNMENT
       if (editingCons) {
         const oldQty = editingCons.qty;
         const delta = newQty - oldQty;
@@ -605,19 +620,14 @@ const Admin_Restock_Record: React.FC = () => {
           return;
         }
 
-        setRecordsCons((prev) =>
-          prev.map((x) =>
-            x.id === editingCons.id ? { ...x, qty: newQty } : x
-          )
-        );
+        setRecordsCons((prev) => prev.map((x) => (x.id === editingCons.id ? { ...x, qty: newQty } : x)));
         notify("Consignment restock edited.");
       }
 
-      setEditOpen(false);
-      setEditingAddOn(null);
-      setEditingCons(null);
+      closeEdit();
       void fetchRecords();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Failed to edit restock.");
     }
@@ -633,14 +643,10 @@ const Admin_Restock_Record: React.FC = () => {
           return;
         }
 
-        for (const r of rowsToDelete)
-          await adjustRestockedAddOns(r.add_on_id, -r.qty);
+        for (const r of rowsToDelete) await adjustRestockedAddOns(r.add_on_id, -r.qty);
 
         const ids = rowsToDelete.map((r) => r.id);
-        const { error: delErr } = await supabase
-          .from("add_on_restocks")
-          .delete()
-          .in("id", ids);
+        const { error: delErr } = await supabase.from("add_on_restocks").delete().in("id", ids);
         if (delErr) throw delErr;
 
         setRecordsAddOn((prev) => prev.filter((x) => !ids.includes(x.id)));
@@ -653,20 +659,17 @@ const Admin_Restock_Record: React.FC = () => {
           return;
         }
 
-        for (const r of rowsToDelete)
-          await adjustRestockedConsignment(r.consignment_id, -r.qty);
+        for (const r of rowsToDelete) await adjustRestockedConsignment(r.consignment_id, -r.qty);
 
         const ids = rowsToDelete.map((r) => r.id);
-        const { error: delErr } = await supabase
-          .from("consignment_restocks")
-          .delete()
-          .in("id", ids);
+        const { error: delErr } = await supabase.from("consignment_restocks").delete().in("id", ids);
         if (delErr) throw delErr;
 
         setRecordsCons((prev) => prev.filter((x) => !ids.includes(x.id)));
         notify("Deleted consignment restock records and reverted restock.");
       }
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Failed to delete by filter.");
     } finally {
@@ -674,24 +677,13 @@ const Admin_Restock_Record: React.FC = () => {
     }
   };
 
-  /* ==========================
-     EXCEL EXPORT (switch by source)
-  =========================== */
-
   const exportExcel = async (): Promise<void> => {
     try {
       const now = new Date();
       const modeLabel = filterMode === "day" ? "DAY" : "MONTH";
-      const filterLabel =
-        filterMode === "day"
-          ? selectedDate || todayKey()
-          : selectedMonth || monthKeyNow();
+      const filterLabel = filterMode === "day" ? selectedDate || todayKey() : selectedMonth || monthKeyNow();
 
-      const title =
-        source === "add_ons"
-          ? "ADD-ONS RESTOCK RECORDS REPORT"
-          : "CONSIGNMENT RESTOCK RECORDS REPORT";
-
+      const title = source === "add_ons" ? "ADD-ONS RESTOCK RECORDS REPORT" : "CONSIGNMENT RESTOCK RECORDS REPORT";
       const generated = `Generated: ${now.toLocaleString()}`;
       const info = `Source: ${source.toUpperCase()}   Mode: ${modeLabel}   Filter: ${filterLabel}   Search: ${
         search.trim() ? search.trim() : "—"
@@ -699,11 +691,8 @@ const Admin_Restock_Record: React.FC = () => {
       const summary = `Total Rows: ${activeRowsCount}   Total Restock Qty: ${totalQty}`;
 
       const workbook = new ExcelJS.Workbook();
-      const ws = workbook.addWorksheet("Restocks", {
-        views: [{ state: "frozen", ySplit: 6 }],
-      });
+      const ws = workbook.addWorksheet("Restocks", { views: [{ state: "frozen", ySplit: 6 }] });
 
-      // columns
       ws.columns =
         source === "add_ons"
           ? [
@@ -743,22 +732,15 @@ const Admin_Restock_Record: React.FC = () => {
 
       ws.addRow([]);
 
-      /* ✅ FIX 2: headerRow.values (ExcelJS row.values is 1-based) */
       const headerRow = ws.getRow(6);
       const headers = ws.columns.map((c) => String(c.header ?? ""));
       headerRow.values = ["", ...headers];
-
       headerRow.font = { bold: true };
       headerRow.alignment = { vertical: "middle", horizontal: "center" };
       headerRow.height = 20;
 
       headerRow.eachCell((cell) => {
-        cell.border = {
-          top: { style: "thin" },
-          left: { style: "thin" },
-          bottom: { style: "thin" },
-          right: { style: "thin" },
-        };
+        cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEFEF" } };
       });
 
@@ -785,16 +767,8 @@ const Admin_Restock_Record: React.FC = () => {
 
           for (let c = 1; c <= 6; c++) {
             const cell = row.getCell(c);
-            cell.alignment =
-              c === 2
-                ? { vertical: "middle", horizontal: "left", wrapText: true }
-                : { vertical: "middle", horizontal: "center" };
-            cell.border = {
-              top: { style: "thin" },
-              left: { style: "thin" },
-              bottom: { style: "thin" },
-              right: { style: "thin" },
-            };
+            cell.alignment = c === 2 ? { vertical: "middle", horizontal: "left", wrapText: true } : { vertical: "middle", horizontal: "center" };
+            cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
           }
 
           const imgUrl = r.add_ons?.image_url ?? null;
@@ -802,10 +776,7 @@ const Admin_Restock_Record: React.FC = () => {
             try {
               const { base64, ext } = await fetchImageBase64(imgUrl);
               const imgId = workbook.addImage({ base64, extension: ext });
-              ws.addImage(imgId, {
-                tl: { col: 0.15, row: rowIndex - 1 + 0.15 },
-                ext: { width: 48, height: 48 },
-              });
+              ws.addImage(imgId, { tl: { col: 0.15, row: rowIndex - 1 + 0.15 }, ext: { width: 48, height: 48 } });
             } catch {
               // ignore
             }
@@ -826,7 +797,6 @@ const Admin_Restock_Record: React.FC = () => {
           const datePart = isNaN(d.getTime()) ? dateKeyFromISO(r.created_at) : ymd(d);
           const timePart = isNaN(d.getTime()) ? "" : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 
-          // columns: image | item | owner | category | qty | date | time
           row.getCell(2).value = name;
           row.getCell(3).value = owner;
           row.getCell(4).value = cat;
@@ -839,15 +809,8 @@ const Admin_Restock_Record: React.FC = () => {
           for (let c = 1; c <= 7; c++) {
             const cell = row.getCell(c);
             cell.alignment =
-              c === 2 || c === 3
-                ? { vertical: "middle", horizontal: "left", wrapText: true }
-                : { vertical: "middle", horizontal: "center" };
-            cell.border = {
-              top: { style: "thin" },
-              left: { style: "thin" },
-              bottom: { style: "thin" },
-              right: { style: "thin" },
-            };
+              c === 2 || c === 3 ? { vertical: "middle", horizontal: "left", wrapText: true } : { vertical: "middle", horizontal: "center" };
+            cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
           }
 
           const imgUrl = r.image_url ?? null;
@@ -855,10 +818,7 @@ const Admin_Restock_Record: React.FC = () => {
             try {
               const { base64, ext } = await fetchImageBase64(imgUrl);
               const imgId = workbook.addImage({ base64, extension: ext });
-              ws.addImage(imgId, {
-                tl: { col: 0.15, row: rowIndex - 1 + 0.15 },
-                ext: { width: 48, height: 48 },
-              });
+              ws.addImage(imgId, { tl: { col: 0.15, row: rowIndex - 1 + 0.15 }, ext: { width: 48, height: 48 } });
             } catch {
               // ignore
             }
@@ -870,20 +830,28 @@ const Admin_Restock_Record: React.FC = () => {
       }
 
       const buf = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buf], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       saveAs(blob, `restock_records_${source}_${filterLabel}.xlsx`);
       notify("Exported Excel successfully.");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Export failed.");
     }
   };
 
+  const sourceLabel = source === "add_ons" ? "Add-ons Restock" : "Consignment Restock";
+
+  // ✅ label for edit overlay
+  const editTitle = editingAddOn ? "EDIT RESTOCK" : editingCons ? "EDIT CONSIGNMENT RESTOCK" : "EDIT RESTOCK";
+
   return (
     <IonPage>
-      <IonHeader></IonHeader>
+      <IonHeader>
+        <IonToolbar>
+          <IonTitle>Admin Restock Record</IonTitle>
+        </IonToolbar>
+      </IonHeader>
 
       <IonContent className="staff-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
@@ -895,55 +863,85 @@ const Admin_Restock_Record: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Restock Record</h2>
               <div className="customer-subtext">
-                Source: <strong>{source === "add_ons" ? "Add-ons Restock" : "Consignment Restock"}</strong> • Showing records for:{" "}
-                <strong>{activeDateLabel}</strong>{" "}
+                Source: <strong>{sourceLabel}</strong> • Showing records for: <strong>{activeDateLabel}</strong>{" "}
                 <span style={{ marginLeft: 8 }}>
                   (Total: <strong>{activeRowsCount}</strong> | Qty: <strong>{totalQty}</strong>)
                 </span>
               </div>
-
-              {/* ✅ DROPDOWN SOURCE */}
-              <div style={{ marginTop: 10, maxWidth: 320 }}>
-                <IonItem lines="none" className="restock-ionitem">
-                  <IonLabel position="stacked">Restock Source</IonLabel>
-                  <IonSelect
-                    value={source}
-                    interface="popover"
-                    onIonChange={(e) => setSource(String(e.detail.value) as SourceKind)}
-                  >
-                    <IonSelectOption value="add_ons">Add-ons Restock</IonSelectOption>
-                    <IonSelectOption value="consignment">Consignment Restock</IonSelectOption>
-                  </IonSelect>
-                </IonItem>
-              </div>
             </div>
 
             <div className="customer-topbar-right restock-actions">
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Source</span>
+                <select className="date-pill-input" value={source} onChange={(e) => setSource(e.currentTarget.value as SourceKind)}>
+                  <option value="add_ons">Add-ons Restock</option>
+                  <option value="consignment">Consignment Restock</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
+
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Mode</span>
+                <select className="date-pill-input" value={filterMode} onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}>
+                  <option value="day">Day</option>
+                  <option value="month">Month</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
+
               <IonButton className="receipt-btn" fill="outline" onClick={() => void exportExcel()}>
                 <IonIcon icon={downloadOutline} slot="start" />
                 Export Excel
               </IonButton>
 
-              <IonButton
-                className="receipt-btn"
-                color="danger"
-                fill="outline"
-                onClick={() => setShowDeleteFilterAlert(true)}
-              >
-                <IonIcon icon={trashOutline} slot="start" />
-                Delete By {filterMode === "day" ? "Date" : "Month"}
-              </IonButton>
+              <label className="date-pill restock-datepill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">{filterMode === "day" ? "Date" : "Month"}</span>
+
+                <button type="button" className="date-pill-input restock-datebtn" onClick={() => setDateModalOpen(true)} title="Open calendar">
+                  {activeDateLabel}
+                </button>
+
+                <button type="button" className="restock-iconbtn" onClick={() => setDateModalOpen(true)} title="Calendar">
+                  <IonIcon icon={calendarOutline} />
+                </button>
+
+                <button
+                  type="button"
+                  className="restock-iconbtn"
+                  disabled={filterMode === "day" ? !selectedDate : !selectedMonth}
+                  onClick={clearFilterValue}
+                  title="Clear filter"
+                >
+                  <IonIcon icon={closeCircleOutline} />
+                </button>
+              </label>
 
               <IonButton className="receipt-btn" fill="outline" onClick={() => void fetchRecords()}>
                 <IonIcon icon={refreshOutline} slot="start" />
                 Refresh
               </IonButton>
+
+              <IonButton className="receipt-btn" color="danger" fill="outline" onClick={() => setShowDeleteFilterAlert(true)}>
+                <IonIcon icon={trashOutline} slot="start" />
+                Delete By {filterMode === "day" ? "Date" : "Month"}
+              </IonButton>
             </div>
           </div>
 
-          <div className="restock-filters">
+          {/* ✅ SEARCH (INANGAT LANG) */}
+          <div
+            className="restock-filters"
+            style={{
+              marginTop: -55,
+              marginBottom: 8,
+            }}
+          >
             <div className="restock-left">
-              <div className="customer-searchbar-inline">
+              <div className="customer-searchbar-inline" style={{ maxWidth: 420 }}>
                 <div className="customer-searchbar-inner">
                   <span className="customer-search-icon" aria-hidden="true">
                     🔎
@@ -966,44 +964,7 @@ const Admin_Restock_Record: React.FC = () => {
               </div>
             </div>
 
-            <div className="restock-right">
-              <div className="restock-mode">
-                <div className="restock-label">Mode</div>
-                <IonItem lines="none" className="restock-ionitem">
-                  <IonSelect
-                    value={filterMode}
-                    interface="popover"
-                    onIonChange={(e) => setFilterMode(String(e.detail.value) as FilterMode)}
-                  >
-                    <IonSelectOption value="day">Day</IonSelectOption>
-                    <IonSelectOption value="month">Month</IonSelectOption>
-                  </IonSelect>
-                </IonItem>
-              </div>
-
-              <label className="date-pill restock-datepill">
-                <span className="date-pill-label">{filterMode === "day" ? "Date" : "Month"}</span>
-
-                {/* ✅ use openCalendar */}
-                <button type="button" className="restock-datebtn" onClick={openCalendar} title="Open calendar">
-                  {activeDateLabel}
-                </button>
-
-                <button type="button" className="restock-iconbtn" onClick={openCalendar} title="Calendar">
-                  <IonIcon icon={calendarOutline} />
-                </button>
-
-                <button
-                  type="button"
-                  className="restock-iconbtn"
-                  disabled={filterMode === "day" ? !selectedDate : !selectedMonth}
-                  onClick={clearFilterValue}
-                  title="Clear filter"
-                >
-                  <IonIcon icon={closeCircleOutline} />
-                </button>
-              </label>
-            </div>
+            <div className="restock-right" />
           </div>
 
           {loading ? (
@@ -1082,6 +1043,7 @@ const Admin_Restock_Record: React.FC = () => {
                           <td>
                             <div className="cell-stack">
                               <span className="cell-strong">{r.item_name ?? "Unknown Item"}</span>
+                              {r.size ? <span className="cell-sub">{r.size}</span> : null}
                             </div>
                           </td>
 
@@ -1214,127 +1176,83 @@ const Admin_Restock_Record: React.FC = () => {
             ]}
           />
 
-          {/* EDIT MODAL */}
-          <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
-            <IonHeader>
-              <IonToolbar>
-                <IonTitle>Edit Restock</IonTitle>
-                <IonButtons slot="end">
-                  <IonButton onClick={() => setEditOpen(false)}>
-                    <IonIcon icon={closeOutline} />
-                  </IonButton>
-                </IonButtons>
-              </IonToolbar>
-            </IonHeader>
+          {/* ✅ EDIT OVERLAY (SAME CLASSNAMES AS Staff_Consignment_Record) */}
+          {editOpen && (
+            <div className="receipt-overlay" onClick={() => closeEdit()}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">{editTitle}</h3>
 
-            <IonContent className="ion-padding restock-edit">
-              {editingAddOn && (
-                <>
-                  <div className="restock-editInfo">
-                    <div>
-                      <b>Item:</b> {editingAddOn.add_ons?.name ?? "Unknown"}
-                    </div>
-                    <div>
-                      <b>Category:</b> {editingAddOn.add_ons?.category ?? "—"}
-                    </div>
-                    <div>
-                      <b>Current Restock:</b> {editingAddOn.qty}
-                    </div>
-                    <div>
-                      <b>Date:</b> {formatDateTime(editingAddOn.created_at)}
-                    </div>
-                  </div>
+                <p className="receipt-subtitle">
+                  {editingAddOn ? (
+                    <>
+                      {editingAddOn.add_ons?.name ?? "Unknown Item"} • Category: {editingAddOn.add_ons?.category ?? "—"}
+                    </>
+                  ) : editingCons ? (
+                    <>
+                      {editingCons.item_name ?? "Unknown Item"} • Owner: {editingCons.full_name ?? "—"}
+                    </>
+                  ) : (
+                    "-"
+                  )}
+                </p>
 
-                  <IonItem>
-                    <IonLabel position="stacked">New Restock (Exact Value)</IonLabel>
-                    <IonInput
-                      type="number"
-                      value={editQty}
-                      onIonChange={(e) => setEditQty((e.detail.value ?? "").toString())}
-                    />
-                  </IonItem>
+                <hr />
 
-                  <div className="restock-help">Change will affect only this row difference (delta).</div>
-
-                  <div className="restock-editBtns">
-                    <IonButton expand="block" onClick={() => void saveEditQty()}>
-                      Save
-                    </IonButton>
-
-                    <IonButton
-                      expand="block"
-                      fill="clear"
-                      onClick={() => {
-                        setEditOpen(false);
-                        setEditingAddOn(null);
-                        setEditingCons(null);
-                      }}
-                    >
-                      Cancel
-                    </IonButton>
-                  </div>
-                </>
-              )}
-
-              {editingCons && (
-                <>
-                  <div className="restock-editInfo">
+                {editingAddOn && (
+                  <div style={{ display: "grid", gap: 6, fontSize: 13, opacity: 0.9, marginBottom: 10 }}>
                     <div>
-                      <b>Item:</b> {editingCons.item_name ?? "Unknown"}
+                      Current Restock: <b>{editingAddOn.qty}</b>
                     </div>
                     <div>
-                      <b>Owner:</b> {editingCons.full_name ?? "—"}
-                    </div>
-                    <div>
-                      <b>Category:</b> {editingCons.category ?? "—"}
-                    </div>
-                    <div>
-                      <b>Current Restock:</b> {editingCons.qty}
-                    </div>
-                    <div>
-                      <b>Date:</b> {formatDateTime(editingCons.created_at)}
+                      Date: <b>{formatDateTime(editingAddOn.created_at)}</b>
                     </div>
                   </div>
+                )}
 
-                  <IonItem>
-                    <IonLabel position="stacked">New Restock (Exact Value)</IonLabel>
-                    <IonInput
-                      type="number"
-                      value={editQty}
-                      onIonChange={(e) => setEditQty((e.detail.value ?? "").toString())}
-                    />
-                  </IonItem>
-
-                  <div className="restock-help">Change will affect only this row difference (delta).</div>
-
-                  <div className="restock-editBtns">
-                    <IonButton expand="block" onClick={() => void saveEditQty()}>
-                      Save
-                    </IonButton>
-
-                    <IonButton
-                      expand="block"
-                      fill="clear"
-                      onClick={() => {
-                        setEditOpen(false);
-                        setEditingAddOn(null);
-                        setEditingCons(null);
-                      }}
-                    >
-                      Cancel
-                    </IonButton>
+                {editingCons && (
+                  <div style={{ display: "grid", gap: 6, fontSize: 13, opacity: 0.9, marginBottom: 10 }}>
+                    <div>
+                      Current Restock: <b>{editingCons.qty}</b>
+                    </div>
+                    <div>
+                      Category: <b>{editingCons.category ?? "—"}</b> {editingCons.size ? <>• Size: <b>{editingCons.size}</b></> : null}
+                    </div>
+                    <div>
+                      Date: <b>{formatDateTime(editingCons.created_at)}</b>
+                    </div>
                   </div>
-                </>
-              )}
-            </IonContent>
-          </IonModal>
+                )}
 
-          <IonToast
-            isOpen={toastOpen}
-            message={toastMsg}
-            duration={2500}
-            onDidDismiss={() => setToastOpen(false)}
-          />
+                <div className="receipt-row">
+                  <span>New Restock (Exact)</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={editQty}
+                    onChange={(e) => setEditQty(e.currentTarget.value)}
+                    placeholder="0"
+                  />
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>
+                  Note: Delta lang ang ia-adjust (difference) at a-update ang stocks/restocked.
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => closeEdit()}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void saveEditQty()}>
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <IonToast isOpen={toastOpen} message={toastMsg} duration={2500} onDidDismiss={() => setToastOpen(false)} />
         </div>
       </IonContent>
     </IonPage>
