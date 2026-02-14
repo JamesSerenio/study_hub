@@ -6,16 +6,26 @@
 // ✅ Manual PAID toggle -> RPC set_consignment_paid_status
 // ✅ VOID (required reason) -> returns stock by RPC void_customer_consignment
 // ✅ NEW: CANCEL (required reason) -> archives to consignment_cancelled + deletes row from customer_session_consignment
+// ✅ UPDATED (YOUR REQUEST):
+//    - Filter Mode: DAY / WEEK / MONTH (anchor date)
+//    - Export to Excel by DAY / WEEK / MONTH
+//    - DELETE (permanent) by DAY / WEEK / MONTH (confirmation modal)
 // ✅ STRICT TS: NO any
 // ✅ Same "customer-*" + "receipt-btn" vibe
-// ✅ Date filter: DEFAULT TODAY (PH) + query filtered by PH day range
+// ✅ Uses PH range for filtering created_at (timestamptz)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonPage, IonContent, IonText } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
 import logo from "../assets/study_hub.png";
 
+// ✅ EXCEL
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
+
 type NumericLike = number | string;
+
+type FilterMode = "day" | "week" | "month";
 
 type ConsignmentInfo = {
   item_name: string;
@@ -81,6 +91,28 @@ type ReceiptGroup = {
 
 /* ---------------- helpers ---------------- */
 
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+const parseYmd = (ymd: string): { y: number; m: number; d: number } => {
+  const parts = String(ymd || "").split("-");
+  const y = Number(parts[0]);
+  const m = Number(parts[1]);
+  const d = Number(parts[2]);
+  return { y, m, d };
+};
+
+const ymdFromUTCDate = (dt: Date): string => {
+  const y = dt.getUTCFullYear();
+  const m = pad2(dt.getUTCMonth() + 1);
+  const d = pad2(dt.getUTCDate());
+  return `${y}-${m}-${d}`;
+};
+
+const addDaysUTC = (dt: Date, days: number): Date => {
+  const t = dt.getTime() + days * 24 * 60 * 60 * 1000;
+  return new Date(t);
+};
+
 const toNumber = (v: NumericLike | null | undefined): number => {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "string") {
@@ -140,11 +172,69 @@ const todayPHKey = (): string => {
   }).format(new Date());
 };
 
-// ✅ PH day range -> UTC ISO bounds for timestamptz filtering
-const phDayRange = (dateKey: string): { startISO: string; endISO: string } => {
-  const startPH = new Date(`${dateKey}T00:00:00.000+08:00`);
-  const endPH = new Date(`${dateKey}T23:59:59.999+08:00`);
+// ✅ PH day bounds -> UTC ISO (for timestamptz filtering)
+const phBoundsFromKeys = (startKey: string, endKey: string): { startISO: string; endISO: string } => {
+  const startPH = new Date(`${startKey}T00:00:00.000+08:00`);
+  const endPH = new Date(`${endKey}T23:59:59.999+08:00`);
   return { startISO: startPH.toISOString(), endISO: endPH.toISOString() };
+};
+
+// ✅ Week range keys (Mon-Sun) from anchor date key
+const getWeekRangeMonSunKeys = (anchorYmd: string): { startKey: string; endKey: string } => {
+  const { y, m, d } = parseYmd(anchorYmd);
+  const base = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)); // treat as calendar date
+  const day = base.getUTCDay(); // 0 Sun..6 Sat
+  const diffToMon = day === 0 ? -6 : 1 - day;
+  const start = addDaysUTC(base, diffToMon);
+  const end = addDaysUTC(start, 6);
+  return { startKey: ymdFromUTCDate(start), endKey: ymdFromUTCDate(end) };
+};
+
+// ✅ Month range keys from anchor date key
+const getMonthRangeKeys = (anchorYmd: string): { startKey: string; endKey: string; monthLabel: string } => {
+  const { y, m } = parseYmd(anchorYmd);
+  const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
+  const lastDay = new Date(Date.UTC(y, m, 0, 0, 0, 0, 0)); // day 0 of next month = last day current month
+  const monthLabel = `${y}-${pad2(m)}`;
+  return { startKey: ymdFromUTCDate(start), endKey: ymdFromUTCDate(lastDay), monthLabel };
+};
+
+const rangeFromMode = (
+  mode: FilterMode,
+  anchorYmd: string
+): { startKey: string; endKey: string; label: string; fileLabel: string } => {
+  if (mode === "day") {
+    return { startKey: anchorYmd, endKey: anchorYmd, label: anchorYmd, fileLabel: anchorYmd };
+  }
+  if (mode === "week") {
+    const w = getWeekRangeMonSunKeys(anchorYmd);
+    return {
+      startKey: w.startKey,
+      endKey: w.endKey,
+      label: `${w.startKey} to ${w.endKey} (Mon-Sun)`,
+      fileLabel: `${w.startKey}_to_${w.endKey}`,
+    };
+  }
+  const m = getMonthRangeKeys(anchorYmd);
+  return {
+    startKey: m.startKey,
+    endKey: m.endKey,
+    label: `${m.monthLabel} (${m.startKey} to ${m.endKey})`,
+    fileLabel: m.monthLabel,
+  };
+};
+
+/* ✅ Excel helpers */
+const isLikelyUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v.trim());
+
+const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.arrayBuffer();
+  } catch {
+    return null;
+  }
 };
 
 /* ---------------- component ---------------- */
@@ -155,8 +245,11 @@ const Customer_Consignment_Record: React.FC = () => {
 
   const [searchText, setSearchText] = useState<string>("");
 
-  // ✅ DEFAULT TODAY (PH)
-  const [selectedDate, setSelectedDate] = useState<string>(() => todayPHKey()); // YYYY-MM-DD
+  // ✅ NEW: range mode + anchor date
+  const [filterMode, setFilterMode] = useState<FilterMode>("day");
+  const [anchorDate, setAnchorDate] = useState<string>(() => todayPHKey()); // YYYY-MM-DD (PH)
+
+  const activeRange = useMemo(() => rangeFromMode(filterMode, anchorDate), [filterMode, anchorDate]);
 
   // receipt modal
   const [selectedOrder, setSelectedOrder] = useState<ReceiptGroup | null>(null);
@@ -180,16 +273,21 @@ const Customer_Consignment_Record: React.FC = () => {
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancelling, setCancelling] = useState<boolean>(false);
 
-  // ✅ fetch whenever date changes
-  useEffect(() => {
-    void fetchByDate(selectedDate);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate]);
+  // ✅ NEW: export / delete-by-range
+  const [exporting, setExporting] = useState<boolean>(false);
+  const [deleteRangeOpen, setDeleteRangeOpen] = useState<boolean>(false);
+  const [deletingByRange, setDeletingByRange] = useState<boolean>(false);
 
-  const fetchByDate = async (dateKey: string): Promise<void> => {
+  // ✅ fetch whenever range changes
+  useEffect(() => {
+    void fetchByRange(activeRange.startKey, activeRange.endKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRange.startKey, activeRange.endKey]);
+
+  const fetchByRange = async (startKey: string, endKey: string): Promise<void> => {
     setLoading(true);
 
-    const { startISO, endISO } = phDayRange(dateKey);
+    const { startISO, endISO } = phBoundsFromKeys(startKey, endKey);
 
     const { data, error } = await supabase
       .from("customer_session_consignment")
@@ -347,7 +445,7 @@ const Customer_Consignment_Record: React.FC = () => {
       }
 
       setPaymentTarget(null);
-      await fetchByDate(selectedDate);
+      await fetchByRange(activeRange.startKey, activeRange.endKey);
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -378,7 +476,7 @@ const Customer_Consignment_Record: React.FC = () => {
         return;
       }
 
-      await fetchByDate(selectedDate);
+      await fetchByRange(activeRange.startKey, activeRange.endKey);
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -424,7 +522,7 @@ const Customer_Consignment_Record: React.FC = () => {
       setVoidReason("");
       setSelectedOrder(null);
       setPaymentTarget(null);
-      await fetchByDate(selectedDate);
+      await fetchByRange(activeRange.startKey, activeRange.endKey);
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -434,7 +532,7 @@ const Customer_Consignment_Record: React.FC = () => {
     }
   };
 
-  // ✅ CANCEL
+  // ✅ CANCEL (per row)
   const openCancel = (r: CustomerConsignmentRow): void => {
     setCancelTarget(r);
     setCancelReason("");
@@ -468,7 +566,7 @@ const Customer_Consignment_Record: React.FC = () => {
       setPaymentTarget(null);
       setVoidTarget(null);
 
-      await fetchByDate(selectedDate);
+      await fetchByRange(activeRange.startKey, activeRange.endKey);
     } catch (e: unknown) {
       // eslint-disable-next-line no-console
       console.error(e);
@@ -478,6 +576,252 @@ const Customer_Consignment_Record: React.FC = () => {
     }
   };
 
+  // ✅ DELETE BY RANGE (permanent)
+  const openDeleteByRangeModal = (): void => {
+    if (loading || exporting || savingPayment || voiding || cancelling) return;
+    if (rows.length === 0) {
+      alert("No records to delete in this range.");
+      return;
+    }
+    setDeleteRangeOpen(true);
+  };
+
+  const deleteByRange = async (): Promise<void> => {
+    try {
+      setDeletingByRange(true);
+
+      const { startISO, endISO } = phBoundsFromKeys(activeRange.startKey, activeRange.endKey);
+
+      const { error } = await supabase
+        .from("customer_session_consignment")
+        .delete()
+        .gte("created_at", startISO)
+        .lte("created_at", endISO);
+
+      if (error) {
+        alert(`Delete failed: ${error.message}`);
+        return;
+      }
+
+      setRows([]);
+      setSelectedOrder(null);
+      setPaymentTarget(null);
+      setVoidTarget(null);
+      setCancelTarget(null);
+
+      setDeleteRangeOpen(false);
+      alert(`Deleted ALL consignment records for ${filterMode.toUpperCase()} range: ${activeRange.label}`);
+    } catch (e: unknown) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Delete by range failed.");
+    } finally {
+      setDeletingByRange(false);
+    }
+  };
+
+  // ✅ EXPORT TO EXCEL (range-based)
+  const exportToExcel = async (): Promise<void> => {
+    if (filtered.length === 0) {
+      alert("No records for selected range.");
+      return;
+    }
+
+    try {
+      setExporting(true);
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "Me Tyme Lounge";
+      wb.created = new Date();
+
+      const ws = wb.addWorksheet("Consignment", {
+        views: [{ state: "frozen", ySplit: 6 }],
+        pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      });
+
+      ws.columns = [
+        { header: "Date/Time (PH)", key: "dt", width: 22 },
+        { header: "Full Name", key: "full_name", width: 24 },
+        { header: "Seat", key: "seat", width: 10 },
+        { header: "Item", key: "item", width: 22 },
+        { header: "Category", key: "category", width: 16 },
+        { header: "Size", key: "size", width: 10 },
+        { header: "Qty", key: "qty", width: 8 },
+        { header: "Price", key: "price", width: 12 },
+        { header: "Total", key: "total", width: 12 },
+        { header: "GCash", key: "gcash", width: 12 },
+        { header: "Cash", key: "cash", width: 12 },
+        { header: "Total Paid", key: "paid_total", width: 12 },
+        { header: "Paid?", key: "paid", width: 10 },
+        { header: "Voided?", key: "voided", width: 10 },
+        { header: "Void Note", key: "void_note", width: 26 },
+        { header: "Image", key: "image", width: 14 }, // image cell (optional embed)
+      ];
+
+      const lastColLetter = "P";
+
+      ws.mergeCells(`A1:${lastColLetter}1`);
+      ws.getCell("A1").value = "ME TYME LOUNGE — Customer Consignment Records";
+      ws.getCell("A1").font = { bold: true, size: 16 };
+      ws.getCell("A1").alignment = { vertical: "middle", horizontal: "left" };
+
+      ws.mergeCells(`A2:${lastColLetter}2`);
+      ws.getCell("A2").value = `${filterMode.toUpperCase()} Range: ${activeRange.label}    •    Records: ${filtered.length}`;
+      ws.getCell("A2").font = { size: 11 };
+      ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
+
+      ws.getRow(1).height = 26;
+      ws.getRow(2).height = 18;
+
+      // add logo top-right (if url)
+      if (isLikelyUrl(logo)) {
+        const ab = await fetchAsArrayBuffer(logo);
+        if (ab) {
+          const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
+          const imgId = wb.addImage({ buffer: ab, extension: ext });
+          ws.addImage(imgId, { tl: { col: 12.6, row: 0.25 }, ext: { width: 170, height: 64 } });
+        }
+      }
+
+      const headerRowIndex = 6;
+      const headerRow = ws.getRow(headerRowIndex);
+      headerRow.values = ws.columns.map((c) => String(c.header ?? ""));
+      headerRow.height = 20;
+
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF9CA3AF" } },
+          left: { style: "thin", color: { argb: "FF9CA3AF" } },
+          bottom: { style: "thin", color: { argb: "FF9CA3AF" } },
+          right: { style: "thin", color: { argb: "FF9CA3AF" } },
+        };
+      });
+
+      const moneyCols = new Set(["price", "total", "gcash", "cash", "paid_total"]);
+      const imageColIndex = ws.columns.findIndex((c) => String(c.key) === "image") + 1;
+
+      for (let idx = 0; idx < filtered.length; idx++) {
+        const r = filtered[idx];
+
+        const itemName = show(r.consignment?.item_name);
+        const cat = show(r.consignment?.category);
+        const sz = sizeText(r.consignment?.size);
+        const imgUrl = r.consignment?.image_url ?? null;
+
+        const qty = Number(r.quantity ?? 0) || 0;
+        const price = round2(toNumber(r.price));
+        const total = round2(toNumber(r.total));
+
+        const gcash = round2(toNumber(r.gcash_amount));
+        const cash = round2(toNumber(r.cash_amount));
+        const paidTotal = round2(gcash + cash);
+
+        const isPaid = toBool(r.is_paid);
+        const isVoided = toBool(r.voided);
+
+        const row = ws.addRow({
+          dt: formatPHDateTime(r.created_at),
+          full_name: show(r.full_name),
+          seat: show(r.seat_number),
+          item: itemName,
+          category: cat,
+          size: sz,
+          qty,
+          price,
+          total,
+          gcash,
+          cash,
+          paid_total: paidTotal,
+          paid: isPaid ? "PAID" : "UNPAID",
+          voided: isVoided ? "VOIDED" : "—",
+          void_note: show(r.void_note, ""),
+          image: "", // we’ll embed if possible
+        });
+
+        const rowIndex = row.number;
+        ws.getRow(rowIndex).height = 52;
+
+        row.eachCell((cell, colNumber) => {
+          cell.alignment = { vertical: "middle", horizontal: colNumber === 2 || colNumber === 4 || colNumber === 15 ? "left" : "center", wrapText: true };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFE5E7EB" } },
+            left: { style: "thin", color: { argb: "FFE5E7EB" } },
+            bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+            right: { style: "thin", color: { argb: "FFE5E7EB" } },
+          };
+          const zebra = idx % 2 === 0 ? "FFFFFFFF" : "FFF9FAFB";
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
+        });
+
+        // money formatting
+        ws.columns.forEach((c, i) => {
+          if (!c.key) return;
+          if (moneyCols.has(String(c.key))) {
+            const cell = ws.getCell(rowIndex, i + 1);
+            cell.numFmt = '"₱"#,##0.00;[Red]"₱"#,##0.00';
+            cell.alignment = { vertical: "middle", horizontal: "right" };
+          }
+        });
+
+        // paid badge
+        const paidColIndex = ws.columns.findIndex((c) => String(c.key) === "paid") + 1;
+        if (paidColIndex > 0) {
+          const paidCell = ws.getCell(rowIndex, paidColIndex);
+          if (String(paidCell.value) === "PAID") {
+            paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCFCE7" } };
+            paidCell.font = { bold: true, color: { argb: "FF166534" } };
+          } else {
+            paidCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+            paidCell.font = { bold: true, color: { argb: "FF991B1B" } };
+          }
+        }
+
+        // embed item image (best-effort)
+        if (imageColIndex > 0 && isLikelyUrl(imgUrl)) {
+          const ab = await fetchAsArrayBuffer(imgUrl);
+          if (ab) {
+            const ext = imgUrl.toLowerCase().includes(".jpg") || imgUrl.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
+            const imgId = wb.addImage({ buffer: ab, extension: ext });
+
+            // place inside the "Image" cell area
+            ws.addImage(imgId, {
+              tl: { col: imageColIndex - 1 + 0.15, row: rowIndex - 1 + 0.15 },
+              ext: { width: 64, height: 64 },
+            });
+          }
+        }
+      }
+
+      ws.autoFilter = {
+        from: { row: headerRowIndex, column: 1 },
+        to: { row: headerRowIndex, column: ws.columns.length },
+      };
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      saveAs(blob, `customer-consignment_${filterMode}_${activeRange.fileLabel}.xlsx`);
+    } catch (e: unknown) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      alert("Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const rangeHint =
+    filterMode === "day"
+      ? `Showing records for: ${anchorDate}`
+      : filterMode === "week"
+      ? `Showing WEEK range: ${activeRange.label}`
+      : `Showing MONTH range: ${activeRange.label}`;
+
   return (
     <IonPage>
       <IonContent className="staff-content">
@@ -486,8 +830,9 @@ const Customer_Consignment_Record: React.FC = () => {
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Consignment Records</h2>
+
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong>
+                <strong>{rangeHint}</strong>
               </div>
 
               <div className="customer-subtext">
@@ -520,14 +865,36 @@ const Customer_Consignment_Record: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE + REFRESH */}
+              {/* MODE + ANCHOR + ACTIONS */}
               <div className="admin-tools-row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                {/* Mode */}
+                <label className="date-pill" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ fontWeight: 900 }}>Mode</span>
+                  <select
+                    value={filterMode}
+                    onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}
+                    style={{
+                      border: "1px solid rgba(0,0,0,0.12)",
+                      borderRadius: 12,
+                      padding: "8px 10px",
+                      fontWeight: 800,
+                      outline: "none",
+                      background: "rgba(255,255,255,0.85)",
+                    }}
+                  >
+                    <option value="day">Day</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                  </select>
+                </label>
+
+                {/* Anchor Date */}
                 <div className="date-pill" style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ fontWeight: 900 }}>Date</span>
+                  <span style={{ fontWeight: 900 }}>{filterMode === "day" ? "Date" : "Anchor"}</span>
                   <input
                     type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.currentTarget.value)}
+                    value={anchorDate}
+                    onChange={(e) => setAnchorDate(e.currentTarget.value)}
                     style={{
                       border: "1px solid rgba(0,0,0,0.12)",
                       borderRadius: 12,
@@ -539,8 +906,26 @@ const Customer_Consignment_Record: React.FC = () => {
                   />
                 </div>
 
-                <button className="receipt-btn" onClick={() => void fetchByDate(selectedDate)} disabled={loading}>
+                <button className="receipt-btn" onClick={() => void fetchByRange(activeRange.startKey, activeRange.endKey)} disabled={loading}>
                   Refresh
+                </button>
+
+                <button
+                  className="receipt-btn admin-danger"
+                  onClick={() => openDeleteByRangeModal()}
+                  disabled={loading || exporting || deletingByRange || rows.length === 0}
+                  title={rows.length === 0 ? "No data to delete" : `Delete ALL records for this ${filterMode.toUpperCase()} range`}
+                >
+                  {deletingByRange ? "Deleting..." : `Delete (${filterMode})`}
+                </button>
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void exportToExcel()}
+                  disabled={exporting || loading || filtered.length === 0}
+                  title={filtered.length === 0 ? "No data to export" : `Export .xlsx for this ${filterMode.toUpperCase()} range`}
+                >
+                  {exporting ? "Exporting..." : "Export to Excel"}
                 </button>
               </div>
             </div>
@@ -549,7 +934,7 @@ const Customer_Consignment_Record: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filtered.length === 0 ? (
-            <p className="customer-note">No data found for this date</p>
+            <p className="customer-note">No data found for this range</p>
           ) : (
             <div className="customer-table-wrap">
               <table className="customer-table">
@@ -694,14 +1079,49 @@ const Customer_Consignment_Record: React.FC = () => {
             </div>
           )}
 
+          {/* ✅ DELETE BY RANGE CONFIRM MODAL */}
+          {deleteRangeOpen && (
+            <div className="receipt-overlay" onClick={() => (deletingByRange ? null : setDeleteRangeOpen(false))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">DELETE ({filterMode.toUpperCase()})</h3>
+                <p className="receipt-subtitle">
+                  This will permanently delete <strong>ALL</strong> consignment records in this range:
+                  <br />
+                  <strong>{activeRange.label}</strong>
+                </p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Records Found</span>
+                  <span>{rows.length}</span>
+                </div>
+
+                <div className="receipt-row" style={{ opacity: 0.85, fontSize: 12 }}>
+                  <span>Warning</span>
+                  <span>Permanent delete (cannot undo).</span>
+                </div>
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setDeleteRangeOpen(false)} disabled={deletingByRange}>
+                    Cancel
+                  </button>
+
+                  <button className="receipt-btn admin-danger" onClick={() => void deleteByRange()} disabled={deletingByRange}>
+                    {deletingByRange ? "Deleting..." : "Delete Now"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ✅ CANCEL MODAL (required reason) */}
           {cancelTarget && (
             <div className="receipt-overlay" onClick={() => (cancelling ? null : setCancelTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">CANCEL RECORD</h3>
                 <p className="receipt-subtitle">
-                  {show(cancelTarget.consignment?.item_name)} • Qty: <b>{cancelTarget.quantity}</b> • Seat:{" "}
-                  <b>{show(cancelTarget.seat_number)}</b>
+                  {show(cancelTarget.consignment?.item_name)} • Qty: <b>{cancelTarget.quantity}</b> • Seat: <b>{show(cancelTarget.seat_number)}</b>
                 </p>
 
                 <hr />
@@ -972,8 +1392,7 @@ const Customer_Consignment_Record: React.FC = () => {
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">VOID CONSIGNMENT</h3>
                 <p className="receipt-subtitle">
-                  {show(voidTarget.consignment?.item_name)} • Qty: <b>{voidTarget.quantity}</b> • Seat:{" "}
-                  <b>{show(voidTarget.seat_number)}</b>
+                  {show(voidTarget.consignment?.item_name)} • Qty: <b>{voidTarget.quantity}</b> • Seat: <b>{show(voidTarget.seat_number)}</b>
                 </p>
 
                 <hr />
