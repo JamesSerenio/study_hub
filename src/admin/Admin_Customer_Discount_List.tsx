@@ -1,6 +1,6 @@
 // src/pages/Admin_Customer_Discount_List.tsx
 // ✅ SAME classnames as Customer_Lists.tsx (one CSS)
-// ✅ Full code + Export to Excel (.xlsx) by selected date
+// ✅ Full code + Export to Excel (.xlsx) by selected RANGE (Day / Week / Month)
 // ✅ strict TS (NO any)
 // ✅ ADD Phone # in table + receipt + excel
 // ✅ Refresh button (reload list)
@@ -11,6 +11,7 @@
 // ✅ FIX: totals/status auto-refresh every 10s using tick properly
 // ✅ Attendance button shows IN/OUT based on latest attendance row (out_at null => IN, else OUT)
 // ✅ FIXED: removed .single() from UPDATE/SELECT paths to avoid "Cannot coerce ... single JSON object"
+// ✅ NEW: Delete + Export supports BY DAY / BY WEEK / BY MONTH
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -138,24 +139,6 @@ const yyyyMmDdLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-const getCreatedDateLocal = (iso: string): string => {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  return yyyyMmDdLocal(d);
-};
-
-const startEndIsoLocalDay = (yyyyMmDd: string): { startIso: string; endIso: string } => {
-  const [yStr, mStr, dStr] = yyyyMmDd.split("-");
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const d = Number(dStr);
-
-  const startLocal = new Date(y, m - 1, d, 0, 0, 0, 0);
-  const endLocal = new Date(y, m - 1, d + 1, 0, 0, 0, 0);
-
-  return { startIso: startLocal.toISOString(), endIso: endLocal.toISOString() };
-};
-
 const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
 
 const seatLabel = (r: PromoBookingRow): string =>
@@ -163,7 +146,11 @@ const seatLabel = (r: PromoBookingRow): string =>
 
 const safePhone = (v: string | null | undefined): string => (String(v ?? "").trim() ? String(v ?? "").trim() : "—");
 
-const getStatus = (startIso: string, endIso: string, nowMs: number = Date.now()): "UPCOMING" | "ONGOING" | "FINISHED" => {
+const getStatus = (
+  startIso: string,
+  endIso: string,
+  nowMs: number = Date.now()
+): "UPCOMING" | "ONGOING" | "FINISHED" => {
   const s = new Date(startIso).getTime();
   const e = new Date(endIso).getTime();
   if (!Number.isFinite(s) || !Number.isFinite(e)) return "FINISHED";
@@ -311,10 +298,79 @@ const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
 /* ================= Attendance helpers ================= */
 
 const attStatus = (r: PromoBookingAttendanceRow): "IN" | "OUT" => (r.out_at ? "OUT" : "IN");
-
 const attStamp = (r: PromoBookingAttendanceRow): string => (r.out_at ? r.out_at : r.in_at);
-
 const fmtPH = (iso: string): string => new Date(iso).toLocaleString("en-PH");
+
+/* ================= RANGE helpers (Day/Week/Month) ================= */
+
+type RangeMode = "day" | "week" | "month";
+
+type Range = {
+  startIso: string; // inclusive
+  endIso: string; // exclusive
+  label: string;
+};
+
+const startOfLocalDay = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+
+const addDaysLocal = (d: Date, days: number): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 0, 0, 0, 0);
+
+const startEndIsoLocalDay = (yyyyMmDd: string): { startIso: string; endIso: string } => {
+  const [yStr, mStr, dStr] = yyyyMmDd.split("-");
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+
+  const startLocal = new Date(y, m - 1, d, 0, 0, 0, 0);
+  const endLocal = new Date(y, m - 1, d + 1, 0, 0, 0, 0);
+
+  return { startIso: startLocal.toISOString(), endIso: endLocal.toISOString() };
+};
+
+// Week = Monday..Sunday (PH typical)
+const startOfWeekMondayLocal = (anyDay: Date): Date => {
+  const d = startOfLocalDay(anyDay);
+  const day = d.getDay(); // 0 Sun ... 6 Sat
+  const diffToMonday = (day + 6) % 7; // Mon->0, Tue->1 ... Sun->6
+  return addDaysLocal(d, -diffToMonday);
+};
+
+const rangeFromMode = (mode: RangeMode, dayStr: string, monthStr: string): Range => {
+  if (mode === "month") {
+    // monthStr: "YYYY-MM"
+    const [yStr, mStr] = monthStr.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    const startLocal = new Date(y, m - 1, 1, 0, 0, 0, 0);
+    const endLocal = new Date(y, m, 1, 0, 0, 0, 0);
+    const label = `${startLocal.toLocaleString("en-PH", { month: "long" })} ${startLocal.getFullYear()}`;
+    return { startIso: startLocal.toISOString(), endIso: endLocal.toISOString(), label };
+  }
+
+  if (mode === "week") {
+    const [yStr, mStr, dStr] = dayStr.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    const d = Number(dStr);
+    const picked = new Date(y, m - 1, d, 12, 0, 0, 0); // midday to avoid DST edge cases
+    const startLocal = startOfWeekMondayLocal(picked);
+    const endLocal = addDaysLocal(startLocal, 7);
+    const label = `${yyyyMmDdLocal(startLocal)} to ${yyyyMmDdLocal(addDaysLocal(endLocal, -1))}`;
+    return { startIso: startLocal.toISOString(), endIso: endLocal.toISOString(), label };
+  }
+
+  // day
+  const r = startEndIsoLocalDay(dayStr);
+  return { startIso: r.startIso, endIso: r.endIso, label: dayStr };
+};
+
+const inRange = (iso: string, range: Range): boolean => {
+  const t = new Date(iso).getTime();
+  const s = new Date(range.startIso).getTime();
+  const e = new Date(range.endIso).getTime();
+  if (!Number.isFinite(t) || !Number.isFinite(s) || !Number.isFinite(e)) return false;
+  return t >= s && t < e;
+};
 
 /* ================= Supabase helpers (NO .single()) ================= */
 
@@ -355,8 +411,17 @@ const Admin_Customer_Discount_List: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
 
-  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
-  const [deletingDate, setDeletingDate] = useState<string | null>(null);
+  // ✅ RANGE mode
+  const [rangeMode, setRangeMode] = useState<RangeMode>("day");
+  const [selectedDay, setSelectedDay] = useState<string>(yyyyMmDdLocal(new Date()));
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    return `${y}-${m}`; // YYYY-MM
+  });
+
+  const [deletingRangeLabel, setDeletingRangeLabel] = useState<string | null>(null);
 
   // payment modal
   const [paymentTarget, setPaymentTarget] = useState<PromoBookingRow | null>(null);
@@ -503,9 +568,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
     void fetchPromoBookings();
   }, []);
 
+  const activeRange = useMemo(() => rangeFromMode(rangeMode, selectedDay, selectedMonth), [rangeMode, selectedDay, selectedMonth]);
+
   const filteredRows = useMemo(() => {
-    return rows.filter((r) => getCreatedDateLocal(r.created_at) === selectedDate);
-  }, [rows, selectedDate]);
+    return rows.filter((r) => inRange(r.created_at, activeRange));
+  }, [rows, activeRange]);
 
   const totals = useMemo(() => {
     const nowMs = tick;
@@ -539,15 +606,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
   };
 
   /* =========================
-     Export Excel
+     Export Excel (Day/Week/Month)
   ========================= */
-  const exportToExcelByDate = async (): Promise<void> => {
-    if (!selectedDate) {
-      alert("Please select a date.");
-      return;
-    }
+  const exportToExcel = async (): Promise<void> => {
     if (filteredRows.length === 0) {
-      alert("No records for selected date.");
+      alert("No records for selected range.");
       return;
     }
 
@@ -591,7 +654,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
     ws.getRow(1).height = 26;
 
     ws.mergeCells("A2", "T2");
-    ws.getCell("A2").value = `Date: ${selectedDate}`;
+    ws.getCell("A2").value = `Range: ${rangeMode.toUpperCase()} • ${activeRange.label}`;
     ws.getCell("A2").font = { size: 11 };
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
 
@@ -684,7 +747,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    saveAs(blob, `admin_promo_records_${selectedDate}.xlsx`);
+
+    const safeLabel = `${rangeMode}_${activeRange.label}`.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 60);
+    saveAs(blob, `admin_promo_records_${safeLabel}.xlsx`);
   };
 
   /* ================= PAYMENT ================= */
@@ -948,39 +1013,43 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  const deleteByDate = async (): Promise<void> => {
-    if (!selectedDate) {
-      alert("Please select a date first.");
+  /* ================= Delete by RANGE (Day/Week/Month) ================= */
+
+  const deleteByRange = async (): Promise<void> => {
+    if (filteredRows.length === 0) {
+      alert("No records to delete for selected range.");
       return;
     }
 
     const count = filteredRows.length;
-    const ok = window.confirm(`Delete ALL promo records on ${selectedDate}?\n\nThis will delete ${count} record(s).`);
+    const label = `${rangeMode.toUpperCase()} • ${activeRange.label}`;
+    const ok = window.confirm(`Delete ALL promo records for:\n${label}\n\nThis will delete ${count} record(s).`);
     if (!ok) return;
 
-    const range = startEndIsoLocalDay(selectedDate);
-
     try {
-      setDeletingDate(selectedDate);
+      setDeletingRangeLabel(label);
 
       const { error } = await supabase
         .from("promo_bookings")
         .delete()
-        .gte("created_at", range.startIso)
-        .lt("created_at", range.endIso);
+        .gte("created_at", activeRange.startIso)
+        .lt("created_at", activeRange.endIso);
 
       if (error) {
-        alert(`Delete by date error: ${error.message}`);
+        alert(`Delete error: ${error.message}`);
         return;
       }
 
-      setRows((prev) => prev.filter((r) => getCreatedDateLocal(r.created_at) !== selectedDate));
-      setSelected((prev) => (prev && getCreatedDateLocal(prev.created_at) === selectedDate ? null : prev));
+      // remove locally
+      setRows((prev) => prev.filter((r) => !inRange(r.created_at, activeRange)));
+      setSelected((prev) => (prev && inRange(prev.created_at, activeRange) ? null : prev));
+
+      // safest: refetch attendance (or clear)
       setAttMap({});
     } catch {
-      alert("Delete by date failed.");
+      alert("Delete failed.");
     } finally {
-      setDeletingDate(null);
+      setDeletingRangeLabel(null);
     }
   };
 
@@ -1051,7 +1120,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Discount / Promo Records</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong>
+                Showing records for:{" "}
+                <strong>
+                  {rangeMode.toUpperCase()} • {activeRange.label}
+                </strong>
               </div>
 
               <div className="customer-subtext" style={{ marginTop: 6 }}>
@@ -1061,30 +1133,69 @@ const Admin_Customer_Discount_List: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
-              <label className="date-pill">
-                <span className="date-pill-label">Date</span>
-                <input
-                  className="date-pill-input"
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
-                />
-                <span className="date-pill-icon" aria-hidden="true">
-                  📅
-                </span>
-              </label>
+              {/* RANGE CONTROLS */}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
+                <label className="date-pill">
+                  <span className="date-pill-label">Mode</span>
+                  <select
+                    className="date-pill-input"
+                    value={rangeMode}
+                    onChange={(e) => setRangeMode((e.currentTarget.value as RangeMode) || "day")}
+                  >
+                    <option value="day">Day</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                  </select>
+                  <span className="date-pill-icon" aria-hidden="true">
+                    🧭
+                  </span>
+                </label>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {rangeMode === "month" ? (
+                  <label className="date-pill">
+                    <span className="date-pill-label">Month</span>
+                    <input
+                      className="date-pill-input"
+                      type="month"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(String(e.currentTarget.value ?? ""))}
+                    />
+                    <span className="date-pill-icon" aria-hidden="true">
+                      🗓️
+                    </span>
+                  </label>
+                ) : (
+                  <label className="date-pill">
+                    <span className="date-pill-label">{rangeMode === "week" ? "Week of" : "Date"}</span>
+                    <input
+                      className="date-pill-input"
+                      type="date"
+                      value={selectedDay}
+                      onChange={(e) => setSelectedDay(String(e.currentTarget.value ?? ""))}
+                    />
+                    <span className="date-pill-icon" aria-hidden="true">
+                      📅
+                    </span>
+                  </label>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", marginTop: 10 }}>
                 <button className="receipt-btn" onClick={() => void refreshAll()} disabled={loading || refreshing}>
                   {refreshing ? "Refreshing..." : "Refresh"}
                 </button>
 
-                <button className="receipt-btn" onClick={() => void exportToExcelByDate()} disabled={filteredRows.length === 0}>
-                  Export to Excel
+                <button className="receipt-btn" onClick={() => void exportToExcel()} disabled={filteredRows.length === 0}>
+                  Export ({rangeMode.toUpperCase()})
                 </button>
 
-                <button className="receipt-btn" onClick={() => void deleteByDate()} disabled={deletingDate === selectedDate}>
-                  {deletingDate === selectedDate ? "Deleting Date..." : "Delete by Date"}
+                <button
+                  className="receipt-btn"
+                  onClick={() => void deleteByRange()}
+                  disabled={Boolean(deletingRangeLabel) || filteredRows.length === 0}
+                  title={`Deletes promo_bookings where created_at is within the selected ${rangeMode}.`}
+                >
+                  {deletingRangeLabel ? "Deleting..." : `Delete (${rangeMode.toUpperCase()})`}
                 </button>
               </div>
             </div>
@@ -1093,9 +1204,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredRows.length === 0 ? (
-            <p className="customer-note">No promo records found for this date</p>
+            <p className="customer-note">No promo records found for this range</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}>
+            <div className="customer-table-wrap" key={`${rangeMode}-${activeRange.startIso}`}>
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -1200,9 +1311,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
                               Validity: <b>{r.validity_end_at ? new Date(r.validity_end_at).toLocaleString("en-PH") : "—"}</b>
                               {r.validity_end_at && isExpired(r.validity_end_at) ? (
-                                <span style={{ marginLeft: 6, color: "#b00020", fontWeight: 900 }}>
-                                  EXPIRED
-                                </span>
+                                <span style={{ marginLeft: 6, color: "#b00020", fontWeight: 900 }}>EXPIRED</span>
                               ) : null}
                             </span>
                             <button className="receipt-btn" onClick={() => openRuleModal(r)} disabled={!canEditRules}>
@@ -1229,11 +1338,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                               View Receipt
                             </button>
 
-                            <button
-                              className="receipt-btn"
-                              disabled={cancelling || cancellingId === r.id}
-                              onClick={() => openCancelModal(r)}
-                            >
+                            <button className="receipt-btn" disabled={cancelling || cancellingId === r.id} onClick={() => openCancelModal(r)}>
                               {cancellingId === r.id ? "Cancelling..." : "Cancel"}
                             </button>
                           </div>
@@ -1446,26 +1551,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={gcashInput}
-                          onChange={(e) => setGcashInput(e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={gcashInput} onChange={(e) => setGcashInput(e.currentTarget.value)} />
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={cashInput}
-                          onChange={(e) => setCashInput(e.currentTarget.value)}
-                        />
+                        <input className="money-input" type="number" min="0" step="0.01" value={cashInput} onChange={(e) => setCashInput(e.currentTarget.value)} />
                       </div>
 
                       <hr />
@@ -1538,13 +1629,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Reason</span>
-                  <input
-                    className="reason-input"
-                    type="text"
-                    value={discountReasonInput}
-                    onChange={(e) => setDiscountReasonInput(e.currentTarget.value)}
-                    placeholder="e.g. loyalty card"
-                  />
+                  <input className="reason-input" type="text" value={discountReasonInput} onChange={(e) => setDiscountReasonInput(e.currentTarget.value)} placeholder="e.g. loyalty card" />
                 </div>
 
                 {(() => {
@@ -1669,9 +1754,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                   <span>
                     {selected.validity_end_at ? new Date(selected.validity_end_at).toLocaleString("en-PH") : "—"}
                     {selected.validity_end_at && isExpired(selected.validity_end_at) ? (
-                      <span style={{ marginLeft: 8, color: "#b00020", fontWeight: 900 }}>
-                        EXPIRED
-                      </span>
+                      <span style={{ marginLeft: 8, color: "#b00020", fontWeight: 900 }}>EXPIRED</span>
                     ) : null}
                   </span>
                 </div>
