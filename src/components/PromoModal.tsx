@@ -2,14 +2,14 @@
 // ✅ STRICT TS
 // ✅ NO any
 // ✅ Required/errors/success = IonAlert modal only
-// ✅ Uses seat_blocked_times (EXCLUDE overlap) to block seats/conference after saving promo
-// ✅ Friendly overlap modal when seat_blocked_times_no_overlap hit
+// ✅ REMOVED seat_blocked_times usage (no auto-color / no auto-block effect on seats UI)
+// ✅ Friendly overlap message (based on promo_bookings + customer_sessions overlap)
 // ✅ After success OK: closes THIS promo modal only
 // ✅ THEMED: className="booking-modal" + bookadd-card + form-item
 // ✅ Phone Number required + 09 + exactly 11 digits
 // ✅ If promo duration >= 7 days => auto-generate PROMO CODE
 // ✅ Save promo_code + created_by_staff_id (if staff/admin logged in)
-// ✅ FIX: Promo attempts + validity are copied from package_options (promo_max_attempts / promo_validity_days)
+// ✅ FIX: promo attempts + validity copied from package_options (promo_max_attempts / promo_validity_days)
 // ✅ Attendance IN/OUT uses promo_booking_attendance (FK to promo_bookings)
 // ✅ FIX: attendance table includes note column (SQL: alter table ... add column note text)
 
@@ -69,22 +69,6 @@ interface PromoModalProps {
   onSaved: () => void;
   seatGroups: SeatGroup[];
 }
-
-type SeatBlockedRow = {
-  seat_number: string;
-  start_at: string;
-  end_at: string;
-  source: "regular" | "reserved" | string;
-};
-
-type SeatBlockedInsert = {
-  created_by: string | null;
-  seat_number: string;
-  start_at: string;
-  end_at: string;
-  source: "regular" | "reserved";
-  note: string | null;
-};
 
 type PromoBookingSelectRow = {
   id: string;
@@ -271,6 +255,11 @@ const isExpiredIso = (iso: string | null): boolean => {
   return Date.now() > t;
 };
 
+/**
+ * ✅ Availability check WITHOUT seat_blocked_times:
+ * - blocks overlap with promo_bookings (upcoming/ongoing)
+ * - blocks overlap with customer_sessions
+ */
 const checkPromoAvailability = async (params: {
   area: PackageArea;
   seatNumber: string;
@@ -279,6 +268,7 @@ const checkPromoAvailability = async (params: {
 }): Promise<{ ok: boolean; message?: string }> => {
   const { area, seatNumber, startIso, endIso } = params;
 
+  // promo_bookings overlap
   let q1 = supabase
     .from("promo_bookings")
     .select("id", { count: "exact", head: true })
@@ -302,6 +292,7 @@ const checkPromoAvailability = async (params: {
     };
   }
 
+  // customer_sessions overlap
   const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
 
   const r2 = await supabase
@@ -323,11 +314,6 @@ const checkPromoAvailability = async (params: {
   }
 
   return { ok: true };
-};
-
-const isSeatBlockedOverlap = (msg: string): boolean => {
-  const m = msg.toLowerCase();
-  return m.includes("seat_blocked_times_no_overlap") || (m.includes("duplicate key") === false && m.includes("exclusion constraint"));
 };
 
 /* ================= COMPONENT ================= */
@@ -361,9 +347,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
   const [packages, setPackages] = useState<PackageRow[]>([]);
   const [options, setOptions] = useState<PackageOptionRow[]>([]);
 
-  const [occupiedSeats, setOccupiedSeats] = useState<string[]>([]);
-  const [, setConferenceBlocked] = useState<boolean>(false);
-
   const [promoCode, setPromoCode] = useState<string>("");
   const [codeBusy, setCodeBusy] = useState<boolean>(false);
 
@@ -383,8 +366,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     });
     return list;
   }, [seatGroups]);
-
-  const allSeatValues = useMemo<string[]>(() => allSeats.map((s) => s.value), [allSeats]);
 
   const activePackages = useMemo(() => packages.filter((p) => p.is_active), [packages]);
   const areaPackages = useMemo(() => activePackages.filter((p) => p.area === area), [activePackages, area]);
@@ -424,40 +405,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     return new Date(endIso).toLocaleString("en-PH");
   }, [endIso]);
 
-  const availableSeatOptions = useMemo(() => {
-    const blocked = new Set(occupiedSeats.map((x) => String(x).trim()).filter(Boolean));
-    return allSeats.filter((s) => !blocked.has(s.value));
-  }, [allSeats, occupiedSeats]);
-
-  const fetchBlocked = async (start: string, end: string): Promise<void> => {
-    const seatKeys = [...allSeatValues, "CONFERENCE_ROOM"];
-
-    const { data, error } = await supabase
-      .from("seat_blocked_times")
-      .select("seat_number, start_at, end_at, source")
-      .in("seat_number", seatKeys)
-      .lt("start_at", end)
-      .gt("end_at", start);
-
-    if (error) {
-      // eslint-disable-next-line no-console
-      console.error(error);
-      setOccupiedSeats([]);
-      setConferenceBlocked(false);
-      return;
-    }
-
-    const rows = (data ?? []) as SeatBlockedRow[];
-    const blockedSeats = rows.map((r) => String(r.seat_number).trim()).filter(Boolean);
-
-    setOccupiedSeats(blockedSeats.filter((s) => s !== "CONFERENCE_ROOM"));
-    setConferenceBlocked(blockedSeats.includes("CONFERENCE_ROOM"));
-  };
-
   const ensureUniquePromoCode = async (): Promise<string> => {
     for (let i = 0; i < 10; i += 1) {
       const candidate = randomCode(8);
-      const { count, error } = await supabase.from("promo_bookings").select("id", { count: "exact", head: true }).eq("promo_code", candidate);
+      const { count, error } = await supabase
+        .from("promo_bookings")
+        .select("id", { count: "exact", head: true })
+        .eq("promo_code", candidate);
       if (error) throw new Error(error.message);
       if ((count ?? 0) === 0) return candidate;
     }
@@ -497,9 +451,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setOptionId("");
       setSeatNumber("");
       setStartIso("");
-      setOccupiedSeats([]);
-      setConferenceBlocked(false);
-
       setPromoCode("");
 
       setAttModalOpen(false);
@@ -508,7 +459,11 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
       setAttNote("");
       setAttHistory([]);
 
-      const pkRes = await supabase.from("packages").select("id, area, title, description, amenities, is_active").eq("is_active", true).order("created_at", { ascending: false });
+      const pkRes = await supabase
+        .from("packages")
+        .select("id, area, title, description, amenities, is_active")
+        .eq("is_active", true)
+        .order("created_at", { ascending: false });
 
       if (pkRes.error) {
         setPackages([]);
@@ -555,59 +510,9 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
   useEffect(() => {
     if (!isOpen) return;
-    if (!startIso || !endIso) {
-      setOccupiedSeats([]);
-      setConferenceBlocked(false);
-      return;
-    }
-    void fetchBlocked(startIso, endIso);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, startIso, endIso, allSeatValues.join("|")]);
-
-  useEffect(() => {
-    if (area !== "common_area") return;
-    if (!seatNumber) return;
-    if (occupiedSeats.includes(seatNumber)) setSeatNumber("");
-  }, [area, seatNumber, occupiedSeats]);
-
-  useEffect(() => {
-    if (!isOpen) return;
     void maybeGenerateCode();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, optionId]);
-
-  const createSeatBlock = async (params: {
-    userId: string | null;
-    area: PackageArea;
-    seatNumber: string;
-    startIso: string;
-    endIso: string;
-  }): Promise<{ ok: boolean; message?: string }> => {
-    const { userId, area, seatNumber, startIso, endIso } = params;
-
-    const seatKey = area === "conference_room" ? "CONFERENCE_ROOM" : seatNumber;
-
-    const payload: SeatBlockedInsert = {
-      created_by: userId,
-      seat_number: seatKey,
-      start_at: startIso,
-      end_at: endIso,
-      source: "reserved",
-      note: "promo",
-    };
-
-    const ins = await supabase.from("seat_blocked_times").insert(payload);
-
-    if (ins.error) {
-      const msg = ins.error.message ?? "Seat blocking failed.";
-      if (isSeatBlockedOverlap(msg)) {
-        return { ok: false, message: area === "conference_room" ? "Conference room is not available for the selected schedule." : "Seat is not available for the selected schedule." };
-      }
-      return { ok: false, message: msg };
-    }
-
-    return { ok: true };
-  };
 
   const copyText = async (text: string): Promise<void> => {
     try {
@@ -639,7 +544,6 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
     if (area === "common_area") {
       if (!seatNumber) return showAlert("Required", "Seat number is required for Common Area.");
-      if (occupiedSeats.includes(seatNumber)) return showAlert("Not Available", "Selected seat is already occupied for that schedule.");
     }
 
     const needCode = approxDaysFromOption(selectedOption) >= 7;
@@ -664,6 +568,7 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         }
       }
 
+      // ✅ still blocks double booking (without seat_blocked_times)
       const availability = await checkPromoAvailability({ area, seatNumber, startIso, endIso });
       if (!availability.ok) {
         setLoading(false);
@@ -701,18 +606,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
         return showAlert("Error", ins.error.message);
       }
 
-      const blockRes = await createSeatBlock({ userId, area, seatNumber, startIso, endIso });
-      if (!blockRes.ok) {
-        setLoading(false);
-        return showAlert("Not Available", blockRes.message ?? "Not available.");
-      }
-
       setLoading(false);
 
       if (needCode && (finalCode ?? promoCode)) {
         showAlert(
           "Saved",
-          `Promo booking saved successfully.\n\nCODE: ${(finalCode ?? promoCode) as string}\nAttempts: ${promoMaxAttempts}\nValidity: ${promoValidityDays} day(s)\nValid until: ${new Date(validityEndAtIso).toLocaleString("en-PH")}\n\nUse this code for attendance IN/OUT.`,
+          `Promo booking saved successfully.\n\nCODE: ${(finalCode ?? promoCode) as string}\nAttempts: ${promoMaxAttempts}\nValidity: ${promoValidityDays} day(s)\nValid until: ${new Date(validityEndAtIso).toLocaleString(
+            "en-PH"
+          )}\n\nUse this code for attendance IN/OUT.`,
           "close_after_save"
         );
       } else {
@@ -938,7 +839,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
           <IonItem className="form-item">
             <IonLabel position="stacked">Phone Number *</IonLabel>
-            <IonInput type="tel" inputMode="tel" placeholder="09XXXXXXXXX" value={phoneNumber} onIonInput={(e) => setPhoneNumber(String(e.detail.value ?? ""))} />
+            <IonInput
+              type="tel"
+              inputMode="tel"
+              placeholder="09XXXXXXXXX"
+              value={phoneNumber}
+              onIonInput={(e) => setPhoneNumber(String(e.detail.value ?? ""))}
+            />
           </IonItem>
 
           <IonItem className="form-item">
@@ -957,7 +864,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
           <IonItem className="form-item">
             <IonLabel position="stacked">Promo Package</IonLabel>
-            <IonSelect value={packageId} placeholder={areaPackages.length ? "Select package" : "No packages for this area"} disabled={areaPackages.length === 0} onIonChange={(e) => setPackageId(String(e.detail.value ?? ""))}>
+            <IonSelect
+              value={packageId}
+              placeholder={areaPackages.length ? "Select package" : "No packages for this area"}
+              disabled={areaPackages.length === 0}
+              onIonChange={(e) => setPackageId(String(e.detail.value ?? ""))}
+            >
               {areaPackages.map((p) => (
                 <IonSelectOption key={p.id} value={p.id}>
                   {p.title}
@@ -983,7 +895,12 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
           <IonItem className="form-item">
             <IonLabel position="stacked">Duration / Price</IonLabel>
-            <IonSelect value={optionId} placeholder={packageId ? "Select option" : "Select package first"} disabled={!packageId} onIonChange={(e) => setOptionId(String(e.detail.value ?? ""))}>
+            <IonSelect
+              value={optionId}
+              placeholder={packageId ? "Select option" : "Select package first"}
+              disabled={!packageId}
+              onIonChange={(e) => setOptionId(String(e.detail.value ?? ""))}
+            >
               {packageOptions.map((o) => (
                 <IonSelectOption key={o.id} value={o.id}>
                   {o.option_name} • {formatDuration(Number(o.duration_value), o.duration_unit)} • ₱{toNum(o.price).toFixed(2)}
@@ -1050,8 +967,13 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
           {area === "common_area" ? (
             <IonItem className="form-item">
               <IonLabel position="stacked">Seat Number</IonLabel>
-              <IonSelect value={seatNumber} placeholder={startIso && endIso ? (availableSeatOptions.length ? "Select seat" : "No available seats") : "Select date & time first"} disabled={!startIso || !endIso || availableSeatOptions.length === 0} onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}>
-                {availableSeatOptions.map((s) => (
+              <IonSelect
+                value={seatNumber}
+                placeholder={startIso && endIso ? "Select seat" : "Select date & time first"}
+                disabled={!startIso || !endIso || allSeats.length === 0}
+                onIonChange={(e) => setSeatNumber(String(e.detail.value ?? ""))}
+              >
+                {allSeats.map((s) => (
                   <IonSelectOption key={s.value} value={s.value}>
                     {s.label}
                   </IonSelectOption>
@@ -1150,7 +1072,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
 
               <div className="receipt-row" style={{ alignItems: "flex-start" }}>
                 <span style={{ paddingTop: 6 }}>Note</span>
-                <textarea className="reason-input" style={{ width: "100%", minHeight: 90, resize: "vertical" }} value={attNote} onChange={(e) => setAttNote(e.currentTarget.value)} placeholder="Optional note..." disabled={attBusy} />
+                <textarea
+                  className="reason-input"
+                  style={{ width: "100%", minHeight: 90, resize: "vertical" }}
+                  value={attNote}
+                  onChange={(e) => setAttNote(e.currentTarget.value)}
+                  placeholder="Optional note..."
+                  disabled={attBusy}
+                />
               </div>
 
               <div className="modal-actions">
