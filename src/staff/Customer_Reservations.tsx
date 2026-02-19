@@ -1528,10 +1528,6 @@ const Customer_Reservations: React.FC = () => {
                     {selectedSession && isCustomerViewOnFor(selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
                   </button>
 
-                  <button className="receipt-btn admin-danger" onClick={() => openCancelModal(selectedSession)} disabled={cancellingBusy} title="Cancel requires description">
-                    Cancel
-                  </button>
-
                   <button className="close-btn" onClick={() => void closeReceipt()} disabled={cancellingBusy}>
                     Close
                   </button>
