@@ -845,29 +845,6 @@ const Admin_customer_list: React.FC = () => {
     }
   };
 
-  const toggleCustomerViewForSelected = async (): Promise<void> => {
-    if (!selectedSession) return;
-
-    const currentlyOn = isCustomerViewOnForSession(activeView, selectedSession.id);
-
-    try {
-      setViewBusy(true);
-
-      if (currentlyOn) {
-        await setCustomerViewState(false, null);
-      } else {
-        await setCustomerViewState(true, selectedSession.id);
-      }
-
-      await readActiveCustomerView();
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
-      alert("Failed to update View to Customer.");
-    } finally {
-      setViewBusy(false);
-    }
-  };
 
   const closeReceipt = async (): Promise<void> => {
     if (selectedSession && isCustomerViewOnForSession(activeView, selectedSession.id)) {
@@ -1794,13 +1771,6 @@ const Admin_customer_list: React.FC = () => {
                 </p>
 
                 <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button className="receipt-btn" onClick={() => void toggleCustomerViewForSelected()} disabled={viewBusy}>
-                    {isCustomerViewOnForSession(activeView, selectedSession.id) ? "Stop View to Customer" : "View to Customer"}
-                  </button>
-
-                  <button className="receipt-btn admin-danger" onClick={() => openCancelModal(selectedSession)} disabled={viewBusy} title="Cancel requires description">
-                    Cancel
-                  </button>
 
                   <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy}>
                     Close
