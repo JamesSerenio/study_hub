@@ -3,22 +3,23 @@
 // ✅ NO any
 // ✅ SAME COLOR LOGIC AS ADMIN
 // ✅ Staff can SET/CLEAR:
-//    - Temp occupied (promo_bookings + mirror in seat_blocked_times note="temp")
+//    - Temp occupied (NOW: seat_blocked_times ONLY note="temp")  ✅ NOT connected to booking anymore
 //    - Occupied / Reserved (seat_blocked_times)
 // ✅ Seats promo: promo_bookings(area="common_area", seat_number=...)
 // ✅ Conference promo: promo_bookings(area="conference_room", seat_number=NULL)
 // ✅ PROMO COLOR RULE:
 //    - promo CURRENT (now within start/end) => RED (occupied)
 //    - promo FUTURE (start > now) => PURPLE (reserved)
-//    - TEMP OCCUPIED (full_name starts with TEMP) => YELLOW
-// ✅ CLEAR NOW deletes overlap NOW from BOTH TABLES
+// ✅ TEMP COLOR RULE:
+//    - seat_blocked_times note="temp" => YELLOW
+// ✅ CLEAR NOW deletes overlap NOW from BOTH TABLES (seat_blocked_times + promo_bookings)
 // ✅ Open time supported (far future)
 // ✅ SAME CLASS STRUCTURE + pins + decorations
 // ✅ 4 right-side color swatches are NOT editable
-// ✅ FIX: When setting Occupied/Reserved, auto-delete overlapping TEMP promo first (TEMP only)
+// ✅ FIX: When setting Occupied/Reserved, auto-delete overlapping TEMP (seat_blocked_times note="temp") first (TEMP only)
 // ✅ FIX: CLEAR NOW truly deletes both seat_blocked_times + promo_bookings overlap NOW
-// ✅ NEW FIX (REQUESTED): IGNORE auto reservation blocks (note="reservation") so seats won't auto turn violet.
-//    Staff will be the only one who can set statuses/colors in the dashboard.
+// ✅ IGNORE auto reservation blocks (note="reservation") so seats won't auto turn violet (staff-only colors)
+// ✅ FINAL: YELLOW CLEAR NOW works even if promo_bookings SELECT is blocked by RLS (direct delete)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -192,24 +193,18 @@ const addDurationToIso = (startIso: string, hhmm: string): string => {
   return new Date(start.getTime() + totalMin * 60_000).toISOString();
 };
 
-const isTempName = (name: string): boolean => {
-  const n = name.trim().toLowerCase();
-  return n.startsWith("temp");
-};
-
 const isTempMirrorRow = (note: string | null): boolean => {
   const n = (note ?? "").trim().toLowerCase();
   return n === "temp";
 };
 
-// ✅ NEW: reservation auto blocks from BookingModal are ignored in Staff_Dashboard
+// ✅ reservation auto blocks from BookingModal are ignored in Staff_Dashboard color
 const isAutoReservationRow = (note: string | null): boolean => {
   const n = (note ?? "").trim().toLowerCase();
   return n === "reservation";
 };
 
 const Staff_Dashboard: React.FC = () => {
-  // ✅ SAME X/Y AS ADMIN + add 4 swatches (NOT editable)
   const defaultPins: SeatPin[] = useMemo(
     () => [
       { id: CONFERENCE_ID, label: "CONFERENCE ROOM", x: 13, y: 21.6, kind: "room" },
@@ -253,7 +248,6 @@ const Staff_Dashboard: React.FC = () => {
       { id: "12B", label: "12B", x: 16.5, y: 68.3, kind: "seat" },
       { id: "12C", label: "12C", x: 24, y: 68.2, kind: "seat" },
 
-      // ✅ RIGHT-SIDE COLOR SWATCHES (NOT editable / not clickable)
       { id: SWATCH_GREEN_ID, label: "", x: 90, y: 83.5, kind: "seat", readonly: true, fixedStatus: "temp_available" },
       { id: SWATCH_YELLOW_ID, label: "", x: 90, y: 88, kind: "seat", readonly: true, fixedStatus: "occupied_temp" },
       { id: SWATCH_RED_ID, label: "", x: 90, y: 92.5, kind: "seat", readonly: true, fixedStatus: "occupied" },
@@ -305,15 +299,14 @@ const Staff_Dashboard: React.FC = () => {
   const [selectedSeat, setSelectedSeat] = useState<string>("");
   const [selectedKind, setSelectedKind] = useState<PinKind>("seat");
 
-  const [fullName, setFullName] = useState<string>("TEMP OCCUPIED");
   const [openTime, setOpenTime] = useState<boolean>(false);
   const [durationInput, setDurationInput] = useState<string>("01:00");
   const [saving, setSaving] = useState<boolean>(false);
 
-  // ✅ required IDs (promo_bookings)
-  const [packageIdCommon, setPackageIdCommon] = useState<string>("");
-  const [packageIdConference, setPackageIdConference] = useState<string>("");
-  const [packageOptionId, setPackageOptionId] = useState<string>("");
+  // keep these (no harm) - but TEMP no longer needs them
+  const [, setPackageIdCommon] = useState<string>("");
+  const [, setPackageIdConference] = useState<string>("");
+  const [, setPackageOptionId] = useState<string>("");
 
   const loadRequiredIds = async (): Promise<void> => {
     const pkgCommonReq = supabase.from("packages").select("id, area").eq("area", "common_area").limit(1);
@@ -343,7 +336,6 @@ const Staff_Dashboard: React.FC = () => {
     void loadRequiredIds();
   }, []);
 
-  // ===== helpers =====
   const isConference = (id: string): boolean => id === CONFERENCE_ID;
 
   const getAreaForSelection = (kind: PinKind): "common_area" | "conference_room" =>
@@ -361,14 +353,30 @@ const Staff_Dashboard: React.FC = () => {
     setSelectedKind(kind);
     setOpenTime(false);
     setDurationInput("01:00");
-    setFullName("TEMP OCCUPIED");
     setIsModalOpen(true);
   };
 
-  // ✅ conflict check:
-  // - seat_blocked_times overlap (ignore TEMP mirror rows note='temp')
-  // - promo_bookings overlap (active)
-  // ✅ NEW: ignore auto reservation rows (note="reservation") so staff is the only controller
+  // ✅ helper: delete seat_blocked_times overlap with optional note filter
+  const deleteBlockedOverlap = async (
+    seatKey: string,
+    startIso: string,
+    endIso: string,
+    note?: string
+  ): Promise<string | null> => {
+    let q = supabase
+      .from("seat_blocked_times")
+      .delete()
+      .eq("seat_number", seatKey)
+      .lt("start_at", endIso)
+      .gt("end_at", startIso);
+
+    if (note) q = q.eq("note", note);
+
+    const { error } = await q;
+    if (error) return error.message;
+    return null;
+  };
+
   const checkConflicts = async (
     pinId: string,
     kind: PinKind,
@@ -377,7 +385,6 @@ const Staff_Dashboard: React.FC = () => {
   ): Promise<string | null> => {
     const seatKey = kind === "room" ? CONFERENCE_ID : pinId;
 
-    // 1) seat_blocked_times overlap (ignore note='temp' AND note='reservation')
     const { data: blk, error: blkErr } = await supabase
       .from("seat_blocked_times")
       .select("seat_number, source, note")
@@ -387,12 +394,11 @@ const Staff_Dashboard: React.FC = () => {
 
     if (blkErr) return `Block check error: ${blkErr.message}`;
 
-    const hardBlocks = ((blk ?? []) as SeatBlockedRow[]).filter(
-      (r) => !isTempMirrorRow(r.note) && !isAutoReservationRow(r.note)
-    );
-    if (hardBlocks.length > 0) return "Already blocked (occupied/reserved).";
+    // ignore auto reservation rows (note='reservation')
+    const hardBlocks = ((blk ?? []) as SeatBlockedRow[]).filter((r) => !isAutoReservationRow(r.note));
+    if (hardBlocks.length > 0) return "Already blocked (occupied/reserved/temp).";
 
-    // 2) promo_bookings overlap (active)
+    // keep promo conflict checks (for red/purple promos)
     if (kind === "room") {
       const { data: confRows, error: confErr } = await supabase
         .from("promo_bookings")
@@ -422,7 +428,6 @@ const Staff_Dashboard: React.FC = () => {
     return null;
   };
 
-  // ✅ load statuses from BOTH tables
   const loadSeatStatuses = async (): Promise<void> => {
     const nowIso = new Date().toISOString();
     const endIso = farFutureIso();
@@ -434,7 +439,6 @@ const Staff_Dashboard: React.FC = () => {
       .lt("start_at", endIso)
       .gt("end_at", nowIso);
 
-    // include FUTURE promos too (end_at > now)
     const promoSeatsReq = supabase
       .from("promo_bookings")
       .select("id, seat_number, start_at, end_at, status, area, full_name")
@@ -462,36 +466,23 @@ const Staff_Dashboard: React.FC = () => {
     const next: Record<string, SeatStatus> = {};
     for (const p of pins) next[p.id] = "temp_available";
 
-    // ✅ promo_bookings color rules:
-    // - TEMP name => YELLOW
-    // - ELSE promo:
-    //    - if now inside [start,end) => RED (occupied)
-    //    - if start > now => PURPLE (reserved)
     const nowMs = new Date(nowIso).getTime();
 
+    // promo colors (red/purple) - keep same logic
     const applyPromoRow = (seatId: string, r: PromoBookingRow): void => {
       if (!seatId) return;
-
-      if (isTempName(r.full_name)) {
-        next[seatId] = "occupied_temp";
-        return;
-      }
 
       const s = new Date(r.start_at).getTime();
       const e = new Date(r.end_at).getTime();
 
       if (!Number.isFinite(s) || !Number.isFinite(e)) return;
 
-      if (nowMs >= s && nowMs < e) {
-        next[seatId] = "occupied"; // RED
-      } else if (nowMs < s) {
-        next[seatId] = "reserved"; // PURPLE
-      }
+      if (nowMs >= s && nowMs < e) next[seatId] = "occupied";
+      else if (nowMs < s) next[seatId] = "reserved";
     };
 
-    if (promoSeatsErr) {
-      console.error("promo seats status error:", promoSeatsErr.message);
-    } else {
+    if (promoSeatsErr) console.error("promo seats status error:", promoSeatsErr.message);
+    else {
       const rows = (promoSeatsData ?? []) as PromoBookingRow[];
       for (const r of rows) {
         const seat = r.seat_number ? normalizeSeatId(r.seat_number) : "";
@@ -499,47 +490,53 @@ const Staff_Dashboard: React.FC = () => {
       }
     }
 
-    if (promoConfErr) {
-      console.error("promo conference status error:", promoConfErr.message);
-    } else {
+    if (promoConfErr) console.error("promo conference status error:", promoConfErr.message);
+    else {
       const rows = (promoConfData ?? []) as PromoBookingRow[];
-      if (rows.length > 0) {
-        applyPromoRow(CONFERENCE_ID, rows[0]);
-      }
+      if (rows.length > 0) applyPromoRow(CONFERENCE_ID, rows[0]);
     }
 
-    // ✅ seat_blocked_times statuses (HIGHEST priority)
-    // ✅ NEW: ignore note="reservation" rows so dashboard won't auto change color on user reservation
-    if (blockedErr) {
-      console.error("seat_blocked_times status error:", blockedErr.message);
-    } else {
+    // blocked colors (yellow overrides green; staff-set can override if no promo)
+    if (blockedErr) console.error("seat_blocked_times status error:", blockedErr.message);
+    else {
       const rows = (blockedData ?? []) as SeatBlockedRow[];
       const bySeat: Record<string, SeatStatus> = {};
 
       for (const r of rows) {
-        // ignore TEMP MIRROR rows note='temp' so they don't change colors
-        if (isTempMirrorRow(r.note)) continue;
-
-        // ✅ ignore auto reservation rows
-        if (isAutoReservationRow(r.note)) continue;
+        if (isAutoReservationRow(r.note)) continue; // ignore auto reservation for colors
 
         const id = normalizeSeatId(r.seat_number);
 
+        // ✅ YELLOW: temp mirror row
+        if (isTempMirrorRow(r.note)) {
+          bySeat[id] = "occupied_temp";
+          continue;
+        }
+
+        // normal blocks
         if (r.source === "reserved") {
-          bySeat[id] = "reserved";
+          if (bySeat[id] !== "occupied") bySeat[id] = "reserved";
           continue;
         }
 
         if (r.source === "regular") {
-          if (bySeat[id] !== "reserved") bySeat[id] = "occupied";
+          bySeat[id] = "occupied";
           continue;
         }
 
-        if (bySeat[id] !== "reserved") bySeat[id] = "occupied";
+        if (bySeat[id] !== "occupied") bySeat[id] = "occupied";
       }
 
       for (const id of blockedIds) {
-        if (bySeat[id]) next[id] = bySeat[id];
+        // promos already set in next[]; blocks can override only if promo didn't set?
+        // IMPORTANT: keep promo as top priority (your original behavior)
+        if (!next[id] || next[id] === "temp_available") {
+          if (bySeat[id]) next[id] = bySeat[id];
+        } else {
+          // if promo says occupied/reserved but we have yellow, we allow yellow to show
+          // (optional) If you want promo ALWAYS win, remove this block.
+          if (bySeat[id] === "occupied_temp") next[id] = "occupied_temp";
+        }
       }
     }
 
@@ -557,7 +554,6 @@ const Staff_Dashboard: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockedIds.join("|"), pins.length]);
 
-  // ===== calibrate =====
   const setPinPositionFromClick = (clientX: number, clientY: number): void => {
     if (!calibrate) return;
     if (!selectedPinId) return;
@@ -595,7 +591,7 @@ const Staff_Dashboard: React.FC = () => {
     setSelectedPinId("");
   };
 
-  // ✅ helper: delete TEMP promo_bookings overlap (TEMP only)
+  // ✅ keep TEMP promo delete for old data cleanup (but temp no longer creates promo now)
   const deleteTempPromoOverlap = async (
     seatKey: string,
     kind: PinKind,
@@ -618,47 +614,45 @@ const Staff_Dashboard: React.FC = () => {
     return null;
   };
 
-  // ✅ CLEAR NOW deletes BOTH tables overlap NOW
+  // ✅ CLEAR NOW: delete BOTH tables overlap now
   const clearToAvailableNow = async (pinId: string, kind: PinKind): Promise<void> => {
-    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const nowMinusIso = new Date(nowMs - 120_000).toISOString();
+    const nowPlusIso = new Date(nowMs + 120_000).toISOString();
+
     const seatKey = kind === "room" ? CONFERENCE_ID : pinId;
     const area = getAreaForSelection(kind);
 
     setSaving(true);
 
-    // 1) delete seat_blocked_times overlap now
-    const { error: delBlkErr } = await supabase
-      .from("seat_blocked_times")
-      .delete()
-      .eq("seat_number", seatKey)
-      .lt("start_at", nowIso)
-      .gt("end_at", nowIso);
+    // 1) delete seat_blocked_times overlap now (includes temp/staff/reservation)
+    {
+      const { error: delBlkErr } = await supabase
+        .from("seat_blocked_times")
+        .delete()
+        .eq("seat_number", seatKey)
+        .lt("start_at", nowPlusIso)
+        .gt("end_at", nowMinusIso);
 
-    if (delBlkErr) {
-      setSaving(false);
-      return alert(`Delete blocked error: ${delBlkErr.message}`);
+      if (delBlkErr) {
+        setSaving(false);
+        return alert(`Delete blocked error: ${delBlkErr.message}`);
+      }
     }
 
-    // 2) delete promo_bookings overlap now (ALL promo, including temp and real)
-    const promoBase = supabase
-      .from("promo_bookings")
-      .select("id")
-      .eq("area", area)
-      .eq("status", "active")
-      .lt("start_at", nowIso)
-      .gt("end_at", nowIso);
+    // 2) delete promo_bookings overlap now (DIRECT delete, no select)
+    {
+      const base = supabase
+        .from("promo_bookings")
+        .delete()
+        .eq("area", area)
+        .eq("status", "active")
+        .lt("start_at", nowPlusIso)
+        .gt("end_at", nowMinusIso);
 
-    const { data: promoRows, error: promoErr } =
-      kind === "room" ? await promoBase.is("seat_number", null) : await promoBase.eq("seat_number", seatKey);
+      const { error: delPromoErr } =
+        kind === "room" ? await base.is("seat_number", null) : await base.eq("seat_number", seatKey);
 
-    if (promoErr) {
-      setSaving(false);
-      return alert(`Load promo rows error: ${promoErr.message}`);
-    }
-
-    const ids = (promoRows ?? []).map((r: { id: string }) => r.id);
-    if (ids.length > 0) {
-      const { error: delPromoErr } = await supabase.from("promo_bookings").delete().in("id", ids);
       if (delPromoErr) {
         setSaving(false);
         return alert(`Delete promo error: ${delPromoErr.message}`);
@@ -671,8 +665,6 @@ const Staff_Dashboard: React.FC = () => {
     await loadSeatStatuses();
   };
 
-  // ✅ set occupied/reserved via seat_blocked_times
-  // ✅ FIX: auto-delete overlapping TEMP promo first (TEMP only)
   const setBlocked = async (choice: "occupied" | "reserved"): Promise<void> => {
     if (!selectedSeat) return;
 
@@ -691,7 +683,7 @@ const Staff_Dashboard: React.FC = () => {
 
     setSaving(true);
 
-    // 🔥 remove TEMP promo_bookings first (TEMP only)
+    // delete any old temp promo overlap (cleanup only)
     {
       const errMsg = await deleteTempPromoOverlap(seatKey, selectedKind, startIso, endIso);
       if (errMsg) {
@@ -700,19 +692,21 @@ const Staff_Dashboard: React.FC = () => {
       }
     }
 
-    // 🔥 remove TEMP MIRROR rows in seat_blocked_times (note='temp')
+    // remove TEMP mirror first (TEMP only) so occupied/reserved insert won't conflict
     {
-      const { error: delTempMirrorErr } = await supabase
-        .from("seat_blocked_times")
-        .delete()
-        .eq("seat_number", seatKey)
-        .eq("note", "temp")
-        .lt("start_at", endIso)
-        .gt("end_at", startIso);
-
-      if (delTempMirrorErr) {
+      const errMsg = await deleteBlockedOverlap(seatKey, startIso, endIso, "temp");
+      if (errMsg) {
         setSaving(false);
-        return alert(`Failed removing TEMP mirror first: ${delTempMirrorErr.message}`);
+        return alert(`Failed removing TEMP mirror first: ${errMsg}`);
+      }
+    }
+
+    // also remove reservation auto blocks (so staff can override)
+    {
+      const errMsg = await deleteBlockedOverlap(seatKey, startIso, endIso, "reservation");
+      if (errMsg) {
+        setSaving(false);
+        return alert(`Failed removing reservation auto blocks: ${errMsg}`);
       }
     }
 
@@ -746,25 +740,9 @@ const Staff_Dashboard: React.FC = () => {
     await loadSeatStatuses();
   };
 
-  // ✅ set TEMP occupied via promo_bookings (YELLOW)
-  // ✅ ALSO mirror into seat_blocked_times as (source='reserved', note='temp') for visibility
+  // ✅ TEMP OCCUPIED (YELLOW) - NOW ONLY seat_blocked_times (NO promo_bookings insert)
   const saveTempOccupied = async (): Promise<void> => {
     if (!selectedSeat) return;
-
-    const trimmed = fullName.trim();
-    if (!trimmed) return alert("Full Name is required.");
-
-    const area = getAreaForSelection(selectedKind);
-    const pkgId = area === "common_area" ? packageIdCommon : packageIdConference;
-
-    if (!pkgId) {
-      return alert(
-        area === "common_area"
-          ? 'Missing package (area="common_area"). Create at least 1 common_area package.'
-          : 'Missing package (area="conference_room"). Create at least 1 conference_room package.'
-      );
-    }
-    if (!packageOptionId) return alert("Missing package option. Create at least 1 package option.");
 
     if (!openTime) {
       const dur = normalizeDurationHHMM(durationInput);
@@ -784,7 +762,7 @@ const Staff_Dashboard: React.FC = () => {
 
     const seatKey = selectedKind === "room" ? CONFERENCE_ID : selectedSeat;
 
-    // delete overlaps so temp can be set now
+    // remove any existing blocks overlap (including reservation), so TEMP can be inserted
     {
       const { error: delBlkErr } = await supabase
         .from("seat_blocked_times")
@@ -799,65 +777,7 @@ const Staff_Dashboard: React.FC = () => {
       }
     }
 
-    // remove old TEMP mirror overlaps
-    {
-      const { error: delTempMirrorErr } = await supabase
-        .from("seat_blocked_times")
-        .delete()
-        .eq("seat_number", seatKey)
-        .eq("note", "temp")
-        .lt("start_at", endIso)
-        .gt("end_at", startIso);
-
-      if (delTempMirrorErr) {
-        setSaving(false);
-        return alert(`Failed removing old TEMP mirror: ${delTempMirrorErr.message}`);
-      }
-    }
-
-    const insertPayload: {
-      user_id: string;
-      full_name: string;
-      area: "common_area" | "conference_room";
-      package_id: string;
-      package_option_id: string;
-      seat_number: string | null;
-      start_at: string;
-      end_at: string;
-      price: number;
-      status: string;
-      gcash_amount: number;
-      cash_amount: number;
-      is_paid: boolean;
-      discount_kind: string;
-      discount_value: number;
-      discount_reason: string | null;
-    } = {
-      user_id: auth.user.id,
-      full_name: trimmed,
-      area,
-      package_id: pkgId,
-      package_option_id: packageOptionId,
-      seat_number: selectedKind === "seat" ? selectedSeat : null,
-      start_at: startIso,
-      end_at: endIso,
-      price: 0,
-      status: "active",
-      gcash_amount: 0,
-      cash_amount: 0,
-      is_paid: false,
-      discount_kind: "none",
-      discount_value: 0,
-      discount_reason: null,
-    };
-
-    const { error: promoInsErr } = await supabase.from("promo_bookings").insert(insertPayload);
-    if (promoInsErr) {
-      setSaving(false);
-      return alert(`Error saving promo booking: ${promoInsErr.message}`);
-    }
-
-    // mirror insert into seat_blocked_times (source=reserved, note=temp)
+    // insert TEMP mirror row (yellow)
     {
       const mirrorPayload: {
         seat_number: string;
@@ -872,12 +792,14 @@ const Staff_Dashboard: React.FC = () => {
         end_at: endIso,
         source: "reserved",
         note: "temp",
+        created_by: auth.user.id,
       };
 
-      mirrorPayload.created_by = auth.user.id;
-
       const { error: mirrorErr } = await supabase.from("seat_blocked_times").insert(mirrorPayload);
-      if (mirrorErr) console.warn("TEMP mirror insert failed:", mirrorErr.message);
+      if (mirrorErr) {
+        setSaving(false);
+        return alert(`TEMP set failed: ${mirrorErr.message}`);
+      }
     }
 
     setSaving(false);
@@ -919,7 +841,6 @@ const Staff_Dashboard: React.FC = () => {
                       title={p.readonly ? "Legend" : calibrate ? `Click to select: ${p.label}` : `Manage: ${p.label}`}
                       onClick={(ev) => {
                         ev.stopPropagation();
-
                         if (p.readonly) return;
 
                         if (calibrate) {
@@ -968,7 +889,6 @@ const Staff_Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* MODAL */}
         <IonModal
           isOpen={isModalOpen}
           className="seat-manage-modal"
@@ -1026,9 +946,10 @@ const Staff_Dashboard: React.FC = () => {
                 </IonItem>
               )}
 
+              {/* OPTIONAL: you can remove this Full Name field now since yellow doesn't use promo_bookings anymore */}
               <IonItem className="form-item">
-                <IonLabel position="stacked">Full Name (for TEMP only)</IonLabel>
-                <IonInput value={fullName} onIonChange={(e) => setFullName(e.detail.value ?? "")} />
+                <IonLabel position="stacked">Full Name (not used)</IonLabel>
+                <IonInput value={"TEMP OCCUPIED"} readonly />
               </IonItem>
 
               <IonButton expand="block" color="medium" disabled={saving} onClick={() => void clearToAvailableNow(selectedSeat, selectedKind)}>
