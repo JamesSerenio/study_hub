@@ -16,6 +16,10 @@
 // ✅ strict TS (NO "any")
 // ✅ FIXED: PAYMENT inputs no longer LIMIT/force total = due (Cash & GCash free input)
 // ✅ NEW: REFRESH button placed BESIDE DATE FILTER (same className so same color)
+//
+// ✅ UPDATE (YOUR REQUEST):
+// - REMOVE View Customer button from Action column
+// - Put View Customer / Stop View button INSIDE View Receipt modal (bottom, above Close)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -29,7 +33,7 @@ type CustomerViewRow = {
   id: number;
   session_id: string | null;
   enabled: boolean;
-  updated_at: string;
+  updated_at: string | null;
 };
 
 type DiscountKind = "none" | "percent" | "amount";
@@ -136,14 +140,16 @@ const applyDiscount = (
 
 const VIEW_ROW_ID = 1;
 
+// ✅ IMPORTANT FIX: use UPSERT so row is guaranteed to exist
 const setCustomerViewState = async (enabled: boolean, sessionId: string | null): Promise<void> => {
-  const { error } = await supabase
-    .from("customer_view_state")
-    .update({
-      enabled,
-      session_id: enabled ? sessionId : null,
-    })
-    .eq("id", VIEW_ROW_ID);
+  const payload: CustomerViewRow = {
+    id: VIEW_ROW_ID,
+    enabled,
+    session_id: enabled ? sessionId : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("customer_view_state").upsert(payload, { onConflict: "id" });
 
   if (error) throw error;
 };
@@ -188,7 +194,6 @@ const Customer_Lists: React.FC = () => {
 
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
-  // ✅ refresh busy
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
   useEffect(() => {
@@ -249,8 +254,25 @@ const Customer_Lists: React.FC = () => {
 
     if (error) {
       // eslint-disable-next-line no-console
-      console.error(error);
+      console.error("readActiveCustomerView error:", error);
       setActiveView(null);
+      return;
+    }
+
+    // if row missing, create it once
+    if (!data) {
+      try {
+        await setCustomerViewState(false, null);
+        const retry = await supabase
+          .from("customer_view_state")
+          .select("id, session_id, enabled, updated_at")
+          .eq("id", VIEW_ROW_ID)
+          .maybeSingle();
+        if (!retry.error) setActiveView((retry.data ?? null) as CustomerViewRow | null);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("ensure view row failed:", e);
+      }
       return;
     }
 
@@ -271,7 +293,6 @@ const Customer_Lists: React.FC = () => {
     };
   };
 
-  // ✅ refresh (list + view state)
   const refreshAll = async (): Promise<void> => {
     try {
       setRefreshing(true);
@@ -657,16 +678,15 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  const toggleCustomerViewForSelected = async (): Promise<void> => {
-    if (!selectedSession) return;
-
-    const currentlyOn = isCustomerViewOnForSession(activeView, selectedSession.id);
+  // ✅ NEW: view toggle function (used INSIDE receipt modal)
+  const toggleCustomerViewForSession = async (session: CustomerSession): Promise<void> => {
+    const currentlyOn = isCustomerViewOnForSession(activeView, session.id);
 
     try {
       setViewBusy(true);
 
       if (currentlyOn) await setCustomerViewState(false, null);
-      else await setCustomerViewState(true, selectedSession.id);
+      else await setCustomerViewState(true, session.id);
 
       await readActiveCustomerView();
     } catch (e) {
@@ -736,7 +756,7 @@ const Customer_Lists: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE + REFRESH (katabi) */}
+              {/* DATE + REFRESH */}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <label className="date-pill">
                   <span className="date-pill-label">Date</span>
@@ -805,7 +825,6 @@ const Customer_Lists: React.FC = () => {
                     const remainingPay = round2(systemCost - pi.totalPaid);
 
                     const dp = getDownPayment(session);
-                    const viewOn = isCustomerViewOnForSession(activeView, session.id);
 
                     return (
                       <tr key={session.id}>
@@ -903,6 +922,7 @@ const Customer_Lists: React.FC = () => {
                               View Receipt
                             </button>
 
+                            {/* ✅ CANCEL (ONLY HERE) */}
                             <button
                               className="receipt-btn admin-danger"
                               onClick={() => openCancelModal(session)}
@@ -911,7 +931,8 @@ const Customer_Lists: React.FC = () => {
                               Cancel
                             </button>
 
-                            {viewOn ? (
+                            {/* Optional: simple indicator only */}
+                            {isCustomerViewOnForSession(activeView, session.id) ? (
                               <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span>
                             ) : (
                               <span style={{ fontSize: 11, opacity: 0.45 }}>—</span>
@@ -1373,26 +1394,26 @@ const Customer_Lists: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button className="receipt-btn" onClick={() => void toggleCustomerViewForSelected()} disabled={viewBusy}>
-                    {isCustomerViewOnForSession(activeView, selectedSession.id)
-                      ? "Stop View to Customer"
-                      : "View to Customer"}
-                  </button>
+                {/* ✅ VIEW CUSTOMER BUTTON INSIDE RECEIPT (ABOVE CLOSE) */}
+                {(() => {
+                  const viewOn = isCustomerViewOnForSession(activeView, selectedSession.id);
+                  return (
+                    <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        className="receipt-btn"
+                        onClick={() => void toggleCustomerViewForSession(selectedSession)}
+                        disabled={viewBusy}
+                        title={viewOn ? "Turn OFF View to Customer" : "Turn ON View to Customer"}
+                      >
+                        {viewBusy ? "Updating..." : viewOn ? "Stop View" : "View Customer"}
+                      </button>
 
-                  <button
-                    className="receipt-btn admin-danger"
-                    onClick={() => openCancelModal(selectedSession)}
-                    disabled={viewBusy}
-                    title="Cancel requires description"
-                  >
-                    Cancel
-                  </button>
-
-                  <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy}>
-                    Close
-                  </button>
-                </div>
+                      <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy}>
+                        Close
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
