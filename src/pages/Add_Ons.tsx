@@ -576,6 +576,38 @@ const Add_Ons: React.FC = () => {
 
   return (
     <IonPage>
+       {/* ✅ FORCE LIGHT MODE + BLACK TEXT (ONLY THIS PAGE) */}
+    <style>
+      {`
+        /* stop iOS/Browser auto dark-mode rendering */
+        :root { color-scheme: only light; }
+
+        /* make page always light */
+        ion-content.ao-page-scroll{
+          --background: #ffffff !important;
+          background: #ffffff !important;
+        }
+
+        /* force black text everywhere inside this page */
+        ion-content.ao-page-scroll,
+        ion-content.ao-page-scroll *{
+          color: #000 !important;
+        }
+
+        /* keep ion placeholders readable */
+        ion-content.ao-page-scroll input::placeholder,
+        ion-content.ao-page-scroll textarea::placeholder{
+          color: rgba(0,0,0,0.55) !important;
+          opacity: 1 !important;
+        }
+
+        /* keep label/text black */
+        ion-content.ao-page-scroll ion-label,
+        ion-content.ao-page-scroll ion-text{
+          color: #000 !important;
+        }
+      `}
+    </style>
       <IonContent fullscreen className="login-content ao-page-scroll">
         {/* Leaves */}
         <div className="leaf leaf-top-left">

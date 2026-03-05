@@ -340,6 +340,32 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
             margin-right: 8px;
           }
 
+          /* ✅ FORCE BLACK TEXT (ignore phone dark mode) */
+        .login-content.seatmap-clean,
+        .login-content.seatmap-clean *{
+          color: #000 !important;
+        }
+
+        /* ✅ keep card text black specifically */
+        .seatmap-card,
+        .seatmap-topbar,
+        .seatmap-legend,
+        .seatmap-title,
+        .seatmap-date,
+        .legend-item{
+          color: #000 !important;
+        }
+
+        /* ✅ pins text black (numbers + conference label) */
+        .seat-pin{
+          color: #000 !important;
+        }
+
+        /* ✅ stop iOS auto darkening / color-scheme tricks */
+        :root{
+          color-scheme: only light;
+        }
+
           /* ✅ SMALL PHONES */
           @media (max-width: 420px){
             .login-wrapper{
