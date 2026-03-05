@@ -561,7 +561,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
         <IonHeader>
           <IonToolbar>
-            <IonTitle>{mode === "add_ons" ? "Add-Ons" : "Special FInds"}</IonTitle>
+            <IonTitle>{mode === "add_ons" ? "Order" : "Other Items"}</IonTitle>
             <IonButtons slot="end">
               <IonButton onClick={onClose}>
                 <IonIcon icon={closeOutline} />
@@ -587,10 +587,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                 }}
               >
                 <IonSegmentButton value="add_ons">
-                  <IonLabel>Add-Ons</IonLabel>
+                  <IonLabel>Order</IonLabel>
                 </IonSegmentButton>
                 <IonSegmentButton value="consignment">
-                  <IonLabel>Special Finds</IonLabel>
+                  <IonLabel>Other Items</IonLabel>
                 </IonSegmentButton>
               </IonSegment>
             </div>
@@ -619,7 +619,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
             </IonItem>
 
             <IonButton expand="block" onClick={addAnotherCategory}>
-              Add More {mode === "add_ons" ? "Add-Ons" : "Special finds"}
+              Add More {mode === "add_ons" ? "Order" : "Items"}
             </IonButton>
 
             {selectedCategories.map((category, index) => {
