@@ -1,9 +1,9 @@
 // src/pages/Seat_Map.tsx
-// ✅ FULL CODE
-// ✅ SAME SEAT LOGIC/UI (copied from Seat.tsx)
+// ✅ FULL CODE (iOS Messenger SAFE)
+// ✅ SAME SEAT LOGIC/UI
 // ✅ Leaves same as Login
-// ✅ HARD REMOVE the "dirty brown" overlay by disabling login-content::before/::after ONLY on this page
-// ✅ MOBILE FIX: smaller seat numbers/pins + smaller legend dots + better card width
+// ✅ HARD REMOVE login-content::before/::after ONLY on this page
+// ✅ MOBILE FIX: smaller pins + smaller legend dots + better card width
 // ✅ STRICT TS, NO any
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -62,12 +62,19 @@ const STATUS_COLOR: Record<SeatStatus, string> = {
   reserved: "seat-purple",
 };
 
-const farFutureIso = (): string => new Date("2999-12-31T23:59:59.000Z").toISOString();
+const farFutureIso = (): string =>
+  new Date("2999-12-31T23:59:59.000Z").toISOString();
+
 const normalizeSeatId = (v: string): string => String(v).trim();
 
-const isTempName = (name: string): boolean => name.trim().toLowerCase().startsWith("temp");
-const isTempMirrorRow = (note: string | null): boolean => (note ?? "").trim().toLowerCase() === "temp";
-const isAutoReservationRow = (note: string | null): boolean => (note ?? "").trim().toLowerCase() === "reservation";
+const isTempName = (name: string): boolean =>
+  name.trim().toLowerCase().startsWith("temp");
+
+const isTempMirrorRow = (note: string | null): boolean =>
+  (note ?? "").trim().toLowerCase() === "temp";
+
+const isAutoReservationRow = (note: string | null): boolean =>
+  (note ?? "").trim().toLowerCase() === "reservation";
 
 const formatPHDate = (d: Date): string =>
   d.toLocaleDateString("en-PH", {
@@ -129,7 +136,11 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
     []
   );
 
-  const seatIdsOnly = useMemo(() => pins.filter((p) => p.kind === "seat" && !p.readonly).map((p) => p.id), [pins]);
+  const seatIdsOnly = useMemo(
+    () => pins.filter((p) => p.kind === "seat" && !p.readonly).map((p) => p.id),
+    [pins]
+  );
+
   const blockedIds = useMemo(() => [...seatIdsOnly, CONFERENCE_ID], [seatIdsOnly]);
 
   const [statusBySeat, setStatusBySeat] = useState<Record<string, SeatStatus>>({});
@@ -262,9 +273,16 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
 
   return (
     <IonPage>
-      {/* ✅ STYLE OVERRIDE INSIDE PAGE (kills ::before/::after overlay) + MOBILE SIZE FIX */}
       <style>
         {`
+          /* ✅ iOS WebView safety */
+          html, body{
+            width: 100%;
+            overflow-x: hidden;
+            -webkit-text-size-adjust: 100%;
+          }
+
+          /* ✅ kill overlay ONLY on this page */
           .login-content.seatmap-clean::before,
           .login-content.seatmap-clean::after{
             content: none !important;
@@ -273,14 +291,7 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
             opacity: 0 !important;
           }
 
-          /* =========================
-             MOBILE FIXES
-             - smaller seat pins (numbers)
-             - smaller legend dots (bilog)
-             - tighter card width/padding
-          ========================= */
-
-          /* safe defaults if your global css is missing */
+          /* ===== seat ui base ===== */
           .seatmap-card{
             border-radius: 18px;
             overflow: hidden;
@@ -297,7 +308,6 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
             -webkit-user-drag: none;
           }
 
-          /* pins baseline (desktop/tablet) */
           .seat-pin{
             position: absolute;
             transform: translate(-50%, -50%);
@@ -311,7 +321,7 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
             line-height: 1;
             box-shadow: 0 8px 16px rgba(0,0,0,0.12);
             letter-spacing: -0.2px;
-            pointer-events: none; /* readonly */
+            pointer-events: none;
           }
           .seat-pin.room{
             width: 70px;
@@ -322,7 +332,6 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
             text-align: center;
           }
 
-          /* legend dot baseline */
           .legend-dot{
             width: 10px;
             height: 10px;
@@ -333,15 +342,16 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
 
           /* ✅ SMALL PHONES */
           @media (max-width: 420px){
-            /* make the outer box full width on mobile */
             .login-wrapper{
               padding-left: 10px !important;
               padding-right: 10px !important;
             }
 
+            /* ✅ FIX: NEVER 200% width (breaks iOS Messenger) */
             .login-box{
-              width: 200% !important;
-              max-width: 400px !important;
+              width: 100% !important;
+              max-width: 420px !important;
+              margin: 0 auto !important;
             }
 
             .seatmap-card{
@@ -359,7 +369,6 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
               font-size: 10px !important;
             }
 
-            /* ✅ smaller pins & numbers */
             .seat-pin{
               width: 10px !important;
               height: 10px !important;
@@ -368,21 +377,19 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
               box-shadow: 0 6px 12px rgba(0,0,0,0.10) !important;
             }
 
-            /* conference room label smaller */
             .seat-pin.room{
               width: 40px !important;
               height: 10px !important;
 
               display: flex;
-              align-items: center;      /* ✅ vertical centering */
-              justify-content: center;  /* ✅ horizontal centering */
+              align-items: center;
+              justify-content: center;
 
               font-size: 3px !important;
-              line-height: 1 !important; /* important para di bumaba */
+              line-height: 1 !important;
               padding: 0 !important;
             }
 
-            /* ✅ smaller bilog */
             .legend-dot{
               width: 8px !important;
               height: 8px !important;
@@ -425,8 +432,9 @@ const Seat_Map: React.FC<Props> = ({ pollMs = 15000 }) => {
           <div
             className="login-box"
             style={{
-              width: "60%",
+              width: "min(92vw, 800px)", // ✅ FIX: consistent on iOS/Android
               maxWidth: 800,
+              margin: "0 auto",
               background: "transparent",
               boxShadow: "none",
             }}
