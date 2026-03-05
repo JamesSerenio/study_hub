@@ -594,7 +594,7 @@ const Add_Ons: React.FC = () => {
         <div className="ao-wrapper">
           <div className="ao-card">
             <div className="ao-topbar">
-              <IonText className="ao-title">{mode === "add_ons" ? "Add-Ons" : "Consignment"}</IonText>
+              <IonText className="ao-title">{mode === "add_ons" ? "Order" : "Other Items"}</IonText>
               <IonButton fill="clear" className="ao-close" onClick={resetForm}>
                 <IonIcon icon={closeOutline} />
               </IonButton>
@@ -621,10 +621,10 @@ const Add_Ons: React.FC = () => {
                 }}
               >
                 <IonSegmentButton value="add_ons">
-                  <IonLabel>Add-Ons</IonLabel>
+                  <IonLabel>Order</IonLabel>
                 </IonSegmentButton>
                 <IonSegmentButton value="consignment">
-                  <IonLabel>Consignment</IonLabel>
+                  <IonLabel>Other Items</IonLabel>
                 </IonSegmentButton>
               </IonSegment>
             </div>
@@ -659,7 +659,7 @@ const Add_Ons: React.FC = () => {
             </IonItem>
 
             <IonButton expand="block" className="ao-primary" onClick={addAnotherCategory}>
-              Add More {mode === "add_ons" ? "Add-Ons" : "Consignment"}
+              Add More {mode === "add_ons" ? "Order" : "Other Items"}
             </IonButton>
 
             {selectedCategories.map((category, index) => {
