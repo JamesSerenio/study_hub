@@ -1,9 +1,8 @@
 // src/pages/Add_Ons.tsx
-// ✅ Add-Ons + Consignment (same UI/functions)
-// ✅ Uses RPC: place_addon_order / place_consignment_order
-// ✅ Scroll FIX: page can scroll + card has max-height + internal scroll
-// ✅ Leaves background (Login style)
-// ✅ Success modal centered (small) after submit
+// ✅ Fixed iOS dark rendering issue
+// ✅ Safer page-level CSS vars for Ionic
+// ✅ White cards / list / inputs / searchbar on iPhone
+// ✅ Same logic and functions retained
 // ✅ STRICT TS, NO any
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -57,8 +56,8 @@ interface AddOnRow {
 
 interface ConsignmentRow {
   id: string;
-  full_name: string; // owner
-  category?: string | null; // optional if you already have it
+  full_name: string;
+  category?: string | null;
   item_name: string;
   size: string | null;
   image_url: string | null;
@@ -114,7 +113,8 @@ const DEFAULT_SEAT_GROUPS: SeatGroup[] = [
   { title: "2ndF", seats: ["7a", "7b", "8a", "8b", "9", "10"] },
 ];
 
-const SUCCESS_MESSAGE = "Thank you! Kindly proceed to the counter for pickup and payment.";
+const SUCCESS_MESSAGE =
+  "Thank you! Kindly proceed to the counter for pickup and payment.";
 
 /* =========================
    HELPERS
@@ -132,8 +132,8 @@ const toInt = (v: unknown): number => Math.max(0, Math.floor(toNum(v)));
 const norm = (s: string): string => s.trim().toLowerCase();
 const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 
-// if your add_ons table has a "Consignment" category you want to hide from add-ons mode
-const isConsignmentCategory = (cat: string): boolean => norm(cat) === "consignment";
+const isConsignmentCategory = (cat: string): boolean =>
+  norm(cat) === "consignment";
 
 type RpcAddOnItem = { add_on_id: string; quantity: number };
 type RpcConsignItem = { consignment_id: string; quantity: number };
@@ -151,11 +151,11 @@ const Add_Ons: React.FC = () => {
   const [toastMsg, setToastMsg] = useState<string>("");
   const [showToast, setShowToast] = useState<boolean>(false);
   const toastColor = useMemo<"success" | "danger">(
-    () => (toastMsg.toLowerCase().includes("success") ? "success" : "danger"),
+    () =>
+      toastMsg.toLowerCase().includes("success") ? "success" : "danger",
     [toastMsg]
   );
 
-  // ✅ Success modal
   const [successOpen, setSuccessOpen] = useState<boolean>(false);
 
   const [items, setItems] = useState<Item[]>([]);
@@ -216,7 +216,6 @@ const Add_Ons: React.FC = () => {
           .returns<AddOnRow[]>();
 
         if (error) {
-          // eslint-disable-next-line no-console
           console.error(error);
           showError(`Error loading add-ons: ${error.message}`);
           setItems([]);
@@ -240,17 +239,19 @@ const Add_Ons: React.FC = () => {
           image_url: r.image_url ?? null,
         }));
 
-        // optional: hide "Consignment" rows from add_ons list
-        const filtered = mappedAll.filter((a) => !isConsignmentCategory(a.category));
+        const filtered = mappedAll.filter(
+          (a) => !isConsignmentCategory(a.category)
+        );
 
         setItems(filtered);
         return;
       }
 
-      // CONSIGNMENT
       const { data, error } = await supabase
         .from("consignment")
-        .select("id, full_name, category, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks")
+        .select(
+          "id, full_name, category, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks"
+        )
         .gt("stocks", 0)
         .order("category", { ascending: true })
         .order("full_name", { ascending: true })
@@ -259,7 +260,6 @@ const Add_Ons: React.FC = () => {
         .returns<ConsignmentRow[]>();
 
       if (error) {
-        // eslint-disable-next-line no-console
         console.error(error);
         showError(`Error loading consignment: ${error.message}`);
         setItems([]);
@@ -267,9 +267,8 @@ const Add_Ons: React.FC = () => {
       }
 
       const mapped: ConsignmentItem[] = (data ?? []).map((r) => {
-        // ✅ CATEGORY label for consignment:
-        // priority: consignment.category, fallback: full_name
-        const categoryLabel = String((r.category ?? r.full_name) ?? "").trim() || "Consignment";
+        const categoryLabel =
+          String((r.category ?? r.full_name) ?? "").trim() || "Consignment";
 
         return {
           kind: "consignment",
@@ -300,7 +299,10 @@ const Add_Ons: React.FC = () => {
     return uniq;
   }, [items]);
 
-  const totalAmount = useMemo<number>(() => selectedItems.reduce((sum, s) => sum + s.quantity * s.price, 0), [selectedItems]);
+  const totalAmount = useMemo<number>(
+    () => selectedItems.reduce((sum, s) => sum + s.quantity * s.price, 0),
+    [selectedItems]
+  );
 
   const selectedSummaryByCategory = useMemo(() => {
     const map = new Map<string, SelectedItem[]>();
@@ -343,21 +345,34 @@ const Add_Ons: React.FC = () => {
       const item = items.find((a) => a.id === id);
       if (!item) return prev;
 
-      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? item.stocks)));
+      const stocks = Math.max(
+        0,
+        Math.floor(toNum(stocksById.get(id) ?? item.stocks))
+      );
 
-      const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
+      const currentQty = existing
+        ? Math.max(0, Math.floor(toNum(existing.quantity)))
+        : 0;
+
       const chosenTotalSameId = prev
         .filter((s) => s.id === id)
-        .reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
+        .reduce(
+          (sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))),
+          0
+        );
 
       const chosenOtherSameId = Math.max(0, chosenTotalSameId - currentQty);
       const maxAllowedForThis = Math.max(0, stocks - chosenOtherSameId);
       const q = Math.min(wanted, maxAllowedForThis);
 
-      if (wanted > maxAllowedForThis) showError(`Only ${maxAllowedForThis} remaining for this item.`);
+      if (wanted > maxAllowedForThis) {
+        showError(`Only ${maxAllowedForThis} remaining for this item.`);
+      }
 
       if (q > 0) {
-        if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
+        if (existing) {
+          return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
+        }
 
         return [
           ...prev,
@@ -441,6 +456,7 @@ const Add_Ons: React.FC = () => {
 
     const uniq = Array.from(new Set(sizes));
     const order = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+
     uniq.sort((a, b) => {
       const ia = order.indexOf(a.toUpperCase());
       const ib = order.indexOf(b.toUpperCase());
@@ -449,10 +465,12 @@ const Add_Ons: React.FC = () => {
       if (ib !== -1) return 1;
       return a.localeCompare(b);
     });
+
     return uniq;
   };
 
-  const categoryHasSizes = (category: string): boolean => getSizesForCategory(category).length > 0;
+  const categoryHasSizes = (category: string): boolean =>
+    getSizesForCategory(category).length > 0;
 
   const pickerItems = useMemo(() => {
     const cat = pickerCategory;
@@ -514,16 +532,21 @@ const Add_Ons: React.FC = () => {
     const name = fullName.trim();
     if (!name) return showError("Full Name is required.");
     if (!seat) return showError("Seat Number is required.");
-    if (selectedItems.length === 0) return showError("Please select at least one item.");
+    if (selectedItems.length === 0) {
+      return showError("Please select at least one item.");
+    }
 
-    // prevent mixing
-    const mismatch = selectedItems.some((s) => (mode === "add_ons" ? s.kind !== "add_ons" : s.kind !== "consignment"));
+    const mismatch = selectedItems.some((s) =>
+      mode === "add_ons" ? s.kind !== "add_ons" : s.kind !== "consignment"
+    );
+
     if (mismatch) {
       showError("Selected items do not match the chosen Type. Please Reset and try again.");
       return;
     }
 
     setIsLoading(true);
+
     try {
       if (mode === "add_ons") {
         const payload: RpcAddOnItem[] = selectedItems.map((s) => ({
@@ -538,7 +561,6 @@ const Add_Ons: React.FC = () => {
         });
 
         if (error) {
-          // eslint-disable-next-line no-console
           console.error(error);
           showError(`Order failed: ${error.message}`);
           return;
@@ -556,7 +578,6 @@ const Add_Ons: React.FC = () => {
         });
 
         if (error) {
-          // eslint-disable-next-line no-console
           console.error(error);
           showError(`Consignment order failed: ${error.message}`);
           return;
@@ -566,7 +587,9 @@ const Add_Ons: React.FC = () => {
       await fetchItems();
 
       setSuccessOpen(true);
-      showSuccessToast(`${mode === "add_ons" ? "Add-ons" : "Consignment"} saved successfully!`);
+      showSuccessToast(
+        `${mode === "add_ons" ? "Add-ons" : "Consignment"} saved successfully!`
+      );
 
       resetForm();
     } finally {
@@ -576,40 +599,346 @@ const Add_Ons: React.FC = () => {
 
   return (
     <IonPage>
-       {/* ✅ FORCE LIGHT MODE + BLACK TEXT (ONLY THIS PAGE) */}
-    <style>
-      {`
-        /* stop iOS/Browser auto dark-mode rendering */
-        :root { color-scheme: only light; }
+      <style>
+        {`
+          /* =========================
+             iOS SAFER FIX
+          ========================= */
 
-        /* make page always light */
-        ion-content.ao-page-scroll{
-          --background: #ffffff !important;
-          background: #ffffff !important;
-        }
+          :root {
+            color-scheme: light;
+          }
 
-        /* force black text everywhere inside this page */
-        ion-content.ao-page-scroll,
-        ion-content.ao-page-scroll *{
-          color: #000 !important;
-        }
+          ion-content.ao-page-scroll {
+            --background: #f8f6ef !important;
+            --color: #111111 !important;
+            --ion-background-color: #f8f6ef !important;
+            --ion-text-color: #111111 !important;
+            background: #f8f6ef !important;
+          }
 
-        /* keep ion placeholders readable */
-        ion-content.ao-page-scroll input::placeholder,
-        ion-content.ao-page-scroll textarea::placeholder{
-          color: rgba(0,0,0,0.55) !important;
-          opacity: 1 !important;
-        }
+          ion-content.ao-page-scroll::part(background) {
+            background: #f8f6ef !important;
+          }
 
-        /* keep label/text black */
-        ion-content.ao-page-scroll ion-label,
-        ion-content.ao-page-scroll ion-text{
-          color: #000 !important;
-        }
-      `}
-    </style>
+          /* only set color on common text elements, not all descendants */
+          .ao-page-scroll,
+          .ao-page-scroll ion-label,
+          .ao-page-scroll ion-text,
+          .ao-page-scroll p,
+          .ao-page-scroll h1,
+          .ao-page-scroll h2,
+          .ao-page-scroll h3,
+          .ao-page-scroll h4,
+          .ao-page-scroll h5,
+          .ao-page-scroll h6,
+          .ao-page-scroll span,
+          .ao-page-scroll div,
+          .ao-page-scroll strong,
+          .ao-page-scroll small {
+            color: #111111 !important;
+          }
+
+          /* wrapper/card */
+          .ao-wrapper {
+            padding: 18px 14px 28px;
+          }
+
+          .ao-card {
+            background: #f7f4ed !important;
+            border-radius: 24px;
+            padding: 18px 14px 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0,0,0,0.05);
+          }
+
+          .ao-topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+          }
+
+          .ao-title {
+            font-size: 20px;
+            font-weight: 900;
+            color: #111111 !important;
+          }
+
+          .ao-close {
+            --color: #111111 !important;
+          }
+
+          /* form items */
+          .ao-page-scroll .ao-form-item,
+          .ao-page-scroll .addon-item,
+          .ao-page-scroll .ao-picker ion-item {
+            --background: #ffffff !important;
+            --color: #111111 !important;
+            --border-color: rgba(0,0,0,0.08) !important;
+            --inner-border-width: 0 0 1px 0 !important;
+            --padding-start: 12px;
+            --inner-padding-end: 12px;
+            margin-bottom: 10px;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+          }
+
+          .ao-form-item-compact {
+            margin-bottom: 0;
+          }
+
+          /* list / picker */
+          .ao-page-scroll ion-list,
+          .ao-page-scroll .ao-picker,
+          .ao-page-scroll .summary-section,
+          .ao-page-scroll .addon-block {
+            background: transparent !important;
+          }
+
+          .ao-picker {
+            background: #f7f4ed !important;
+            border-radius: 18px;
+            padding: 10px;
+            border: 1px solid rgba(0,0,0,0.06);
+          }
+
+          .ao-picker-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+          }
+
+          /* Searchbar */
+          .ao-page-scroll ion-searchbar {
+            --background: #ffffff !important;
+            --color: #111111 !important;
+            --placeholder-color: rgba(0,0,0,0.55) !important;
+            --icon-color: #111111 !important;
+            --clear-button-color: #111111 !important;
+            --cancel-button-color: #111111 !important;
+            --box-shadow: none !important;
+            padding: 0 !important;
+            margin-bottom: 10px;
+          }
+
+          .ao-page-scroll ion-searchbar .searchbar-input-container,
+          .ao-page-scroll ion-searchbar input,
+          .ao-page-scroll ion-searchbar textarea {
+            color: #111111 !important;
+            background: #ffffff !important;
+          }
+
+          /* input/select */
+          .ao-page-scroll ion-input,
+          .ao-page-scroll ion-select {
+            --color: #111111 !important;
+            color: #111111 !important;
+          }
+
+          .ao-page-scroll input,
+          .ao-page-scroll textarea {
+            color: #111111 !important;
+            -webkit-text-fill-color: #111111 !important;
+          }
+
+          .ao-page-scroll input::placeholder,
+          .ao-page-scroll textarea::placeholder {
+            color: rgba(0,0,0,0.55) !important;
+            opacity: 1 !important;
+          }
+
+          /* segment */
+          .ao-page-scroll ion-segment {
+            background: #ffffff !important;
+            border-radius: 14px;
+            padding: 4px;
+          }
+
+          .ao-page-scroll ion-segment-button {
+            --color: #222222 !important;
+            --color-checked: #ffffff !important;
+            --background-checked: #6a8f4e !important;
+            min-height: 42px;
+            font-weight: 700;
+          }
+
+          /* thumbs */
+          .ao-page-scroll ion-thumbnail {
+            --border-radius: 12px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #f0f0f0;
+            flex-shrink: 0;
+          }
+
+          .ao-page-scroll ion-thumbnail img,
+          .ao-page-scroll ion-img::part(image) {
+            object-fit: cover;
+          }
+
+          .addon-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+          }
+
+          .addon-flex {
+            flex: 1;
+          }
+
+          .addon-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            align-items: flex-end;
+            min-width: 96px;
+          }
+
+          .qty-label {
+            font-size: 12px;
+            font-weight: 700;
+          }
+
+          .qty-input {
+            width: 82px;
+            --background: #ffffff !important;
+            --color: #111111 !important;
+            border: 1px solid rgba(0,0,0,0.12);
+            border-radius: 10px;
+            text-align: center;
+            padding-inline: 8px;
+          }
+
+          .summary-section {
+            background: #ffffff !important;
+            border-radius: 14px;
+            padding: 12px 14px;
+            border: 1px solid rgba(0,0,0,0.06);
+          }
+
+          .summary-text {
+            margin: 0;
+            font-size: 16px;
+          }
+
+          .ao-primary {
+            --background: #6a8f4e;
+            --background-hover: #5f8247;
+            --background-activated: #5f8247;
+            --color: #ffffff;
+            --border-radius: 14px;
+            height: 48px;
+            font-weight: 800;
+            text-transform: none;
+            margin-top: 10px;
+          }
+
+          .ao-secondary {
+            --background: #111111;
+            --background-hover: #222222;
+            --background-activated: #222222;
+            --color: #ffffff;
+            --border-radius: 14px;
+            height: 46px;
+            font-weight: 700;
+            text-transform: none;
+          }
+
+          .btn-green {
+            text-transform: uppercase;
+          }
+
+          /* success modal */
+          .ao-success-modal {
+            --width: 320px;
+            --height: auto;
+            --border-radius: 22px;
+            --background: transparent;
+            --box-shadow: none;
+          }
+
+          .ao-success-modal::part(content) {
+            border-radius: 22px;
+            overflow: hidden;
+            background: transparent;
+            box-shadow: none;
+          }
+
+          .ao-success-box {
+            background: #ffffff;
+            border-radius: 22px;
+            padding: 18px 16px 16px;
+            box-shadow: 0 18px 40px rgba(0,0,0,0.18);
+          }
+
+          .ao-success-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+          }
+
+          .ao-success-icon {
+            font-size: 42px;
+            color: #39a84b;
+          }
+
+          .ao-success-x {
+            border: 0;
+            background: transparent;
+            color: #111111;
+            font-size: 20px;
+            cursor: pointer;
+          }
+
+          .ao-success-title {
+            font-size: 20px;
+            font-weight: 900;
+            margin-bottom: 8px;
+            color: #111111;
+          }
+
+          .ao-success-msg {
+            font-size: 14px;
+            line-height: 1.5;
+            color: #333333;
+            margin-bottom: 14px;
+          }
+
+          .ao-success-btn {
+            --background: #39a84b;
+            --background-hover: #2f8f3f;
+            --background-activated: #2f8f3f;
+            --color: #ffffff;
+            --border-radius: 14px;
+            font-weight: 800;
+            height: 46px;
+          }
+
+          /* better spacing on iphone */
+          @media (max-width: 480px) {
+            .ao-wrapper {
+              padding: 14px 10px 24px;
+            }
+
+            .ao-card {
+              padding: 16px 12px 18px;
+              border-radius: 22px;
+            }
+
+            .addon-row {
+              align-items: stretch;
+            }
+          }
+        `}
+      </style>
+
       <IonContent fullscreen className="login-content ao-page-scroll">
-        {/* Leaves */}
         <div className="leaf leaf-top-left">
           <img src={leaves} className="leaf-img" alt="" />
         </div>
@@ -626,22 +955,26 @@ const Add_Ons: React.FC = () => {
         <div className="ao-wrapper">
           <div className="ao-card">
             <div className="ao-topbar">
-              <IonText className="ao-title">{mode === "add_ons" ? "Order" : "Other Items"}</IonText>
+              <IonText className="ao-title">
+                {mode === "add_ons" ? "Order" : "Other Items"}
+              </IonText>
+
               <IonButton fill="clear" className="ao-close" onClick={resetForm}>
                 <IonIcon icon={closeOutline} />
               </IonButton>
             </div>
 
-            {/* ✅ TYPE SWITCH */}
             <div style={{ marginTop: 6, marginBottom: 10 }}>
-              <IonText style={{ fontWeight: 800, display: "block", marginBottom: 6 }}>Type</IonText>
+              <IonText style={{ fontWeight: 800, display: "block", marginBottom: 6 }}>
+                Type
+              </IonText>
+
               <IonSegment
                 value={mode}
                 onIonChange={(e) => {
                   const v = asString(e.detail.value) as Mode;
                   setMode(v);
 
-                  // prevent mixing
                   setSelectedItems([]);
                   setSelectedCategories([""]);
                   setSelectedSizes([""]);
@@ -655,6 +988,7 @@ const Add_Ons: React.FC = () => {
                 <IonSegmentButton value="add_ons">
                   <IonLabel>Order</IonLabel>
                 </IonSegmentButton>
+
                 <IonSegmentButton value="consignment">
                   <IonLabel>Other Items</IonLabel>
                 </IonSegmentButton>
@@ -669,12 +1003,20 @@ const Add_Ons: React.FC = () => {
 
             <IonItem className="ao-form-item">
               <IonLabel position="stacked">Full Name *</IonLabel>
-              <IonInput value={fullName} placeholder="Enter full name" onIonChange={(e) => setFullName(e.detail.value ?? "")} />
+              <IonInput
+                value={fullName}
+                placeholder="Enter full name"
+                onIonChange={(e) => setFullName(e.detail.value ?? "")}
+              />
             </IonItem>
 
             <IonItem className="ao-form-item">
               <IonLabel position="stacked">Seat Number *</IonLabel>
-              <IonSelect value={seat} placeholder="Choose seat" onIonChange={(e) => setSeat(asString(e.detail.value))}>
+              <IonSelect
+                value={seat}
+                placeholder="Choose seat"
+                onIonChange={(e) => setSeat(asString(e.detail.value))}
+              >
                 {seatGroups.map((g) => (
                   <React.Fragment key={g.title}>
                     <IonSelectOption disabled value={`__${g.title}__`}>
@@ -698,7 +1040,11 @@ const Add_Ons: React.FC = () => {
               const hasSizes = categoryHasSizes(category);
               const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
               const pickedSize = (selectedSizes[index] ?? "").trim();
-              const allowPick = category ? (hasSizes ? pickedSize.length > 0 : true) : false;
+              const allowPick = category
+                ? hasSizes
+                  ? pickedSize.length > 0
+                  : true
+                : false;
 
               return (
                 <div key={`cat-${index}`} className="addon-block">
@@ -708,7 +1054,9 @@ const Add_Ons: React.FC = () => {
                       <IonSelect
                         value={category}
                         placeholder="Choose a category"
-                        onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}
+                        onIonChange={(e) =>
+                          handleCategoryChange(index, asString(e.detail.value))
+                        }
                       >
                         {categories.map((cat) => (
                           <IonSelectOption key={`${cat}-${index}`} value={cat}>
@@ -724,11 +1072,23 @@ const Add_Ons: React.FC = () => {
                   </div>
 
                   {category && hasSizes ? (
-                    <IonItem className="ao-form-item ao-form-item-compact" style={{ marginTop: 10 }}>
+                    <IonItem
+                      className="ao-form-item ao-form-item-compact"
+                      style={{ marginTop: 10 }}
+                    >
                       <IonLabel position="stacked">Select Size</IonLabel>
-                      <IonSelect value={pickedSize} placeholder="Choose size" onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}>
+                      <IonSelect
+                        value={pickedSize}
+                        placeholder="Choose size"
+                        onIonChange={(e) =>
+                          handleSizeChange(index, asString(e.detail.value))
+                        }
+                      >
                         {sizeOptions.map((sz) => (
-                          <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
+                          <IonSelectOption
+                            key={`${category}-${sz}-${index}`}
+                            value={sz}
+                          >
                             {sz}
                           </IonSelectOption>
                         ))}
@@ -746,8 +1106,14 @@ const Add_Ons: React.FC = () => {
                       Choose {category} Item{hasSizes ? ` (${pickedSize})` : ""}
                     </IonButton>
                   ) : category && hasSizes ? (
-                    <IonItem className="ao-form-item ao-form-item-compact" lines="none" style={{ marginTop: 8 }}>
-                      <IonLabel style={{ opacity: 0.85 }}>Select a size first to show items.</IonLabel>
+                    <IonItem
+                      className="ao-form-item ao-form-item-compact"
+                      lines="none"
+                      style={{ marginTop: 8 }}
+                    >
+                      <IonLabel style={{ opacity: 0.85 }}>
+                        Select a size first to show items.
+                      </IonLabel>
                     </IonItem>
                   ) : null}
                 </div>
@@ -759,7 +1125,8 @@ const Add_Ons: React.FC = () => {
                 <div className="ao-picker-head">
                   <IonText>
                     <strong>
-                      Choose Item {pickerCategory ? `- ${pickerCategory}` : ""} {pickerSize ? `(${pickerSize})` : ""}
+                      Choose Item {pickerCategory ? `- ${pickerCategory}` : ""}{" "}
+                      {pickerSize ? `(${pickerSize})` : ""}
                     </strong>
                   </IonText>
 
@@ -768,7 +1135,11 @@ const Add_Ons: React.FC = () => {
                   </IonButton>
                 </div>
 
-                <IonSearchbar value={pickerSearch} onIonInput={(e) => setPickerSearch(asString(e.detail.value))} placeholder="Search item name..." />
+                <IonSearchbar
+                  value={pickerSearch}
+                  onIonInput={(e) => setPickerSearch(asString(e.detail.value))}
+                  placeholder="Search item name..."
+                />
 
                 {pickerItems.length === 0 ? (
                   <IonText style={{ opacity: 0.85 }}>
@@ -782,14 +1153,30 @@ const Add_Ons: React.FC = () => {
                       return (
                         <IonItem key={a.id} button onClick={() => addFromPicker(a)}>
                           <IonThumbnail slot="start" style={{ width: 56, height: 56 }}>
-                            {a.image_url ? <IonImg src={a.image_url} alt={a.name} /> : <div style={{ width: 56, height: 56, borderRadius: 10, background: "#eee" }} />}
+                            {a.image_url ? (
+                              <IonImg src={a.image_url} alt={a.name} />
+                            ) : (
+                              <div
+                                style={{
+                                  width: 56,
+                                  height: 56,
+                                  borderRadius: 10,
+                                  background: "#eee",
+                                }}
+                              />
+                            )}
                           </IonThumbnail>
 
                           <IonLabel>
                             <div style={{ fontWeight: 800 }}>{a.name}</div>
-                            {cleanSize(a.size) ? <div style={{ opacity: 0.85 }}>Size: {cleanSize(a.size)}</div> : null}
+                            {cleanSize(a.size) ? (
+                              <div style={{ opacity: 0.85 }}>
+                                Size: {cleanSize(a.size)}
+                              </div>
+                            ) : null}
                             <div style={{ marginTop: 4 }}>
-                              ₱{toNum(a.price)} • Remaining: <strong>{remaining}</strong>
+                              ₱{toNum(a.price)} • Remaining:{" "}
+                              <strong>{remaining}</strong>
                             </div>
                           </IonLabel>
                         </IonItem>
@@ -815,28 +1202,59 @@ const Add_Ons: React.FC = () => {
                     </IonListHeader>
 
                     {block.map((selected) => {
-                      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(selected.id) ?? 0)));
-                      const remainingIfKeepQty = Math.max(0, stocks - selected.quantity);
+                      const stocks = Math.max(
+                        0,
+                        Math.floor(toNum(stocksById.get(selected.id) ?? 0))
+                      );
+
+                      const remainingIfKeepQty = Math.max(
+                        0,
+                        stocks - selected.quantity
+                      );
 
                       return (
                         <IonItem key={selected.id} className="addon-item">
                           <IonThumbnail slot="start" style={{ width: 46, height: 46 }}>
-                            {selected.image_url ? <IonImg src={selected.image_url} alt={selected.name} /> : <div style={{ width: 46, height: 46, borderRadius: 10, background: "#eee" }} />}
+                            {selected.image_url ? (
+                              <IonImg src={selected.image_url} alt={selected.name} />
+                            ) : (
+                              <div
+                                style={{
+                                  width: 46,
+                                  height: 46,
+                                  borderRadius: 10,
+                                  background: "#eee",
+                                }}
+                              />
+                            )}
                           </IonThumbnail>
 
                           <IonLabel>
                             <div style={{ fontWeight: 700 }}>
-                              {selected.name} {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
+                              {selected.name}{" "}
+                              {cleanSize(selected.size) ? (
+                                <span style={{ opacity: 0.85 }}>
+                                  ({cleanSize(selected.size)})
+                                </span>
+                              ) : null}
                             </div>
+
                             <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
-                            <div style={{ marginTop: 4, fontWeight: 700 }}>Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}</div>
+
+                            <div style={{ marginTop: 4, fontWeight: 700 }}>
+                              Subtotal: ₱
+                              {(selected.price * selected.quantity).toFixed(2)}
+                            </div>
+
                             <div style={{ marginTop: 6, opacity: 0.9 }}>
-                              Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
+                              Remaining after this qty:{" "}
+                              <strong>{remainingIfKeepQty}</strong>
                             </div>
                           </IonLabel>
 
                           <div className="addon-actions">
                             <IonLabel className="qty-label">Qty:</IonLabel>
+
                             <IonInput
                               type="number"
                               min={1}
@@ -845,11 +1263,21 @@ const Add_Ons: React.FC = () => {
                               onIonChange={(e) => {
                                 const raw = (e.detail.value ?? "").toString();
                                 const v = parseInt(raw, 10);
-                                handleQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
+                                handleQuantityChange(
+                                  selected.id,
+                                  Number.isNaN(v) ? 0 : v
+                                );
                               }}
                             />
 
-                            <IonButton color="danger" onClick={() => setSelectedItems((prev) => prev.filter((s) => s.id !== selected.id))}>
+                            <IonButton
+                              color="danger"
+                              onClick={() =>
+                                setSelectedItems((prev) =>
+                                  prev.filter((s) => s.id !== selected.id)
+                                )
+                              }
+                            >
                               Remove
                             </IonButton>
                           </div>
@@ -867,7 +1295,12 @@ const Add_Ons: React.FC = () => {
               </p>
             </div>
 
-            <IonButton expand="block" className="ao-primary" disabled={isLoading} onClick={() => void handleSubmit()}>
+            <IonButton
+              expand="block"
+              className="ao-primary"
+              disabled={isLoading}
+              onClick={() => void handleSubmit()}
+            >
               {isLoading ? "Saving..." : "Submit Order"}
             </IonButton>
 
@@ -885,7 +1318,6 @@ const Add_Ons: React.FC = () => {
                 "--color": "#ffffff",
                 "--border-radius": "12px",
                 fontWeight: 900,
-                textTransform: "uppercase",
                 boxShadow: "0 10px 18px rgba(57,168,75,0.25)",
               }}
             >
@@ -894,12 +1326,24 @@ const Add_Ons: React.FC = () => {
           </div>
         </div>
 
-        {/* ✅ SMALL CENTER SUCCESS MODAL */}
-        <IonModal isOpen={successOpen} onDidDismiss={closeSuccess} backdropDismiss={true} className="ao-success-modal">
+        <IonModal
+          isOpen={successOpen}
+          onDidDismiss={closeSuccess}
+          backdropDismiss={true}
+          className="ao-success-modal"
+        >
           <div className="ao-success-box">
             <div className="ao-success-top">
-              <IonIcon icon={checkmarkCircleOutline} className="ao-success-icon" />
-              <button type="button" className="ao-success-x" onClick={closeSuccess} aria-label="Close">
+              <IonIcon
+                icon={checkmarkCircleOutline}
+                className="ao-success-icon"
+              />
+              <button
+                type="button"
+                className="ao-success-x"
+                onClick={closeSuccess}
+                aria-label="Close"
+              >
                 ✕
               </button>
             </div>
@@ -913,7 +1357,13 @@ const Add_Ons: React.FC = () => {
           </div>
         </IonModal>
 
-        <IonToast isOpen={showToast} onDidDismiss={() => setShowToast(false)} message={toastMsg} duration={1600} color={toastColor} />
+        <IonToast
+          isOpen={showToast}
+          onDidDismiss={() => setShowToast(false)}
+          message={toastMsg}
+          duration={1600}
+          color={toastColor}
+        />
       </IonContent>
     </IonPage>
   );
