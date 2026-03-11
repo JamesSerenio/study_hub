@@ -40,7 +40,6 @@ type Props = {
   seatGroups: SeatGroup[];
 };
 
-// RPC payloads
 type RpcAddOnItem = { add_on_id: string; quantity: number };
 type RpcConsignItem = { consignment_id: string; quantity: number };
 
@@ -65,8 +64,8 @@ type AddOnRow = {
 
 type ConsignmentRow = {
   id: string;
-  full_name: string; // owner name (old)
-  category?: string | null; // ✅ if you already have consignment.category, use it
+  full_name: string;
+  category?: string | null;
   item_name: string;
   size: string | null;
   image_url: string | null;
@@ -76,10 +75,11 @@ type ConsignmentRow = {
   expected_sales: number | string | null;
   overall_sales: number | string | null;
   stocks: number | string | null;
+  approval_status?: string | null;
 };
 
 /* =========================
-   APP ITEM TYPES (discriminator)
+   APP ITEM TYPES
 ========================= */
 
 interface AddOn {
@@ -101,9 +101,9 @@ interface AddOn {
 interface ConsignmentItem {
   kind: "consignment";
   id: string;
-  category: string; // ✅ show as CATEGORY in UI
+  category: string;
   size: string | null;
-  name: string; // item_name
+  name: string;
   price: number;
   restocked: number;
   sold: number;
@@ -147,8 +147,6 @@ const norm = (s: string): string => s.trim().toLowerCase();
 const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 
 const isConsignmentItem = (x: Item): x is ConsignmentItem => x.kind === "consignment";
-
-// ✅ IMPORTANT: hide this category name in add_ons mode
 const isConsignmentCategory = (cat: string): boolean => norm(cat) === "consignment";
 
 /* =========================
@@ -168,7 +166,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
   const [selectedSizes, setSelectedSizes] = useState<string[]>([""]);
   const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([]);
 
-  // picker modal
   const [isPickerOpen, setIsPickerOpen] = useState<boolean>(false);
   const [pickerCategory, setPickerCategory] = useState<string>("");
   const [pickerSize, setPickerSize] = useState<string>("");
@@ -177,7 +174,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
   useEffect(() => {
     if (!isOpen) return;
 
-    // reset picker when switching mode/opening
     setPickerCategory("");
     setPickerSize("");
     setPickerSearch("");
@@ -202,7 +198,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         .returns<AddOnRow[]>();
 
       if (error) {
-        // eslint-disable-next-line no-console
         console.error(error);
         alert(`Error loading add-ons: ${error.message}`);
         setItems([]);
@@ -225,16 +220,15 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         image_url: r.image_url ?? null,
       }));
 
-      // ✅ Remove "Consignment" category rows from Add-Ons list
       const mapped = mappedAll.filter((a) => !isConsignmentCategory(a.category));
       setItems(mapped);
       return;
     }
 
-    // consignment
     const { data, error } = await supabase
       .from("consignment")
-      .select("id, full_name, category, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks")
+      .select("id, full_name, category, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks, approval_status")
+      .eq("approval_status", "approved")
       .gt("stocks", 0)
       .order("category", { ascending: true })
       .order("full_name", { ascending: true })
@@ -243,7 +237,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       .returns<ConsignmentRow[]>();
 
     if (error) {
-      // eslint-disable-next-line no-console
       console.error(error);
       alert(`Error loading special: ${error.message}`);
       setItems([]);
@@ -251,9 +244,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     }
 
     const mapped: ConsignmentItem[] = (data ?? []).map((r) => {
-      // ✅ CATEGORY VALUE:
-      // priority: consignment.category (if you already have it)
-      // fallback: full_name (old owner)
       const categoryLabel = String((r.category ?? r.full_name) ?? "").trim() || "Consignment";
 
       return {
@@ -275,17 +265,18 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     setItems(mapped);
   };
 
-  // ✅ categories list (also hide "consignment" when mode is add_ons)
   const categories = useMemo(() => {
     const base = items.map((a) => a.category).filter((c) => c.trim().length > 0);
     const filtered = mode === "add_ons" ? base.filter((c) => !isConsignmentCategory(c)) : base;
-
     const uniq = Array.from(new Set(filtered));
     uniq.sort((a, b) => a.localeCompare(b));
     return uniq;
   }, [items, mode]);
 
-  const totalAmount = useMemo<number>(() => selectedItems.reduce((sum, s) => sum + s.quantity * s.price, 0), [selectedItems]);
+  const totalAmount = useMemo<number>(
+    () => selectedItems.reduce((sum, s) => sum + s.quantity * s.price, 0),
+    [selectedItems]
+  );
 
   const selectedSummaryByCategory = useMemo(() => {
     const map = new Map<string, SelectedItem[]>();
@@ -308,7 +299,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   const selectedQtyById = useMemo(() => {
     const m = new Map<string, number>();
-    for (const s of selectedItems) m.set(s.id, (m.get(s.id) ?? 0) + Math.max(0, Math.floor(toNum(s.quantity))));
+    for (const s of selectedItems) {
+      m.set(s.id, (m.get(s.id) ?? 0) + Math.max(0, Math.floor(toNum(s.quantity))));
+    }
     return m;
   }, [selectedItems]);
 
@@ -337,7 +330,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
       const maxAllowedForThis = Math.max(0, stocks - chosenOtherSameId);
       const q = Math.min(wanted, maxAllowedForThis);
 
-      if (wanted > maxAllowedForThis) alert(`Only ${maxAllowedForThis} remaining for this item.`);
+      if (wanted > maxAllowedForThis) {
+        alert(`Only ${maxAllowedForThis} remaining for this item.`);
+      }
 
       if (q > 0) {
         if (existing) return prev.map((s) => (s.id === id ? { ...s, quantity: q } : s));
@@ -359,57 +354,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
       return prev.filter((s) => s.id !== id);
     });
-  };
-
-  const handleCategoryChange = (index: number, category: string): void => {
-    setSelectedCategories((prev) => {
-      const next = [...prev];
-      next[index] = category;
-      return next;
-    });
-
-    setSelectedSizes((prev) => {
-      const next = [...prev];
-      next[index] = "";
-      return next;
-    });
-  };
-
-  const handleSizeChange = (index: number, size: string): void => {
-    setSelectedSizes((prev) => {
-      const next = [...prev];
-      next[index] = size;
-      return next;
-    });
-  };
-
-  const removeCategoryBlock = (index: number): void => {
-    setSelectedCategories((prev) => {
-      const next = prev.filter((_, i) => i !== index);
-      return next.length === 0 ? [""] : next;
-    });
-
-    setSelectedSizes((prev) => {
-      const next = prev.filter((_, i) => i !== index);
-      return next.length === 0 ? [""] : next;
-    });
-  };
-
-  const addAnotherCategory = (): void => {
-    setSelectedCategories((prev) => [...prev, ""]);
-    setSelectedSizes((prev) => [...prev, ""]);
-  };
-
-  const resetForm = (): void => {
-    setFullName("");
-    setSeat("");
-    setSelectedItems([]);
-    setSelectedCategories([""]);
-    setSelectedSizes([""]);
-    setPickerSearch("");
-    setPickerCategory("");
-    setPickerSize("");
-    setIsPickerOpen(false);
   };
 
   const getSizesForCategory = (category: string): string[] => {
@@ -436,6 +380,100 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
   const categoryHasSizes = (category: string): boolean => getSizesForCategory(category).length > 0;
 
+  const handleCategoryChange = (index: number, category: string): void => {
+    setSelectedCategories((prev) => {
+      const next = [...prev];
+      next[index] = category;
+      return next;
+    });
+
+    const hasSizes = getSizesForCategory(category).length > 0;
+
+    setSelectedSizes((prev) => {
+      const next = [...prev];
+      next[index] = "";
+      return next;
+    });
+
+    setPickerSearch("");
+
+    if (!category) {
+      setIsPickerOpen(false);
+      setPickerCategory("");
+      setPickerSize("");
+      return;
+    }
+
+    if (!hasSizes) {
+      setPickerCategory(category);
+      setPickerSize("");
+      setIsPickerOpen(true);
+    } else {
+      setIsPickerOpen(false);
+      setPickerCategory("");
+      setPickerSize("");
+    }
+  };
+
+  const handleSizeChange = (index: number, size: string): void => {
+    setSelectedSizes((prev) => {
+      const next = [...prev];
+      next[index] = size;
+      return next;
+    });
+
+    const category = selectedCategories[index] ?? "";
+    setPickerSearch("");
+
+    if (category && size.trim()) {
+      setPickerCategory(category);
+      setPickerSize(size);
+      setIsPickerOpen(true);
+    } else {
+      setIsPickerOpen(false);
+      setPickerCategory("");
+      setPickerSize("");
+    }
+  };
+
+  const removeCategoryBlock = (index: number): void => {
+    setSelectedCategories((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length === 0 ? [""] : next;
+    });
+
+    setSelectedSizes((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length === 0 ? [""] : next;
+    });
+
+    setIsPickerOpen(false);
+    setPickerCategory("");
+    setPickerSize("");
+    setPickerSearch("");
+  };
+
+  const addAnotherCategory = (): void => {
+    setSelectedCategories((prev) => [...prev, ""]);
+    setSelectedSizes((prev) => [...prev, ""]);
+    setIsPickerOpen(false);
+    setPickerCategory("");
+    setPickerSize("");
+    setPickerSearch("");
+  };
+
+  const resetForm = (): void => {
+    setFullName("");
+    setSeat("");
+    setSelectedItems([]);
+    setSelectedCategories([""]);
+    setSelectedSizes([""]);
+    setPickerSearch("");
+    setPickerCategory("");
+    setPickerSize("");
+    setIsPickerOpen(false);
+  };
+
   const pickerItems = useMemo<Item[]>(() => {
     const cat = pickerCategory;
     const hasSizes = categoryHasSizes(cat);
@@ -454,13 +492,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         return a.name.toLowerCase().includes(q);
       });
   }, [items, pickerCategory, pickerSize, pickerSearch, selectedItems]);
-
-  const openPicker = (category: string, size: string): void => {
-    setPickerCategory(category);
-    setPickerSize(size);
-    setPickerSearch("");
-    setIsPickerOpen(true);
-  };
 
   const addFromPicker = (item: Item): void => {
     const remaining = getRemainingForId(item.id);
@@ -497,8 +528,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     if (!seat) return alert("Seat Number is required.");
     if (selectedItems.length === 0) return alert("Please select at least one item.");
 
-    // prevent mixing
-    const kindMismatch = selectedItems.some((s) => (mode === "add_ons" ? s.kind !== "add_ons" : s.kind !== "consignment"));
+    const kindMismatch = selectedItems.some((s) =>
+      mode === "add_ons" ? s.kind !== "add_ons" : s.kind !== "consignment"
+    );
+
     if (kindMismatch) {
       alert("Selected items do not match the chosen Type. Please Reset and try again.");
       return;
@@ -519,7 +552,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         });
 
         if (error) {
-          // eslint-disable-next-line no-console
           console.error(error);
           alert(`Order failed: ${error.message}`);
           return;
@@ -537,7 +569,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         });
 
         if (error) {
-          // eslint-disable-next-line no-console
           console.error(error);
           alert(`Consignment order failed: ${error.message}`);
           return;
@@ -553,8 +584,8 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
     }
   };
 
-  const blockLabel = mode === "add_ons" ? "Category" : "Category";
-  const blockPlaceholder = mode === "add_ons" ? "Choose a category" : "Choose a category";
+  const blockLabel = "Category";
+  const blockPlaceholder = "Choose a category";
 
   return (
     <>
@@ -572,7 +603,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
         <IonContent className="ion-padding">
           <div className="bookadd-card">
-            {/* MODE SWITCH */}
             <div style={{ marginBottom: 10 }}>
               <IonLabel style={{ fontWeight: 800, display: "block", marginBottom: 6 }}>Type</IonLabel>
               <IonSegment
@@ -580,10 +610,13 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                 onIonChange={(e) => {
                   const v = asString(e.detail.value) as Mode;
                   setMode(v);
-                  // prevent mixing when switching
                   setSelectedItems([]);
                   setSelectedCategories([""]);
                   setSelectedSizes([""]);
+                  setIsPickerOpen(false);
+                  setPickerCategory("");
+                  setPickerSize("");
+                  setPickerSearch("");
                 }}
               >
                 <IonSegmentButton value="add_ons">
@@ -597,12 +630,20 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
             <IonItem className="form-item">
               <IonLabel position="stacked">Full Name *</IonLabel>
-              <IonInput value={fullName} placeholder="Enter full name" onIonChange={(e) => setFullName(e.detail.value ?? "")} />
+              <IonInput
+                value={fullName}
+                placeholder="Enter full name"
+                onIonChange={(e) => setFullName(e.detail.value ?? "")}
+              />
             </IonItem>
 
             <IonItem className="form-item">
               <IonLabel position="stacked">Seat Number *</IonLabel>
-              <IonSelect value={seat} placeholder="Choose seat" onIonChange={(e) => setSeat(asString(e.detail.value))}>
+              <IonSelect
+                value={seat}
+                placeholder="Choose seat"
+                onIonChange={(e) => setSeat(asString(e.detail.value))}
+              >
                 {seatGroups.map((g) => (
                   <React.Fragment key={g.title}>
                     <IonSelectOption disabled value={`__${g.title}__`}>
@@ -618,15 +659,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
               </IonSelect>
             </IonItem>
 
-            <IonButton expand="block" onClick={addAnotherCategory}>
-              Add More {mode === "add_ons" ? "Order" : "Items"}
-            </IonButton>
-
             {selectedCategories.map((category, index) => {
               const hasSizes = categoryHasSizes(category);
               const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
               const pickedSize = (selectedSizes[index] ?? "").trim();
-              const allowPick = category ? (hasSizes ? pickedSize.length > 0 : true) : false;
 
               return (
                 <div key={`cat-${index}`} className="addon-block">
@@ -654,7 +690,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                   {category && hasSizes ? (
                     <IonItem className="form-item">
                       <IonLabel position="stacked">Select Size</IonLabel>
-                      <IonSelect value={pickedSize} placeholder="Choose size" onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}>
+                      <IonSelect
+                        value={pickedSize}
+                        placeholder="Choose size"
+                        onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}
+                      >
                         {sizeOptions.map((sz) => (
                           <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
                             {sz}
@@ -664,11 +704,7 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     </IonItem>
                   ) : null}
 
-                  {allowPick ? (
-                    <IonButton expand="block" onClick={() => openPicker(category, hasSizes ? pickedSize : "")} style={{ marginTop: 8 }}>
-                      Choose Item{hasSizes ? ` (${pickedSize})` : ""}
-                    </IonButton>
-                  ) : category && hasSizes ? (
+                  {category && hasSizes && !pickedSize ? (
                     <IonItem className="form-item" lines="none">
                       <IonLabel style={{ opacity: 0.85 }}>Select a size first to show items.</IonLabel>
                     </IonItem>
@@ -677,7 +713,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
               );
             })}
 
-            {/* SELECTED ITEMS LIST */}
             {selectedItems.length > 0 ? (
               <IonList style={{ marginTop: 12 }}>
                 <IonListHeader>
@@ -708,10 +743,15 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
 
                           <IonLabel>
                             <div style={{ fontWeight: 700 }}>
-                              {selected.name} {cleanSize(selected.size) ? <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span> : null}
+                              {selected.name}{" "}
+                              {cleanSize(selected.size) ? (
+                                <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span>
+                              ) : null}
                             </div>
                             <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
-                            <div style={{ marginTop: 4, fontWeight: 700 }}>Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}</div>
+                            <div style={{ marginTop: 4, fontWeight: 700 }}>
+                              Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
+                            </div>
                             <div style={{ marginTop: 6, opacity: 0.9 }}>
                               Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
                             </div>
@@ -731,7 +771,12 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                               }}
                             />
 
-                            <IonButton color="danger" onClick={() => setSelectedItems((prev) => prev.filter((s) => s.id !== selected.id))}>
+                            <IonButton
+                              color="danger"
+                              onClick={() =>
+                                setSelectedItems((prev) => prev.filter((s) => s.id !== selected.id))
+                              }
+                            >
                               Remove
                             </IonButton>
                           </div>
@@ -748,6 +793,10 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                 <strong>Total: ₱{totalAmount.toFixed(2)}</strong>
               </p>
             </div>
+
+            <IonButton expand="block" onClick={addAnotherCategory}>
+              Add More {mode === "add_ons" ? "Order" : "Items"}
+            </IonButton>
 
             <IonButton expand="block" disabled={isSaving} onClick={() => void handleSubmit()}>
               {isSaving ? "Saving..." : "Submit Order"}
@@ -768,7 +817,6 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         </IonContent>
       </IonModal>
 
-      {/* ITEM PICKER MODAL */}
       <IonModal isOpen={isPickerOpen} onDidDismiss={() => setIsPickerOpen(false)} className="booking-modal">
         <IonHeader>
           <IonToolbar>
@@ -784,7 +832,11 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
         </IonHeader>
 
         <IonContent className="ion-padding">
-          <IonSearchbar value={pickerSearch} onIonInput={(e) => setPickerSearch(asString(e.detail.value))} placeholder="Search item name..." />
+          <IonSearchbar
+            value={pickerSearch}
+            onIonInput={(e) => setPickerSearch(asString(e.detail.value))}
+            placeholder="Search item name..."
+          />
 
           {pickerItems.length === 0 ? (
             <IonText style={{ opacity: 0.85 }}>
@@ -808,7 +860,9 @@ export default function AddOnsModal({ isOpen, onClose, onSaved, seatGroups }: Pr
                     <IonLabel>
                       <div style={{ fontWeight: 800 }}>
                         {a.name}
-                        {isConsignmentItem(a) ? <span style={{ marginLeft: 8, opacity: 0.7, fontWeight: 700 }}>• Category</span> : null}
+                        {isConsignmentItem(a) ? (
+                          <span style={{ marginLeft: 8, opacity: 0.7, fontWeight: 700 }}>• Category</span>
+                        ) : null}
                       </div>
                       {cleanSize(a.size) ? <div style={{ opacity: 0.85 }}>Size: {cleanSize(a.size)}</div> : null}
                       <div style={{ marginTop: 4 }}>
