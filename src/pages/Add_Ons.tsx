@@ -2,6 +2,11 @@
 // ✅ Fixed iOS dark rendering issue
 // ✅ Safer page-level CSS vars for Ionic
 // ✅ White cards / list / inputs / searchbar on iPhone
+// ✅ Approved consignment items only
+// ✅ Pending / Rejected consignment items will NOT show
+// ✅ Removed extra "Choose Food Item" button
+// ✅ Picker auto-opens below after category/size selection
+// ✅ Add More button moved above Submit Order
 // ✅ Same logic and functions retained
 // ✅ STRICT TS, NO any
 
@@ -67,6 +72,7 @@ interface ConsignmentRow {
   expected_sales: number | string | null;
   overall_sales: number | string | null;
   stocks: number | string | null;
+  approval_status?: string | null;
 }
 
 interface ItemBase {
@@ -250,8 +256,9 @@ const Add_Ons: React.FC = () => {
       const { data, error } = await supabase
         .from("consignment")
         .select(
-          "id, full_name, category, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks"
+          "id, full_name, category, item_name, size, image_url, price, restocked, sold, expected_sales, overall_sales, stocks, approval_status"
         )
+        .eq("approval_status", "approved")
         .gt("stocks", 0)
         .order("category", { ascending: true })
         .order("full_name", { ascending: true })
@@ -400,16 +407,32 @@ const Add_Ons: React.FC = () => {
       return next;
     });
 
+    const hasSizes = getSizesForCategory(category).length > 0;
+
     setSelectedSizes((prev) => {
       const next = [...prev];
       next[index] = "";
       return next;
     });
 
-    setIsPickerOpen(false);
-    setPickerCategory("");
-    setPickerSize("");
     setPickerSearch("");
+
+    if (!category) {
+      setIsPickerOpen(false);
+      setPickerCategory("");
+      setPickerSize("");
+      return;
+    }
+
+    if (!hasSizes) {
+      setPickerCategory(category);
+      setPickerSize("");
+      setIsPickerOpen(true);
+    } else {
+      setIsPickerOpen(false);
+      setPickerCategory("");
+      setPickerSize("");
+    }
   };
 
   const handleSizeChange = (index: number, size: string): void => {
@@ -419,10 +442,18 @@ const Add_Ons: React.FC = () => {
       return next;
     });
 
-    setIsPickerOpen(false);
-    setPickerCategory("");
-    setPickerSize("");
+    const category = selectedCategories[index] ?? "";
     setPickerSearch("");
+
+    if (category && size.trim()) {
+      setPickerCategory(category);
+      setPickerSize(size);
+      setIsPickerOpen(true);
+    } else {
+      setIsPickerOpen(false);
+      setPickerCategory("");
+      setPickerSize("");
+    }
   };
 
   const removeCategoryBlock = (index: number): void => {
@@ -445,6 +476,10 @@ const Add_Ons: React.FC = () => {
   const addAnotherCategory = (): void => {
     setSelectedCategories((prev) => [...prev, ""]);
     setSelectedSizes((prev) => [...prev, ""]);
+    setIsPickerOpen(false);
+    setPickerCategory("");
+    setPickerSize("");
+    setPickerSearch("");
   };
 
   const getSizesForCategory = (category: string): string[] => {
@@ -491,13 +526,6 @@ const Add_Ons: React.FC = () => {
         return a.name.toLowerCase().includes(q);
       });
   }, [items, pickerCategory, pickerSize, pickerSearch, selectedItems]);
-
-  const openPicker = (category: string, size: string): void => {
-    setPickerCategory(category);
-    setPickerSize(size);
-    setPickerSearch("");
-    setIsPickerOpen(true);
-  };
 
   const addFromPicker = (item: Item): void => {
     const remaining = getRemainingForId(item.id);
@@ -601,10 +629,6 @@ const Add_Ons: React.FC = () => {
     <IonPage>
       <style>
         {`
-          /* =========================
-             iOS SAFER FIX
-          ========================= */
-
           :root {
             color-scheme: light;
           }
@@ -621,7 +645,6 @@ const Add_Ons: React.FC = () => {
             background: #f8f6ef !important;
           }
 
-          /* only set color on common text elements, not all descendants */
           .ao-page-scroll,
           .ao-page-scroll ion-label,
           .ao-page-scroll ion-text,
@@ -639,7 +662,6 @@ const Add_Ons: React.FC = () => {
             color: #111111 !important;
           }
 
-          /* wrapper/card */
           .ao-wrapper {
             padding: 18px 14px 28px;
           }
@@ -670,7 +692,6 @@ const Add_Ons: React.FC = () => {
             --color: #111111 !important;
           }
 
-          /* form items */
           .ao-page-scroll .ao-form-item,
           .ao-page-scroll .addon-item,
           .ao-page-scroll .ao-picker ion-item {
@@ -690,7 +711,6 @@ const Add_Ons: React.FC = () => {
             margin-bottom: 0;
           }
 
-          /* list / picker */
           .ao-page-scroll ion-list,
           .ao-page-scroll .ao-picker,
           .ao-page-scroll .summary-section,
@@ -713,7 +733,6 @@ const Add_Ons: React.FC = () => {
             margin-bottom: 8px;
           }
 
-          /* Searchbar */
           .ao-page-scroll ion-searchbar {
             --background: #ffffff !important;
             --color: #111111 !important;
@@ -733,7 +752,6 @@ const Add_Ons: React.FC = () => {
             background: #ffffff !important;
           }
 
-          /* input/select */
           .ao-page-scroll ion-input,
           .ao-page-scroll ion-select {
             --color: #111111 !important;
@@ -752,7 +770,6 @@ const Add_Ons: React.FC = () => {
             opacity: 1 !important;
           }
 
-          /* segment */
           .ao-page-scroll ion-segment {
             background: #ffffff !important;
             border-radius: 14px;
@@ -767,7 +784,6 @@ const Add_Ons: React.FC = () => {
             font-weight: 700;
           }
 
-          /* thumbs */
           .ao-page-scroll ion-thumbnail {
             --border-radius: 12px;
             border-radius: 12px;
@@ -838,22 +854,10 @@ const Add_Ons: React.FC = () => {
             margin-top: 10px;
           }
 
-          .ao-secondary {
-            --background: #111111;
-            --background-hover: #222222;
-            --background-activated: #222222;
-            --color: #ffffff;
-            --border-radius: 14px;
-            height: 46px;
-            font-weight: 700;
-            text-transform: none;
-          }
-
           .btn-green {
             text-transform: uppercase;
           }
 
-          /* success modal */
           .ao-success-modal {
             --width: 320px;
             --height: auto;
@@ -920,7 +924,6 @@ const Add_Ons: React.FC = () => {
             height: 46px;
           }
 
-          /* better spacing on iphone */
           @media (max-width: 480px) {
             .ao-wrapper {
               padding: 14px 10px 24px;
@@ -1032,19 +1035,10 @@ const Add_Ons: React.FC = () => {
               </IonSelect>
             </IonItem>
 
-            <IonButton expand="block" className="ao-primary" onClick={addAnotherCategory}>
-              Add More {mode === "add_ons" ? "Order" : "Other Items"}
-            </IonButton>
-
             {selectedCategories.map((category, index) => {
               const hasSizes = categoryHasSizes(category);
               const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
               const pickedSize = (selectedSizes[index] ?? "").trim();
-              const allowPick = category
-                ? hasSizes
-                  ? pickedSize.length > 0
-                  : true
-                : false;
 
               return (
                 <div key={`cat-${index}`} className="addon-block">
@@ -1096,16 +1090,7 @@ const Add_Ons: React.FC = () => {
                     </IonItem>
                   ) : null}
 
-                  {allowPick ? (
-                    <IonButton
-                      expand="block"
-                      className="ao-secondary"
-                      onClick={() => openPicker(category, hasSizes ? pickedSize : "")}
-                      style={{ marginTop: 10 }}
-                    >
-                      Choose {category} Item{hasSizes ? ` (${pickedSize})` : ""}
-                    </IonButton>
-                  ) : category && hasSizes ? (
+                  {category && hasSizes && !pickedSize ? (
                     <IonItem
                       className="ao-form-item ao-form-item-compact"
                       lines="none"
@@ -1294,6 +1279,10 @@ const Add_Ons: React.FC = () => {
                 <strong>Total: ₱{totalAmount.toFixed(2)}</strong>
               </p>
             </div>
+
+            <IonButton expand="block" className="ao-primary" onClick={addAnotherCategory}>
+              Add More {mode === "add_ons" ? "Order" : "Other Items"}
+            </IonButton>
 
             <IonButton
               expand="block"
