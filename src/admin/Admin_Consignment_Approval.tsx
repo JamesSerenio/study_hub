@@ -116,73 +116,72 @@ const Admin_Consignment_Approval: React.FC = () => {
   };
 
   return (
-    <IonPage>
-      <IonHeader></IonHeader>
+    <IonPage className="cons-approval-page">
+      <IonHeader className="cons-approval-header"></IonHeader>
 
-      <IonContent className="ion-padding">
-        <div style={{ maxWidth: "1000px", margin: "0 auto" }}>
-          <h1>Consignment Approval</h1>
-          <p>Pending consignment items for admin approval.</p>
+      <IonContent className="cons-approval-content">
+
+        <div className="cons-approval-wrap">
+
+          <div className="cons-approval-title">
+            Consignment Approval
+          </div>
+
+          <div className="cons-approval-sub">
+            Pending consignment items submitted by staff.
+          </div>
 
           {loading ? (
-            <div style={{ display: "flex", justifyContent: "center", padding: "32px" }}>
+            <div className="cons-approval-loading">
               <IonSpinner name="crescent" />
             </div>
           ) : items.length === 0 ? (
-            <IonText>No pending consignment items.</IonText>
+            <IonText className="cons-approval-empty">
+              No pending consignment items.
+            </IonText>
           ) : (
             items.map((item) => (
-              <IonCard key={item.id}>
+              <IonCard key={item.id} className="cons-approval-card">
                 <IonCardContent>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "160px 1fr",
-                      gap: "16px",
-                      alignItems: "start",
-                    }}
-                  >
-                    <div>
+
+                  <div className="cons-approval-grid">
+
+                    {/* IMAGE */}
+                    <div className="cons-approval-imageBox">
                       {item.image_url ? (
                         <IonImg
                           src={item.image_url}
                           alt={item.item_name}
-                          style={{
-                            width: "160px",
-                            height: "160px",
-                            objectFit: "cover",
-                            borderRadius: "12px",
-                            overflow: "hidden",
-                          }}
+                          className="cons-approval-image"
                         />
                       ) : (
-                        <div
-                          style={{
-                            width: "160px",
-                            height: "160px",
-                            borderRadius: "12px",
-                            background: "#f3f4f6",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
+                        <div className="cons-approval-noimg">
                           No Image
                         </div>
                       )}
                     </div>
 
-                    <div>
-                      <h2 style={{ marginTop: 0 }}>{item.item_name}</h2>
-                      <p><strong>Full Name:</strong> {item.full_name}</p>
-                      <p><strong>Category:</strong> {item.category ?? "-"}</p>
-                      <p><strong>Size:</strong> {item.size ?? "-"}</p>
-                      <p><strong>Price:</strong> ₱{Number(item.price).toFixed(2)}</p>
-                      <p><strong>Restocked:</strong> {item.restocked}</p>
-                      <p><strong>Status:</strong> {item.approval_status}</p>
+                    {/* DETAILS */}
+                    <div className="cons-approval-details">
 
-                      <IonItem lines="none">
-                        <IonLabel position="stacked">Reject Reason (optional)</IonLabel>
+                      <div className="cons-approval-itemname">
+                        {item.item_name}
+                      </div>
+
+                      <div className="cons-approval-info">
+                        <span><b>Full Name:</b> {item.full_name}</span>
+                        <span><b>Category:</b> {item.category ?? "-"}</span>
+                        <span><b>Size:</b> {item.size ?? "-"}</span>
+                        <span><b>Price:</b> ₱{Number(item.price).toFixed(2)}</span>
+                        <span><b>Restocked:</b> {item.restocked}</span>
+                        <span><b>Status:</b> {item.approval_status}</span>
+                      </div>
+
+                      <IonItem lines="none" className="cons-approval-reason">
+                        <IonLabel position="stacked">
+                          Reject Reason (optional)
+                        </IonLabel>
+
                         <IonTextarea
                           value={rejectReasons[item.id] ?? ""}
                           autoGrow
@@ -196,21 +195,35 @@ const Admin_Consignment_Approval: React.FC = () => {
                         />
                       </IonItem>
 
-                      <div style={{ display: "flex", gap: "10px", marginTop: "14px", flexWrap: "wrap" }}>
-                        <IonButton color="success" onClick={() => handleApprove(item.id)}>
+                      <div className="cons-approval-actions">
+
+                        <IonButton
+                          color="success"
+                          className="cons-btn-approve"
+                          onClick={() => handleApprove(item.id)}
+                        >
                           Approve
                         </IonButton>
 
-                        <IonButton color="danger" fill="outline" onClick={() => handleReject(item.id)}>
+                        <IonButton
+                          color="danger"
+                          fill="outline"
+                          className="cons-btn-reject"
+                          onClick={() => handleReject(item.id)}
+                        >
                           Reject
                         </IonButton>
+
                       </div>
+
                     </div>
                   </div>
+
                 </IonCardContent>
               </IonCard>
             ))
           )}
+
         </div>
 
         <IonToast
@@ -219,6 +232,7 @@ const Admin_Consignment_Approval: React.FC = () => {
           duration={2200}
           onDidDismiss={() => setShowToast(false)}
         />
+
       </IonContent>
     </IonPage>
   );
