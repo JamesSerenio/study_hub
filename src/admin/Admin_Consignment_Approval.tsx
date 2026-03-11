@@ -1,15 +1,11 @@
-// src/pages/Admin_Consignment_Approval.tsx
 import React, { useEffect, useState } from "react";
 import {
   IonPage,
   IonHeader,
   IonContent,
-  IonCard,
-  IonCardContent,
   IonButton,
   IonToast,
   IonImg,
-  IonText,
   IonSpinner,
   IonItem,
   IonLabel,
@@ -116,76 +112,80 @@ const Admin_Consignment_Approval: React.FC = () => {
   };
 
   return (
-    <IonPage className="cons-approval-page">
-      <IonHeader className="cons-approval-header"></IonHeader>
+    <IonPage className="aca-page">
+      <IonHeader className="aca-header"></IonHeader>
 
-      <IonContent className="cons-approval-content">
-
-        <div className="cons-approval-wrap">
-
-          <div className="cons-approval-title">
-            Consignment Approval
-          </div>
-
-          <div className="cons-approval-sub">
-            Pending consignment items submitted by staff.
+      <IonContent className="aca-content">
+        <div className="aca-shell">
+          <div className="aca-head">
+            <h1 className="aca-title">Consignment Approval</h1>
+            <p className="aca-subtitle">Review and approve pending consignment items.</p>
           </div>
 
           {loading ? (
-            <div className="cons-approval-loading">
+            <div className="aca-loading">
               <IonSpinner name="crescent" />
             </div>
           ) : items.length === 0 ? (
-            <IonText className="cons-approval-empty">
-              No pending consignment items.
-            </IonText>
+            <div className="aca-empty">No pending consignment items.</div>
           ) : (
-            items.map((item) => (
-              <IonCard key={item.id} className="cons-approval-card">
-                <IonCardContent>
-
-                  <div className="cons-approval-grid">
-
-                    {/* IMAGE */}
-                    <div className="cons-approval-imageBox">
+            <div className="aca-list">
+              {items.map((item) => (
+                <div key={item.id} className="aca-card">
+                  <div className="aca-card-grid">
+                    <div className="aca-image-wrap">
                       {item.image_url ? (
-                        <IonImg
-                          src={item.image_url}
-                          alt={item.item_name}
-                          className="cons-approval-image"
-                        />
+                        <IonImg src={item.image_url} alt={item.item_name} className="aca-image" />
                       ) : (
-                        <div className="cons-approval-noimg">
-                          No Image
-                        </div>
+                        <div className="aca-no-image">No Image</div>
                       )}
                     </div>
 
-                    {/* DETAILS */}
-                    <div className="cons-approval-details">
+                    <div className="aca-details">
+                      <div className="aca-item-title">{item.item_name}</div>
 
-                      <div className="cons-approval-itemname">
-                        {item.item_name}
+                      <div className="aca-info-grid">
+                        <div className="aca-info-pill">
+                          <span className="aca-info-label">Full Name</span>
+                          <span className="aca-info-value">{item.full_name}</span>
+                        </div>
+
+                        <div className="aca-info-pill">
+                          <span className="aca-info-label">Category</span>
+                          <span className="aca-info-value">{item.category ?? "-"}</span>
+                        </div>
+
+                        <div className="aca-info-pill">
+                          <span className="aca-info-label">Size</span>
+                          <span className="aca-info-value">{item.size ?? "-"}</span>
+                        </div>
+
+                        <div className="aca-info-pill">
+                          <span className="aca-info-label">Price</span>
+                          <span className="aca-info-value">₱{Number(item.price).toFixed(2)}</span>
+                        </div>
+
+                        <div className="aca-info-pill">
+                          <span className="aca-info-label">Restocked</span>
+                          <span className="aca-info-value">{item.restocked}</span>
+                        </div>
+
+                        <div className="aca-info-pill">
+                          <span className="aca-info-label">Status</span>
+                          <span className="aca-info-value aca-status">{item.approval_status}</span>
+                        </div>
                       </div>
 
-                      <div className="cons-approval-info">
-                        <span><b>Full Name:</b> {item.full_name}</span>
-                        <span><b>Category:</b> {item.category ?? "-"}</span>
-                        <span><b>Size:</b> {item.size ?? "-"}</span>
-                        <span><b>Price:</b> ₱{Number(item.price).toFixed(2)}</span>
-                        <span><b>Restocked:</b> {item.restocked}</span>
-                        <span><b>Status:</b> {item.approval_status}</span>
-                      </div>
-
-                      <IonItem lines="none" className="cons-approval-reason">
-                        <IonLabel position="stacked">
+                      <IonItem lines="none" className="aca-reason-item">
+                        <IonLabel position="stacked" className="aca-reason-label">
                           Reject Reason (optional)
                         </IonLabel>
 
                         <IonTextarea
+                          className="aca-reason-textarea"
                           value={rejectReasons[item.id] ?? ""}
                           autoGrow
-                          placeholder="Reason for rejection"
+                          placeholder="Type reason here..."
                           onIonInput={(e) =>
                             setRejectReasons((prev) => ({
                               ...prev,
@@ -195,35 +195,28 @@ const Admin_Consignment_Approval: React.FC = () => {
                         />
                       </IonItem>
 
-                      <div className="cons-approval-actions">
-
+                      <div className="aca-actions">
                         <IonButton
-                          color="success"
-                          className="cons-btn-approve"
+                          className="aca-btn aca-btn-approve"
                           onClick={() => handleApprove(item.id)}
                         >
                           Approve
                         </IonButton>
 
                         <IonButton
-                          color="danger"
+                          className="aca-btn aca-btn-reject"
                           fill="outline"
-                          className="cons-btn-reject"
                           onClick={() => handleReject(item.id)}
                         >
                           Reject
                         </IonButton>
-
                       </div>
-
                     </div>
                   </div>
-
-                </IonCardContent>
-              </IonCard>
-            ))
+                </div>
+              ))}
+            </div>
           )}
-
         </div>
 
         <IonToast
@@ -232,7 +225,6 @@ const Admin_Consignment_Approval: React.FC = () => {
           duration={2200}
           onDidDismiss={() => setShowToast(false)}
         />
-
       </IonContent>
     </IonPage>
   );
