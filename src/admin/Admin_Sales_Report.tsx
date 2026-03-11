@@ -1299,33 +1299,37 @@ const AdminSalesReport: React.FC = () => {
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Starting Balance</div>
 
-                    <div className="ssr-left-cell">
-                      <IonItem lines="none" className="ssr-input-item">
-                        <IonLabel position="stacked">Cash</IonLabel>
-                        <IonInput
-                          className="ssr-input"
-                          type="number"
-                          inputmode="decimal"
-                          disabled={submitting}
-                          value={report ? String(toNumber(report.starting_cash)) : "0"}
-                          onIonChange={(ev) => updateReportField("starting_cash", valueToNonNegMoney(getDetailValue(ev)))}
-                        />
-                      </IonItem>
-                    </div>
+                <div className="ssr-left-cell">
+                  <IonItem lines="none" className="ssr-input-item ssr-input-item--toplabel">
+                    <IonLabel position="stacked" className="ssr-top-input-label">
+                      Cash
+                    </IonLabel>
+                    <IonInput
+                      className="ssr-input"
+                      type="number"
+                      inputmode="decimal"
+                      disabled={submitting}
+                      value={report ? String(toNumber(report.starting_cash)) : "0"}
+                      onIonChange={(ev) => updateReportField("starting_cash", valueToNonNegMoney(getDetailValue(ev)))}
+                    />
+                  </IonItem>
+                </div>
 
-                    <div className="ssr-left-cell">
-                      <IonItem lines="none" className="ssr-input-item">
-                        <IonLabel position="stacked">GCash</IonLabel>
-                        <IonInput
-                          className="ssr-input"
-                          type="number"
-                          inputmode="decimal"
-                          disabled={submitting}
-                          value={report ? String(toNumber(report.starting_gcash)) : "0"}
-                          onIonChange={(ev) => updateReportField("starting_gcash", valueToNonNegMoney(getDetailValue(ev)))}
-                        />
-                      </IonItem>
-                    </div>
+                <div className="ssr-left-cell">
+                  <IonItem lines="none" className="ssr-input-item ssr-input-item--toplabel">
+                    <IonLabel position="stacked" className="ssr-top-input-label">
+                      GCash
+                    </IonLabel>
+                    <IonInput
+                      className="ssr-input"
+                      type="number"
+                      inputmode="decimal"
+                      disabled={submitting}
+                      value={report ? String(toNumber(report.starting_gcash)) : "0"}
+                      onIonChange={(ev) => updateReportField("starting_gcash", valueToNonNegMoney(getDetailValue(ev)))}
+                    />
+                  </IonItem>
+                </div>
                   </div>
 
                   {/* COH */}
