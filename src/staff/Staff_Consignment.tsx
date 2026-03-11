@@ -30,7 +30,6 @@ const normalizeText = (v: string): string => v.trim().replace(/\s+/g, " ");
 
 type CategoryRow = { id: string };
 
-// ✅ DB row for suggestions
 type ConsignmentSuggestRow = {
   full_name: string | null;
   category: string | null;
@@ -38,7 +37,7 @@ type ConsignmentSuggestRow = {
 
 const Staff_Consignment: React.FC = () => {
   const [fullName, setFullName] = useState<string>("");
-  const [category, setCategory] = useState<string>(""); // ✅ NEW
+  const [category, setCategory] = useState<string>("");
   const [itemName, setItemName] = useState<string>("");
   const [size, setSize] = useState<AddOnSize>("None");
 
@@ -49,24 +48,20 @@ const Staff_Consignment: React.FC = () => {
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
 
-  // ✅ Popover suggestions for FULL NAME
   const [allFullNames, setAllFullNames] = useState<string[]>([]);
   const [fullOpen, setFullOpen] = useState<boolean>(false);
   const [fullEvent, setFullEvent] = useState<MouseEvent | undefined>(undefined);
   const fullBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // ✅ Popover suggestions for CATEGORY
   const [allCategories, setAllCategories] = useState<string[]>([]);
   const [catOpen, setCatOpen] = useState<boolean>(false);
   const [catEvent, setCatEvent] = useState<MouseEvent | undefined>(undefined);
   const catBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // ✅ category_id must be the addon_categories row where name='Consignment'
   const [consignmentCategoryId, setConsignmentCategoryId] = useState<string | null>(null);
 
   useEffect(() => {
     const loadPrereqs = async (): Promise<void> => {
-      // 1) Find category_id of addon_categories where name='Consignment'
       const { data: catRow, error: catErr } = await supabase
         .from("addon_categories")
         .select("id")
@@ -74,7 +69,6 @@ const Staff_Consignment: React.FC = () => {
         .limit(1);
 
       if (catErr) {
-        // eslint-disable-next-line no-console
         console.error("Load addon_categories error:", catErr);
         setToastMessage("Failed to load addon_categories.");
         setShowToast(true);
@@ -83,12 +77,9 @@ const Staff_Consignment: React.FC = () => {
         setConsignmentCategoryId(id);
       }
 
-      // 2) load suggestions from existing consignment rows
-      //    (full_name + category)
       const { data, error } = await supabase.from("consignment").select("full_name, category");
 
       if (error) {
-        // eslint-disable-next-line no-console
         console.error("Load suggestions error:", error);
         return;
       }
@@ -96,19 +87,11 @@ const Staff_Consignment: React.FC = () => {
       const rows: ConsignmentSuggestRow[] = (data ?? []) as ConsignmentSuggestRow[];
 
       const uniqFull: string[] = Array.from(
-        new Set(
-          rows
-            .map((r) => normalizeText(r.full_name ?? ""))
-            .filter((v) => v.length > 0)
-        )
+        new Set(rows.map((r) => normalizeText(r.full_name ?? "")).filter((v) => v.length > 0))
       ).sort((a, b) => a.localeCompare(b));
 
       const uniqCat: string[] = Array.from(
-        new Set(
-          rows
-            .map((r) => normalizeText(r.category ?? ""))
-            .filter((v) => v.length > 0)
-        )
+        new Set(rows.map((r) => normalizeText(r.category ?? "")).filter((v) => v.length > 0))
       ).sort((a, b) => a.localeCompare(b));
 
       setAllFullNames(uniqFull);
@@ -179,8 +162,12 @@ const Staff_Consignment: React.FC = () => {
 
       const userId: string = userRes.user.id;
 
-      // ✅ allow BOTH admin & staff
-      const { data: profile, error: profErr } = await supabase.from("profiles").select("role").eq("id", userId).single<Profile>();
+      const { data: profile, error: profErr } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", userId)
+        .single<Profile>();
+
       if (profErr) throw profErr;
 
       const role = (profile?.role ?? "").toLowerCase();
@@ -188,7 +175,6 @@ const Staff_Consignment: React.FC = () => {
 
       let imageUrl: string | null = null;
 
-      // ✅ upload to bucket: consignment
       if (imageFile) {
         const extRaw: string | undefined = imageFile.name.split(".").pop();
         const fileExt: string = (extRaw ? extRaw.toLowerCase() : "jpg").trim();
@@ -199,6 +185,7 @@ const Staff_Consignment: React.FC = () => {
           contentType: imageFile.type,
           upsert: false,
         });
+
         if (uploadError) throw uploadError;
 
         const { data: urlData } = supabase.storage.from("consignment").getPublicUrl(filePath);
@@ -208,24 +195,23 @@ const Staff_Consignment: React.FC = () => {
       const sizeFinal = normalizeSize(size);
       const sizeDb: string | null = sizeFinal === "None" ? null : sizeFinal;
 
-      // ✅ insert to consignment (now includes category)
       const { error: insertConsErr } = await supabase.from("consignment").insert([
         {
           created_by: userId,
           category_id: consignmentCategoryId,
           full_name: fullNameFinal,
-          category: categoryFinal, // ✅ NEW
+          category: categoryFinal,
           item_name: itemNameFinal,
           size: sizeDb,
           restocked,
           price,
           image_url: imageUrl,
+          approval_status: "pending",
         },
       ]);
 
       if (insertConsErr) throw insertConsErr;
 
-      // ✅ update suggestions lists
       setAllFullNames((prev) => {
         if (prev.some((n) => n.toLowerCase() === fullNameFinal.toLowerCase())) return prev;
         return [...prev, fullNameFinal].sort((a, b) => a.localeCompare(b));
@@ -236,7 +222,6 @@ const Staff_Consignment: React.FC = () => {
         return [...prev, categoryFinal].sort((a, b) => a.localeCompare(b));
       });
 
-      // reset form
       setFullName("");
       setCategory("");
       setItemName("");
@@ -247,10 +232,9 @@ const Staff_Consignment: React.FC = () => {
       closeFullPopover();
       closeCatPopover();
 
-      setToastMessage("Consignment item added!");
+      setToastMessage("Consignment item submitted for admin approval!");
       setShowToast(true);
     } catch (err: unknown) {
-      // eslint-disable-next-line no-console
       console.error(err);
       setToastMessage(err instanceof Error ? err.message : "Unexpected error occurred");
       setShowToast(true);
@@ -274,9 +258,7 @@ const Staff_Consignment: React.FC = () => {
             </div>
 
             <div className="aao-grid">
-              {/* LEFT */}
               <div className="aao-col aao-col-left">
-                {/* FULL NAME */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Full Name <span className="aao-req">*</span>
@@ -309,7 +291,6 @@ const Staff_Consignment: React.FC = () => {
                   </div>
                 </IonItem>
 
-                {/* FULL NAME POPOVER */}
                 <IonPopover
                   isOpen={fullOpen}
                   event={fullEvent}
@@ -334,7 +315,6 @@ const Staff_Consignment: React.FC = () => {
                   </IonContent>
                 </IonPopover>
 
-                {/* ✅ CATEGORY (same style as Full Name) */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Category <span className="aao-req">*</span>
@@ -367,7 +347,6 @@ const Staff_Consignment: React.FC = () => {
                   </div>
                 </IonItem>
 
-                {/* CATEGORY POPOVER */}
                 <IonPopover
                   isOpen={catOpen}
                   event={catEvent}
@@ -392,7 +371,6 @@ const Staff_Consignment: React.FC = () => {
                   </IonContent>
                 </IonPopover>
 
-                {/* SIZE */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Size <span className="aao-opt">(optional)</span>
@@ -417,7 +395,6 @@ const Staff_Consignment: React.FC = () => {
                   <div className="aao-help">Choose size if applicable. If not, keep None.</div>
                 </IonItem>
 
-                {/* ITEM NAME */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Item Name <span className="aao-req">*</span>
@@ -432,7 +409,6 @@ const Staff_Consignment: React.FC = () => {
                   </div>
                 </IonItem>
 
-                {/* IMAGE */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Image
@@ -456,7 +432,6 @@ const Staff_Consignment: React.FC = () => {
                 </IonItem>
               </div>
 
-              {/* RIGHT */}
               <div className="aao-col aao-col-right">
                 <div className="aao-rightCard">
                   <div className="aao-rightTitle">Pricing & Stock</div>
@@ -502,17 +477,24 @@ const Staff_Consignment: React.FC = () => {
 
                   <IonButton className="aao-btn aao-btn--primary aao-btn-right" expand="block" onClick={handleSubmit}>
                     <IonIcon slot="start" icon={addCircleOutline} />
-                    Add Consignment
+                    Submit for Approval
                   </IonButton>
 
-                  <div className="aao-footnote aao-footnote-right">Tip: dropdown icons show suggestions.</div>
+                  <div className="aao-footnote aao-footnote-right">
+                    Item will only display after admin approval.
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        <IonToast isOpen={showToast} message={toastMessage} duration={2000} onDidDismiss={() => setShowToast(false)} />
+        <IonToast
+          isOpen={showToast}
+          message={toastMessage}
+          duration={2200}
+          onDidDismiss={() => setShowToast(false)}
+        />
       </IonContent>
     </IonPage>
   );
