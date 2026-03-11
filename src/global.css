@@ -4315,6 +4315,37 @@ ion-content.ssr-page {
   opacity: .8;
 }
 
+.ssr-input-item--toplabel {
+  --inner-padding-top: 0;
+  --inner-padding-bottom: 0;
+  --padding-start: 0;
+  --min-height: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.ssr-top-input-label {
+  width: 100%;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  transform: translateY(-2px)!important; 
+  color: #5f5f5f;
+}
+
+.ssr-input-item--toplabel ion-label {
+  margin-bottom: 4px !important;
+}
+
+.ssr-input-item--toplabel ion-input,
+.ssr-input-item--toplabel .ssr-input {
+  width: 100%;
+  text-align: center;
+}
+
 .ssr-input{
   border: 1px solid rgba(0,0,0,.14);
   border-radius: 12px;
@@ -7908,3 +7939,4 @@ ion-button.ao-success-btn {
     min-width: 100%;
   }
 }
+
