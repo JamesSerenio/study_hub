@@ -4,7 +4,8 @@
 // ✅ Keeps your existing pages/files/menu items
 // ✅ VERCEL FIX: boot + resize/reflow so dashboard shows immediately after login
 // ✅ Admin Cancelled Records menu item + page
-// ✅ Added: Consignment Record + Customer Consignment Record (NO unused MenuKey / NO missing imports)
+// ✅ Added: Consignment Record + Customer Consignment Record
+// ✅ Added: Consignment Approval page
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -41,6 +42,7 @@ import Admin_Restock_Record from "./Admin_Restock_Record";
 import Admin_Customer_Cancelled from "./Admin_Customer_Cancelled";
 import Staff_Consignment_Record from "./Admin_Staff_Consignment_Record";
 import Customer_Consignment_Record from "./Admin_Customer_Consignment_Record";
+import Admin_Consignment_Approval from "./Admin_Consignment_Approval";
 
 /* ================= ASSETS ================= */
 import dashboardIcon from "../assets/graph.png";
@@ -60,6 +62,7 @@ import studyHubLogo from "../assets/study_hub.png";
 import flowerImg from "../assets/flower.png";
 import staff_consignmentIcon from "../assets/staff_consignment.png";
 import customerConsignmentIcon from "../assets/consignment_record.png";
+import approvedIcon from "../assets/approved.png";
 
 type MenuKey =
   | "dashboard"
@@ -76,7 +79,8 @@ type MenuKey =
   | "packages"
   | "discount_records"
   | "staff_consignment_record"
-  | "customer_consignment_record";
+  | "customer_consignment_record"
+  | "consignment_approval";
 
 type MenuItem = {
   name: string;
@@ -104,7 +108,7 @@ const Admin_menu: React.FC = () => {
     const t = window.setTimeout(() => {
       setBoot(true);
       window.dispatchEvent(new Event("resize"));
-      document.body.getBoundingClientRect(); // reflow
+      document.body.getBoundingClientRect();
     }, 0);
 
     return () => window.clearTimeout(t);
@@ -123,7 +127,8 @@ const Admin_menu: React.FC = () => {
       { name: "Customer Reservations", key: "customer_reservation", icon: reservationIcon },
       { name: "Cancelled Records", key: "customer_cancelled", icon: cancelledIcon },
       { name: "Consignment Record", key: "staff_consignment_record", icon: staff_consignmentIcon },
-      { name: "Customer Consignment Record", key: "customer_consignment_record", icon: customerConsignmentIcon   },
+      { name: "Customer Consignment Record", key: "customer_consignment_record", icon: customerConsignmentIcon },
+      { name: "Consignment Approval", key: "consignment_approval", icon: approvedIcon },
       { name: "Seat Table", key: "seat_table", icon: seatIcon },
       { name: "Promotions", key: "packages", icon: promotionIcon },
       { name: "Memberships", key: "discount_records", icon: discountIcon },
@@ -166,19 +171,18 @@ const Admin_menu: React.FC = () => {
         return <Admin_customer_reservation />;
       case "customer_cancelled":
         return <Admin_Customer_Cancelled />;
+      case "staff_consignment_record":
+        return <Staff_Consignment_Record />;
+      case "customer_consignment_record":
+        return <Customer_Consignment_Record />;
+      case "consignment_approval":
+        return <Admin_Consignment_Approval />;
       case "seat_table":
         return <Admin_Seat_Table />;
       case "packages":
         return <Admin_Packages />;
       case "discount_records":
         return <Admin_Customer_Discount_List />;
-
-      // ✅ NEW
-      case "staff_consignment_record":
-        return <Staff_Consignment_Record />;
-      case "customer_consignment_record":
-        return <Customer_Consignment_Record />;
-
       default:
         return <Admin_Dashboard />;
     }
@@ -279,7 +283,6 @@ const Admin_menu: React.FC = () => {
           </IonHeader>
 
           <IonContent className="ion-padding custom-bg">
-            {/* ✅ render after boot so Vercel shows immediately */}
             {boot && (
               <AnimatePresence mode="wait" initial={false}>
                 <motion.div
