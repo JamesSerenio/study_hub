@@ -15,15 +15,14 @@
 // ✅ Search bar (Full Name only)
 // ✅ Date filter uses reservation_date
 // ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now)
-// ✅ ✅ CANCEL SAME AS Customer_Lists:
-//    - Cancel requires DESCRIPTION (modal)
-//    - Uses RPC cancel_customer_session (moves to customer_sessions_cancelled)
-//    - Stops View to Customer if active
-//    - Releases reserved seats
-// ✅ NEW:
-//    ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
-// ✅ NEW: REFRESH button beside DATE FILTER (same className so same color)
+// ✅ CANCEL SAME AS Customer_Lists
+// ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
+// ✅ REFRESH button beside DATE FILTER
 // ✅ No "any"
+// ✅ NEW FIX:
+// - ALL MONEY VALUES are WHOLE NUMBERS ONLY
+// - If value has decimal, ALWAYS ROUND UP
+//   Example: 10.01 => 11, 10.99 => 11
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -46,8 +45,8 @@ type DiscountKind = "none" | "percent" | "amount";
 interface CustomerSession {
   id: string;
 
-  date: string; // fallback
-  reservation_date: string | null; // filter basis
+  date: string;
+  reservation_date: string | null;
 
   full_name: string;
   phone_number?: string | null;
@@ -64,7 +63,7 @@ interface CustomerSession {
   total_time: number;
   total_amount: number;
 
-  reservation: string; // "yes"
+  reservation: string;
   seat_number: string;
 
   down_payment?: number | string | null;
@@ -116,7 +115,8 @@ const toMoney = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
+// ✅ whole peso, always round UP if may decimal
+const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
   if (typeof v === "boolean") return v;
@@ -131,7 +131,7 @@ const toBool = (v: unknown): boolean => {
 const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
   const v = Number.isFinite(value) ? Math.max(0, value) : 0;
   if (kind === "percent" && v > 0) return `${v}%`;
-  if (kind === "amount" && v > 0) return `₱${v.toFixed(2)}`;
+  if (kind === "amount" && v > 0) return `₱${wholePeso(v)}`;
   return "—";
 };
 
@@ -145,28 +145,37 @@ const applyDiscount = (
 
   if (kind === "percent") {
     const pct = clamp(v, 0, 100);
-    const disc = round2((cost * pct) / 100);
-    const final = round2(Math.max(0, cost - disc));
-    return { discountedCost: final, discountAmount: disc };
+    const discRaw = (cost * pct) / 100;
+    const finalRaw = Math.max(0, cost - discRaw);
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
   if (kind === "amount") {
-    const disc = round2(Math.min(cost, v));
-    const final = round2(Math.max(0, cost - disc));
-    return { discountedCost: final, discountAmount: disc };
+    const discRaw = Math.min(cost, v);
+    const finalRaw = Math.max(0, cost - discRaw);
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
-  return { discountedCost: round2(cost), discountAmount: 0 };
+  return {
+    discountedCost: wholePeso(cost),
+    discountAmount: 0,
+  };
 };
 
 // ✅ keep gcash (clamp to due), cash = remaining
-// (used by DISCOUNT save only; payment modal is now FREE INPUTS)
+// used by DISCOUNT save only
 const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
-  const d = round2(Math.max(0, due));
+  const d = wholePeso(Math.max(0, due));
   if (d <= 0) return { gcash: 0, cash: 0 };
 
-  const g = round2(Math.min(d, Math.max(0, gcash)));
-  const c = round2(Math.max(0, d - g));
+  const g = wholePeso(Math.min(d, Math.max(0, gcash)));
+  const c = wholePeso(Math.max(0, d - g));
   return { gcash: g, cash: c };
 };
 
@@ -186,51 +195,39 @@ const Customer_Reservations: React.FC = () => {
 
   const [, setViewTick] = useState<number>(0);
 
-  // Date filter (reservation_date)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
-
-  // ✅ Search (Full Name only)
   const [searchName, setSearchName] = useState<string>("");
 
-  // Discount modal
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
   const [discountKind, setDiscountKind] = useState<DiscountKind>("none");
   const [discountInput, setDiscountInput] = useState<string>("0");
   const [discountReason, setDiscountReason] = useState<string>("");
   const [savingDiscount, setSavingDiscount] = useState<boolean>(false);
 
-  // ✅ Down Payment modal
   const [dpTarget, setDpTarget] = useState<CustomerSession | null>(null);
   const [dpInput, setDpInput] = useState<string>("0");
   const [savingDp, setSavingDp] = useState<boolean>(false);
 
-  // Payment modal
   const [paymentTarget, setPaymentTarget] = useState<CustomerSession | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
-  // Paid toggle busy id
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
 
-  // ✅ view state (realtime)
   const [viewEnabled, setViewEnabled] = useState<boolean>(false);
   const [viewSessionId, setViewSessionId] = useState<string>("");
 
-  // guard (avoid flicker)
   const viewHydratedRef = useRef<boolean>(false);
 
-  // ✅ CANCEL modal (same as Customer_Lists: requires description + RPC)
   const [cancelTarget, setCancelTarget] = useState<CustomerSession | null>(null);
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
 
-  // ✅ refresh busy
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
   useEffect(() => {
     void fetchReservationSessions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* =========================
@@ -257,7 +254,6 @@ const Customer_Reservations: React.FC = () => {
   };
 
   const hydrateViewState = async (): Promise<void> => {
-    // 1) try DB state
     const { data, error } = await supabase
       .from(VIEW_STATE_TABLE)
       .select("id, enabled, session_id, updated_at")
@@ -273,7 +269,6 @@ const Customer_Reservations: React.FC = () => {
       return;
     }
 
-    // 2) fallback local
     const local = readLocalFallback();
     applyViewState(local.enabled, local.sessionId);
     viewHydratedRef.current = true;
@@ -310,12 +305,10 @@ const Customer_Reservations: React.FC = () => {
       window.removeEventListener("storage", onStorage);
       void supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isCustomerViewOnFor = (sessionId: string): boolean => viewEnabled && viewSessionId === sessionId;
 
-  // ✅ IMPORTANT: since DB is SINGLE ROW with id=1, use UPDATE (NOT UPSERT)
   const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
     const sid = enabled && sessionId ? sessionId : null;
 
@@ -330,7 +323,6 @@ const Customer_Reservations: React.FC = () => {
       .eq("id", VIEW_STATE_ID);
 
     if (error) {
-      // eslint-disable-next-line no-console
       console.warn("setCustomerViewRealtime error:", error.message);
       writeLocalFallback(Boolean(enabled), sid);
       setViewTick((x) => x + 1);
@@ -367,7 +359,6 @@ const Customer_Reservations: React.FC = () => {
       .order("reservation_date", { ascending: false });
 
     if (error) {
-      // eslint-disable-next-line no-console
       console.error(error);
       alert("Error loading reservations");
       setSessions([]);
@@ -379,7 +370,6 @@ const Customer_Reservations: React.FC = () => {
     setLoading(false);
   };
 
-  // ✅ Refresh button action
   const refreshAll = async (): Promise<void> => {
     try {
       setRefreshing(true);
@@ -394,7 +384,7 @@ const Customer_Reservations: React.FC = () => {
     return p || "N/A";
   };
 
-  const getDownPayment = (s: CustomerSession): number => round2(Math.max(0, toMoney(s.down_payment ?? 0)));
+  const getDownPayment = (s: CustomerSession): number => wholePeso(Math.max(0, toMoney(s.down_payment ?? 0)));
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -421,7 +411,7 @@ const Customer_Reservations: React.FC = () => {
     const minutesUsed = diffMinutes(startIso, endIso);
     const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
     const perMinute = HOURLY_RATE / 60;
-    return round2(chargeMinutes * perMinute);
+    return wholePeso(chargeMinutes * perMinute);
   };
 
   const getLiveTotalCost = (s: CustomerSession): number => {
@@ -430,7 +420,7 @@ const Customer_Reservations: React.FC = () => {
   };
 
   const getBaseSystemCost = (s: CustomerSession): number => {
-    return isOpenTimeSession(s) ? getLiveTotalCost(s) : toMoney(s.total_amount);
+    return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
   };
 
   const getDiscountInfo = (s: CustomerSession): { kind: DiscountKind; value: number; reason: string } => {
@@ -445,24 +435,22 @@ const Customer_Reservations: React.FC = () => {
     return getDiscountTextFrom(di.kind, di.value);
   };
 
-  // ✅ Payment basis = system cost after discount (NO DP deduction)
   const getSessionSystemCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
-    return applyDiscount(base, di.kind, di.value).discountedCost;
+    return wholePeso(applyDiscount(base, di.kind, di.value).discountedCost);
   };
 
-  // ✅ display balance/change uses DP (display only)
   const getSessionBalanceAfterDP = (s: CustomerSession): number => {
     const systemCost = getSessionSystemCost(s);
     const dp = getDownPayment(s);
-    return round2(Math.max(0, systemCost - dp));
+    return wholePeso(Math.max(0, systemCost - dp));
   };
 
   const getSessionChangeAfterDP = (s: CustomerSession): number => {
     const systemCost = getSessionSystemCost(s);
     const dp = getDownPayment(s);
-    return round2(Math.max(0, dp - systemCost));
+    return wholePeso(Math.max(0, dp - systemCost));
   };
 
   const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
@@ -472,13 +460,12 @@ const Customer_Reservations: React.FC = () => {
   };
 
   const getPaidInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
-    const gcash = round2(Math.max(0, toMoney(s.gcash_amount ?? 0)));
-    const cash = round2(Math.max(0, toMoney(s.cash_amount ?? 0)));
-    const totalPaid = round2(gcash + cash);
+    const gcash = wholePeso(Math.max(0, toMoney(s.gcash_amount ?? 0)));
+    const cash = wholePeso(Math.max(0, toMoney(s.cash_amount ?? 0)));
+    const totalPaid = wholePeso(gcash + cash);
     return { gcash, cash, totalPaid };
   };
 
-  // ✅ Release reserved seat blocks when stop time / cancel is used
   const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
@@ -492,7 +479,6 @@ const Customer_Reservations: React.FC = () => {
       .gt("end_at", nowIso);
 
     if (error) {
-      // eslint-disable-next-line no-console
       console.warn("releaseSeatBlocksNow select:", error.message);
       return;
     }
@@ -507,7 +493,6 @@ const Customer_Reservations: React.FC = () => {
         .gt("end_at", nowIso);
 
       if (upErr) {
-        // eslint-disable-next-line no-console
         console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
       }
       return;
@@ -517,7 +502,6 @@ const Customer_Reservations: React.FC = () => {
     const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped/cancelled" }).in("id", ids);
 
     if (upErr) {
-      // eslint-disable-next-line no-console
       console.warn("releaseSeatBlocksNow update:", upErr.message);
     }
   };
@@ -552,7 +536,6 @@ const Customer_Reservations: React.FC = () => {
       setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
       setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Stop Time failed.");
     } finally {
@@ -584,7 +567,7 @@ const Customer_Reservations: React.FC = () => {
   };
 
   /* =========================
-     ✅ CANCEL FLOW (uses your SQL table via RPC)
+     CANCEL FLOW
   ========================= */
 
   const openCancelModal = (s: CustomerSession): void => {
@@ -601,16 +584,14 @@ const Customer_Reservations: React.FC = () => {
     try {
       setCancellingBusy(true);
 
-      // stop customer view if this is being viewed
       if (isCustomerViewOnFor(cancelTarget.id)) {
         try {
           await stopCustomerViewRealtime();
         } catch {
-          // ignore
+          //
         }
       }
 
-      // ✅ RPC: inserts into public.customer_sessions_cancelled then deletes original
       const { error } = await supabase.rpc("cancel_customer_session", {
         p_session_id: cancelTarget.id,
         p_reason: reason,
@@ -621,20 +602,16 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      // release reserved seats
       const nowIso = new Date().toISOString();
       await releaseSeatBlocksNow(cancelTarget, nowIso);
 
-      // remove from UI list immediately
       setSessions((prev) => prev.filter((x) => x.id !== cancelTarget.id));
 
-      // close receipt if same
       if (selectedSession?.id === cancelTarget.id) setSelectedSession(null);
 
       setCancelTarget(null);
       setCancelReason("");
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Cancel failed.");
     } finally {
@@ -642,9 +619,10 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // DISCOUNT MODAL
-  // -----------------------
+  /* =========================
+     DISCOUNT
+  ========================= */
+
   const openDiscountModal = (s: CustomerSession): void => {
     const di = getDiscountInfo(s);
     setDiscountTarget(s);
@@ -662,13 +640,12 @@ const Customer_Reservations: React.FC = () => {
 
     const base = getBaseSystemCost(discountTarget);
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
-    const dueForPayment = round2(Math.max(0, discounted));
+    const dueForPayment = wholePeso(Math.max(0, discounted));
 
-    // ✅ keep your old behavior here (auto adjusts to due)
     const prevPay = getPaidInfo(discountTarget);
     const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
 
-    const totalPaid = round2(adjPay.gcash + adjPay.cash);
+    const totalPaid = wholePeso(adjPay.gcash + adjPay.cash);
     const autoPaid = dueForPayment <= 0 ? true : totalPaid >= dueForPayment;
 
     try {
@@ -698,7 +675,6 @@ const Customer_Reservations: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === discountTarget.id ? (updated as CustomerSession) : prev));
       setDiscountTarget(null);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save discount failed.");
     } finally {
@@ -706,9 +682,10 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // ✅ DOWN PAYMENT MODAL
-  // -----------------------
+  /* =========================
+     DOWN PAYMENT
+  ========================= */
+
   const openDpModal = (s: CustomerSession): void => {
     setDpTarget(s);
     setDpInput(String(getDownPayment(s)));
@@ -718,7 +695,7 @@ const Customer_Reservations: React.FC = () => {
     if (!dpTarget) return;
 
     const raw = Number(dpInput);
-    const dp = round2(Math.max(0, Number.isFinite(raw) ? raw : 0));
+    const dp = wholePeso(Math.max(0, Number.isFinite(raw) ? raw : 0));
 
     try {
       setSavingDp(true);
@@ -739,7 +716,6 @@ const Customer_Reservations: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === dpTarget.id ? (updated as CustomerSession) : prev));
       setDpTarget(null);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save down payment failed.");
     } finally {
@@ -747,9 +723,10 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // ✅ PAYMENT MODAL (FREE INPUTS — NO LIMIT)
-  // -----------------------
+  /* =========================
+     PAYMENT
+  ========================= */
+
   const openPaymentModal = (s: CustomerSession): void => {
     const pi = getPaidInfo(s);
     setPaymentTarget(s);
@@ -758,24 +735,24 @@ const Customer_Reservations: React.FC = () => {
   };
 
   const setGcashFree = (gcashStr: string): void => {
-    const v = round2(Math.max(0, toMoney(gcashStr)));
+    const v = wholePeso(Math.max(0, toMoney(gcashStr)));
     setGcashInput(String(v));
   };
 
   const setCashFree = (cashStr: string): void => {
-    const v = round2(Math.max(0, toMoney(cashStr)));
+    const v = wholePeso(Math.max(0, toMoney(cashStr)));
     setCashInput(String(v));
   };
 
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
+    const due = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-    const gc = round2(Math.max(0, toMoney(gcashInput)));
-    const ca = round2(Math.max(0, toMoney(cashInput)));
+    const gc = wholePeso(Math.max(0, toMoney(gcashInput)));
+    const ca = wholePeso(Math.max(0, toMoney(cashInput)));
 
-    const totalPaid = round2(gc + ca);
+    const totalPaid = wholePeso(gc + ca);
     const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
     try {
@@ -802,7 +779,6 @@ const Customer_Reservations: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === paymentTarget.id ? (updated as CustomerSession) : prev));
       setPaymentTarget(null);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
@@ -835,7 +811,6 @@ const Customer_Reservations: React.FC = () => {
       setSessions((prev) => prev.map((x) => (x.id === s.id ? (updated as CustomerSession) : x)));
       setSelectedSession((prev) => (prev?.id === s.id ? (updated as CustomerSession) : prev));
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -848,7 +823,7 @@ const Customer_Reservations: React.FC = () => {
       try {
         await stopCustomerViewRealtime();
       } catch {
-        // ignore
+        //
       }
     }
     setSelectedSession(null);
@@ -858,7 +833,6 @@ const Customer_Reservations: React.FC = () => {
     <IonPage>
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Reservations</h2>
@@ -872,7 +846,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
-              {/* SEARCH */}
               <div className="customer-searchbar-inline">
                 <div className="customer-searchbar-inner">
                   <span className="customer-search-icon" aria-hidden="true">
@@ -893,7 +866,6 @@ const Customer_Reservations: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE + REFRESH (katabi) */}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <label className="date-pill">
                   <span className="date-pill-label">Date</span>
@@ -920,7 +892,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
           </div>
 
-          {/* TABLE */}
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
@@ -960,7 +931,7 @@ const Customer_Reservations: React.FC = () => {
 
                     const systemCost = getSessionSystemCost(session);
                     const pi = getPaidInfo(session);
-                    const remainingPay = round2(systemCost - pi.totalPaid); // ✅ can be negative (change)
+                    const remainingPay = systemCost - pi.totalPaid;
 
                     const dp = getDownPayment(session);
 
@@ -981,7 +952,7 @@ const Customer_Reservations: React.FC = () => {
                         <td>
                           <div className="cell-stack">
                             <span className="cell-strong">{disp.label}</span>
-                            <span>₱{disp.value.toFixed(2)}</span>
+                            <span>₱{disp.value}</span>
                           </div>
                         </td>
 
@@ -996,23 +967,22 @@ const Customer_Reservations: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
-                            <span className="cell-strong">₱{dp.toFixed(2)}</span>
+                            <span className="cell-strong">₱{dp}</span>
                             <button className="receipt-btn" onClick={() => openDpModal(session)}>
                               Edit DP
                             </button>
                           </div>
                         </td>
 
-                        {/* PAYMENT */}
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">
-                              GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
+                              GCash ₱{pi.gcash} / Cash ₱{pi.cash}
                             </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
                               {remainingPay >= 0
-                                ? `Remaining ₱${remainingPay.toFixed(2)}`
-                                : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
+                                ? `Remaining ₱${wholePeso(remainingPay)}`
+                                : `Change ₱${wholePeso(Math.abs(remainingPay))}`}
                             </span>
 
                             <button
@@ -1071,7 +1041,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ CANCEL MODAL (REQUIRES DESCRIPTION) */}
           {cancelTarget && (
             <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1125,7 +1094,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ DOWN PAYMENT MODAL */}
           {dpTarget && (
             <div className="receipt-overlay" onClick={() => setDpTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1158,7 +1126,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* DISCOUNT MODAL */}
           {discountTarget && (
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1209,7 +1176,7 @@ const Customer_Reservations: React.FC = () => {
                   const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-                  const dueForPayment = round2(Math.max(0, discountedCost));
+                  const dueForPayment = wholePeso(Math.max(0, discountedCost));
 
                   const prevPay = getPaidInfo(discountTarget);
                   const adjPay = recalcPaymentsToDue(dueForPayment, prevPay.gcash);
@@ -1219,7 +1186,7 @@ const Customer_Reservations: React.FC = () => {
                       <hr />
                       <div className="receipt-row">
                         <span>System Cost (Before)</span>
-                        <span>₱{base.toFixed(2)}</span>
+                        <span>₱{wholePeso(base)}</span>
                       </div>
                       <div className="receipt-row">
                         <span>Discount</span>
@@ -1227,22 +1194,22 @@ const Customer_Reservations: React.FC = () => {
                       </div>
                       <div className="receipt-row">
                         <span>Discount Amount</span>
-                        <span>₱{discountAmount.toFixed(2)}</span>
+                        <span>₱{wholePeso(discountAmount)}</span>
                       </div>
                       <div className="receipt-row">
                         <span>Final System Cost (Payment Basis)</span>
-                        <span>₱{discountedCost.toFixed(2)}</span>
+                        <span>₱{wholePeso(discountedCost)}</span>
                       </div>
 
                       <div className="receipt-total">
                         <span>NEW PAYMENT DUE</span>
-                        <span>₱{dueForPayment.toFixed(2)}</span>
+                        <span>₱{wholePeso(dueForPayment)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Auto Payment After Save</span>
                         <span>
-                          GCash ₱{adjPay.gcash.toFixed(2)} / Cash ₱{adjPay.cash.toFixed(2)}
+                          GCash ₱{adjPay.gcash} / Cash ₱{adjPay.cash}
                         </span>
                       </div>
 
@@ -1266,7 +1233,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ PAYMENT MODAL (FREE INPUTS — NO LIMIT) */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1276,13 +1242,13 @@ const Customer_Reservations: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
+                  const due = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-                  const gc = round2(Math.max(0, toMoney(gcashInput)));
-                  const ca = round2(Math.max(0, toMoney(cashInput)));
-                  const totalPaid = round2(gc + ca);
+                  const gc = wholePeso(Math.max(0, toMoney(gcashInput)));
+                  const ca = wholePeso(Math.max(0, toMoney(cashInput)));
+                  const totalPaid = wholePeso(gc + ca);
 
-                  const diff = round2(due - totalPaid);
+                  const diff = due - totalPaid;
                   const label = diff > 0 ? "Remaining" : "Change";
                   const value = diff > 0 ? diff : Math.abs(diff);
 
@@ -1290,7 +1256,7 @@ const Customer_Reservations: React.FC = () => {
                     <>
                       <div className="receipt-row">
                         <span>Payment Due (System Cost)</span>
-                        <span>₱{due.toFixed(2)}</span>
+                        <span>₱{due}</span>
                       </div>
 
                       <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
@@ -1326,12 +1292,12 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Total Paid</span>
-                        <span>₱{totalPaid.toFixed(2)}</span>
+                        <span>₱{totalPaid}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>{label}</span>
-                        <span>₱{value.toFixed(2)}</span>
+                        <span>₱{wholePeso(value)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1354,7 +1320,6 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL */}
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1434,11 +1399,11 @@ const Customer_Reservations: React.FC = () => {
                   const di = getDiscountInfo(selectedSession);
                   const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
-                  const dueForPayment = round2(Math.max(0, discountCalc.discountedCost));
+                  const dueForPayment = wholePeso(Math.max(0, discountCalc.discountedCost));
                   const pi = getPaidInfo(selectedSession);
 
-                  const dpBalance = round2(Math.max(0, dueForPayment - dp));
-                  const dpChange = round2(Math.max(0, dp - dueForPayment));
+                  const dpBalance = wholePeso(Math.max(0, dueForPayment - dp));
+                  const dpChange = wholePeso(Math.max(0, dp - dueForPayment));
 
                   const dpDisp =
                     dpBalance > 0
@@ -1452,12 +1417,12 @@ const Customer_Reservations: React.FC = () => {
                     <>
                       <div className="receipt-row">
                         <span>{dpDisp.label}</span>
-                        <span>₱{dpDisp.value.toFixed(2)}</span>
+                        <span>₱{dpDisp.value}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Down Payment</span>
-                        <span>₱{dp.toFixed(2)}</span>
+                        <span>₱{dp}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1467,34 +1432,34 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Discount Amount</span>
-                        <span>₱{discountCalc.discountAmount.toFixed(2)}</span>
+                        <span>₱{wholePeso(discountCalc.discountAmount)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>System Cost (Payment Basis)</span>
-                        <span>₱{dueForPayment.toFixed(2)}</span>
+                        <span>₱{wholePeso(dueForPayment)}</span>
                       </div>
 
                       <hr />
 
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <span>₱{pi.gcash.toFixed(2)}</span>
+                        <span>₱{pi.gcash}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <span>₱{pi.cash.toFixed(2)}</span>
+                        <span>₱{pi.cash}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Total Paid</span>
-                        <span>₱{pi.totalPaid.toFixed(2)}</span>
+                        <span>₱{pi.totalPaid}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Remaining Balance (After DP)</span>
-                        <span>₱{dpBalance.toFixed(2)}</span>
+                        <span>₱{dpBalance}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1504,7 +1469,7 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-total">
                         <span>{bottomLabel}</span>
-                        <span>₱{bottomValue.toFixed(2)}</span>
+                        <span>₱{bottomValue}</span>
                       </div>
                     </>
                   );
