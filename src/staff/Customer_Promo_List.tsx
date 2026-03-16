@@ -1037,7 +1037,12 @@ const Customer_Discount_List: React.FC = () => {
           ) : filteredRows.length === 0 ? (
             <p className="customer-note">No promo records found for this date</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}>
+            <div className="customer-table-wrap" key={selectedDate}
+                    style={{
+                    maxHeight: "570px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}>
               <table className="customer-table">
                 <thead>
                   <tr>

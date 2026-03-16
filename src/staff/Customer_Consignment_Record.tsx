@@ -551,7 +551,12 @@ const Customer_Consignment_Record: React.FC = () => {
           ) : filtered.length === 0 ? (
             <p className="customer-note">No data found for this date</p>
           ) : (
-            <div className="customer-table-wrap">
+            <div className="customer-table-wrap"
+                    style={{
+                    maxHeight: "570px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}>
               <table className="customer-table">
                 <thead>
                   <tr>

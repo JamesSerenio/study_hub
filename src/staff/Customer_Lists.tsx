@@ -16,10 +16,13 @@
 // ✅ strict TS (NO "any")
 // ✅ FIXED: PAYMENT inputs no longer LIMIT/force total = due (Cash & GCash free input)
 // ✅ NEW: REFRESH button placed BESIDE DATE FILTER (same className so same color)
-//
-// ✅ UPDATE (YOUR REQUEST):
+// ✅ UPDATE:
 // - REMOVE View Customer button from Action column
 // - Put View Customer / Stop View button INSIDE View Receipt modal (bottom, above Close)
+// ✅ NEW FIX:
+// - ALL MONEY VALUES are WHOLE NUMBERS ONLY
+// - If value has decimal, ALWAYS ROUND UP
+//   Example: 10.01 => 11, 10.99 => 11
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -40,11 +43,9 @@ type DiscountKind = "none" | "percent" | "amount";
 
 interface CustomerSession {
   id: string;
-  date: string; // YYYY-MM-DD
+  date: string;
   full_name: string;
-
   phone_number?: string | null;
-
   customer_type: string;
   customer_field: string | null;
   has_id: boolean;
@@ -57,16 +58,12 @@ interface CustomerSession {
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
-
   down_payment?: number | string | null;
-
   discount_kind?: DiscountKind;
   discount_value?: number | string;
   discount_reason?: string | null;
-
   gcash_amount?: number | string;
   cash_amount?: number | string;
-
   is_paid?: boolean | number | string | null;
   paid_at?: string | null;
 }
@@ -91,7 +88,9 @@ const toMoney = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
+
+// ✅ NEW: whole peso, always round UP if may decimal
+const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
   if (typeof v === "boolean") return v;
@@ -106,7 +105,7 @@ const toBool = (v: unknown): boolean => {
 const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
   const v = Number.isFinite(value) ? Math.max(0, value) : 0;
   if (kind === "percent" && v > 0) return `${v}%`;
-  if (kind === "amount" && v > 0) return `₱${v.toFixed(2)}`;
+  if (kind === "amount" && v > 0) return `₱${wholePeso(v)}`;
   return "—";
 };
 
@@ -120,27 +119,35 @@ const applyDiscount = (
 
   if (kind === "percent") {
     const pct = clamp(v, 0, 100);
-    const disc = round2((cost * pct) / 100);
-    const final = round2(Math.max(0, cost - disc));
-    return { discountedCost: final, discountAmount: disc };
+    const discRaw = (cost * pct) / 100;
+    const finalRaw = Math.max(0, cost - discRaw);
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
   if (kind === "amount") {
-    const disc = round2(Math.min(cost, v));
-    const final = round2(Math.max(0, cost - disc));
-    return { discountedCost: final, discountAmount: disc };
+    const discRaw = Math.min(cost, v);
+    const finalRaw = Math.max(0, cost - discRaw);
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
-  return { discountedCost: round2(cost), discountAmount: 0 };
+  return {
+    discountedCost: wholePeso(cost),
+    discountAmount: 0,
+  };
 };
 
 /* =========================
-   CROSS-DEVICE VIEW HELPERS (SINGLE ROW id=1)
+   CROSS-DEVICE VIEW HELPERS
 ========================= */
 
 const VIEW_ROW_ID = 1;
 
-// ✅ IMPORTANT FIX: use UPSERT so row is guaranteed to exist
 const setCustomerViewState = async (enabled: boolean, sessionId: string | null): Promise<void> => {
   const payload: CustomerViewRow = {
     id: VIEW_ROW_ID,
@@ -205,10 +212,9 @@ const Customer_Lists: React.FC = () => {
       try {
         if (typeof unsub === "function") unsub();
       } catch {
-        // ignore
+        //
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filteredSessions = useMemo(() => {
@@ -233,7 +239,6 @@ const Customer_Lists: React.FC = () => {
       .order("date", { ascending: false });
 
     if (error) {
-      // eslint-disable-next-line no-console
       console.error(error);
       alert("Error loading customer lists");
       setSessions([]);
@@ -253,13 +258,11 @@ const Customer_Lists: React.FC = () => {
       .maybeSingle();
 
     if (error) {
-      // eslint-disable-next-line no-console
       console.error("readActiveCustomerView error:", error);
       setActiveView(null);
       return;
     }
 
-    // if row missing, create it once
     if (!data) {
       try {
         await setCustomerViewState(false, null);
@@ -270,7 +273,6 @@ const Customer_Lists: React.FC = () => {
           .maybeSingle();
         if (!retry.error) setActiveView((retry.data ?? null) as CustomerViewRow | null);
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.error("ensure view row failed:", e);
       }
       return;
@@ -307,7 +309,7 @@ const Customer_Lists: React.FC = () => {
     return p || "N/A";
   };
 
-  const getDownPayment = (s: CustomerSession): number => round2(Math.max(0, toMoney(s.down_payment ?? 0)));
+  const getDownPayment = (s: CustomerSession): number => wholePeso(Math.max(0, toMoney(s.down_payment ?? 0)));
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -334,7 +336,7 @@ const Customer_Lists: React.FC = () => {
     const minutesUsed = diffMinutes(startIso, endIso);
     const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
     const perMinute = HOURLY_RATE / 60;
-    return round2(chargeMinutes * perMinute);
+    return wholePeso(chargeMinutes * perMinute);
   };
 
   const getLiveTotalCost = (s: CustomerSession): number => {
@@ -343,7 +345,7 @@ const Customer_Lists: React.FC = () => {
   };
 
   const getBaseSystemCost = (s: CustomerSession): number => {
-    return isOpenTimeSession(s) ? getLiveTotalCost(s) : toMoney(s.total_amount);
+    return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
   };
 
   const getDiscountInfo = (s: CustomerSession): { kind: DiscountKind; value: number; reason: string } => {
@@ -361,19 +363,19 @@ const Customer_Lists: React.FC = () => {
   const getSessionSystemCost = (s: CustomerSession): number => {
     const base = getBaseSystemCost(s);
     const di = getDiscountInfo(s);
-    return applyDiscount(base, di.kind, di.value).discountedCost;
+    return wholePeso(applyDiscount(base, di.kind, di.value).discountedCost);
   };
 
   const getSessionBalanceAfterDP = (s: CustomerSession): number => {
     const systemCost = getSessionSystemCost(s);
     const dp = getDownPayment(s);
-    return round2(Math.max(0, systemCost - dp));
+    return wholePeso(Math.max(0, systemCost - dp));
   };
 
   const getSessionChangeAfterDP = (s: CustomerSession): number => {
     const systemCost = getSessionSystemCost(s);
     const dp = getDownPayment(s);
-    return round2(Math.max(0, dp - systemCost));
+    return wholePeso(Math.max(0, dp - systemCost));
   };
 
   const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
@@ -383,9 +385,9 @@ const Customer_Lists: React.FC = () => {
   };
 
   const getPaidInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
-    const gcash = round2(Math.max(0, toMoney(s.gcash_amount ?? 0)));
-    const cash = round2(Math.max(0, toMoney(s.cash_amount ?? 0)));
-    const totalPaid = round2(gcash + cash);
+    const gcash = wholePeso(Math.max(0, toMoney(s.gcash_amount ?? 0)));
+    const cash = wholePeso(Math.max(0, toMoney(s.cash_amount ?? 0)));
+    const totalPaid = wholePeso(gcash + cash);
     return { gcash, cash, totalPaid };
   };
 
@@ -417,7 +419,6 @@ const Customer_Lists: React.FC = () => {
       setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
       setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Stop Time failed.");
     } finally {
@@ -448,9 +449,6 @@ const Customer_Lists: React.FC = () => {
     return Math.max(0, used - FREE_MINUTES);
   };
 
-  // -----------------------
-  // DISCOUNT MODAL
-  // -----------------------
   const openDiscountModal = (s: CustomerSession): void => {
     const di = getDiscountInfo(s);
     setDiscountTarget(s);
@@ -468,10 +466,10 @@ const Customer_Lists: React.FC = () => {
 
     const base = getBaseSystemCost(discountTarget);
     const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
-    const dueForPayment = round2(Math.max(0, discounted));
+    const dueForPayment = wholePeso(Math.max(0, discounted));
 
     const prevPay = getPaidInfo(discountTarget);
-    const totalPaid = round2(prevPay.gcash + prevPay.cash);
+    const totalPaid = wholePeso(prevPay.gcash + prevPay.cash);
     const autoPaid = dueForPayment <= 0 ? true : totalPaid >= dueForPayment;
 
     try {
@@ -501,7 +499,6 @@ const Customer_Lists: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === discountTarget.id ? (updated as CustomerSession) : prev));
       setDiscountTarget(null);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save discount failed.");
     } finally {
@@ -509,9 +506,6 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // DOWN PAYMENT MODAL
-  // -----------------------
   const openDpModal = (s: CustomerSession): void => {
     setDpTarget(s);
     setDpInput(String(getDownPayment(s)));
@@ -521,7 +515,7 @@ const Customer_Lists: React.FC = () => {
     if (!dpTarget) return;
 
     const raw = Number(dpInput);
-    const dp = round2(Math.max(0, Number.isFinite(raw) ? raw : 0));
+    const dp = wholePeso(Math.max(0, Number.isFinite(raw) ? raw : 0));
 
     try {
       setSavingDp(true);
@@ -542,7 +536,6 @@ const Customer_Lists: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === dpTarget.id ? (updated as CustomerSession) : prev));
       setDpTarget(null);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save down payment failed.");
     } finally {
@@ -550,9 +543,6 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // PAYMENT MODAL (FREE INPUTS)
-  // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
     const pi = getPaidInfo(s);
     setPaymentTarget(s);
@@ -563,10 +553,10 @@ const Customer_Lists: React.FC = () => {
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
-    const g = round2(Math.max(0, toMoney(gcashInput)));
-    const c = round2(Math.max(0, toMoney(cashInput)));
-    const totalPaid = round2(g + c);
+    const due = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
+    const g = wholePeso(Math.max(0, toMoney(gcashInput)));
+    const c = wholePeso(Math.max(0, toMoney(cashInput)));
+    const totalPaid = wholePeso(g + c);
 
     const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
@@ -594,7 +584,6 @@ const Customer_Lists: React.FC = () => {
       setSelectedSession((prev) => (prev?.id === paymentTarget.id ? (updated as CustomerSession) : prev));
       setPaymentTarget(null);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Save payment failed.");
     } finally {
@@ -627,7 +616,6 @@ const Customer_Lists: React.FC = () => {
       setSessions((prev) => prev.map((x) => (x.id === s.id ? (updated as CustomerSession) : x)));
       setSelectedSession((prev) => (prev?.id === s.id ? (updated as CustomerSession) : prev));
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Toggle paid failed.");
     } finally {
@@ -635,9 +623,6 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // CANCEL FLOW
-  // -----------------------
   const openCancelModal = (s: CustomerSession): void => {
     setCancelTarget(s);
     setCancelReason("");
@@ -670,7 +655,6 @@ const Customer_Lists: React.FC = () => {
       setCancelTarget(null);
       setCancelReason("");
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Cancel failed.");
     } finally {
@@ -678,7 +662,6 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  // ✅ NEW: view toggle function (used INSIDE receipt modal)
   const toggleCustomerViewForSession = async (session: CustomerSession): Promise<void> => {
     const currentlyOn = isCustomerViewOnForSession(activeView, session.id);
 
@@ -690,7 +673,6 @@ const Customer_Lists: React.FC = () => {
 
       await readActiveCustomerView();
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert("Failed to update View to Customer.");
     } finally {
@@ -705,7 +687,6 @@ const Customer_Lists: React.FC = () => {
         await setCustomerViewState(false, null);
         await readActiveCustomerView();
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.error(e);
       } finally {
         setViewBusy(false);
@@ -718,7 +699,6 @@ const Customer_Lists: React.FC = () => {
     <IonPage>
       <IonContent className="staff-content">
         <div className="customer-lists-container">
-          {/* TOP BAR */}
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Lists - Walk In</h2>
@@ -735,7 +715,6 @@ const Customer_Lists: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right">
-              {/* SEARCH */}
               <div className="customer-searchbar-inline">
                 <div className="customer-searchbar-inner">
                   <span className="customer-search-icon" aria-hidden="true">
@@ -756,7 +735,6 @@ const Customer_Lists: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE + REFRESH */}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <label className="date-pill">
                   <span className="date-pill-label">Date</span>
@@ -783,13 +761,20 @@ const Customer_Lists: React.FC = () => {
             </div>
           </div>
 
-          {/* TABLE */}
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
             <p className="customer-note">No data found for this date</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}>
+                <div
+                  className="customer-table-wrap"
+                  key={selectedDate}
+                  style={{
+                    maxHeight: "560px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}
+                >
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -820,9 +805,9 @@ const Customer_Lists: React.FC = () => {
 
                     const disp = getDisplayAmount(session);
 
-                    const systemCost = round2(Math.max(0, getSessionSystemCost(session)));
+                    const systemCost = wholePeso(Math.max(0, getSessionSystemCost(session)));
                     const pi = getPaidInfo(session);
-                    const remainingPay = round2(systemCost - pi.totalPaid);
+                    const remainingPay = systemCost - pi.totalPaid;
 
                     const dp = getDownPayment(session);
 
@@ -843,7 +828,7 @@ const Customer_Lists: React.FC = () => {
                         <td>
                           <div className="cell-stack">
                             <span className="cell-strong">{disp.label}</span>
-                            <span>₱{disp.value.toFixed(2)}</span>
+                            <span>₱{disp.value}</span>
                           </div>
                         </td>
 
@@ -858,7 +843,7 @@ const Customer_Lists: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
-                            <span className="cell-strong">₱{dp.toFixed(2)}</span>
+                            <span className="cell-strong">₱{dp}</span>
                             <button className="receipt-btn" onClick={() => openDpModal(session)}>
                               Edit DP
                             </button>
@@ -868,12 +853,12 @@ const Customer_Lists: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">
-                              GCash ₱{pi.gcash.toFixed(2)} / Cash ₱{pi.cash.toFixed(2)}
+                              GCash ₱{pi.gcash} / Cash ₱{pi.cash}
                             </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
                               {remainingPay >= 0
-                                ? `Remaining ₱${remainingPay.toFixed(2)}`
-                                : `Change ₱${Math.abs(remainingPay).toFixed(2)}`}
+                                ? `Remaining ₱${wholePeso(remainingPay)}`
+                                : `Change ₱${wholePeso(Math.abs(remainingPay))}`}
                             </span>
 
                             <button
@@ -922,7 +907,6 @@ const Customer_Lists: React.FC = () => {
                               View Receipt
                             </button>
 
-                            {/* ✅ CANCEL (ONLY HERE) */}
                             <button
                               className="receipt-btn admin-danger"
                               onClick={() => openCancelModal(session)}
@@ -931,7 +915,6 @@ const Customer_Lists: React.FC = () => {
                               Cancel
                             </button>
 
-                            {/* Optional: simple indicator only */}
                             {isCustomerViewOnForSession(activeView, session.id) ? (
                               <span style={{ fontSize: 11, opacity: 0.85 }}>👁 Viewing</span>
                             ) : (
@@ -947,7 +930,6 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ CANCEL MODAL */}
           {cancelTarget && (
             <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1001,7 +983,6 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ DOWN PAYMENT MODAL */}
           {dpTarget && (
             <div className="receipt-overlay" onClick={() => setDpTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1034,7 +1015,6 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* DISCOUNT MODAL */}
           {discountTarget && (
             <div className="receipt-overlay" onClick={() => setDiscountTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1088,7 +1068,7 @@ const Customer_Lists: React.FC = () => {
                     discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-                  const dueForPayment = round2(Math.max(0, discountedCost));
+                  const dueForPayment = wholePeso(Math.max(0, discountedCost));
                   const prevPay = getPaidInfo(discountTarget);
 
                   return (
@@ -1097,7 +1077,7 @@ const Customer_Lists: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>System Cost (Before)</span>
-                        <span>₱{base.toFixed(2)}</span>
+                        <span>₱{wholePeso(base)}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1107,23 +1087,23 @@ const Customer_Lists: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Discount Amount</span>
-                        <span>₱{discountAmount.toFixed(2)}</span>
+                        <span>₱{wholePeso(discountAmount)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Final System Cost (Payment Basis)</span>
-                        <span>₱{discountedCost.toFixed(2)}</span>
+                        <span>₱{wholePeso(discountedCost)}</span>
                       </div>
 
                       <div className="receipt-total">
                         <span>NEW PAYMENT DUE</span>
-                        <span>₱{dueForPayment.toFixed(2)}</span>
+                        <span>₱{wholePeso(dueForPayment)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Current Payment</span>
                         <span>
-                          GCash ₱{prevPay.gcash.toFixed(2)} / Cash ₱{prevPay.cash.toFixed(2)}
+                          GCash ₱{prevPay.gcash} / Cash ₱{prevPay.cash}
                         </span>
                       </div>
 
@@ -1147,7 +1127,6 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* ✅ PAYMENT MODAL */}
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1157,20 +1136,20 @@ const Customer_Lists: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const due = round2(Math.max(0, getSessionSystemCost(paymentTarget)));
+                  const due = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
 
-                  const g = round2(Math.max(0, toMoney(gcashInput)));
-                  const c = round2(Math.max(0, toMoney(cashInput)));
-                  const totalPaid = round2(g + c);
+                  const g = wholePeso(Math.max(0, toMoney(gcashInput)));
+                  const c = wholePeso(Math.max(0, toMoney(cashInput)));
+                  const totalPaid = wholePeso(g + c);
 
-                  const diff = round2(totalPaid - due);
+                  const diff = totalPaid - due;
                   const isPaidAuto = due <= 0 ? true : totalPaid >= due;
 
                   return (
                     <>
                       <div className="receipt-row">
                         <span>Payment Due (System Cost)</span>
-                        <span>₱{due.toFixed(2)}</span>
+                        <span>₱{due}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1201,12 +1180,12 @@ const Customer_Lists: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Total Paid</span>
-                        <span>₱{totalPaid.toFixed(2)}</span>
+                        <span>₱{totalPaid}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>{diff >= 0 ? "Change" : "Remaining"}</span>
-                        <span>₱{Math.abs(diff).toFixed(2)}</span>
+                        <span>₱{wholePeso(Math.abs(diff))}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1229,7 +1208,6 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
-          {/* RECEIPT MODAL */}
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
@@ -1313,11 +1291,11 @@ const Customer_Lists: React.FC = () => {
                   const di = getDiscountInfo(selectedSession);
                   const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
-                  const dueForPayment = round2(Math.max(0, discountCalc.discountedCost));
+                  const dueForPayment = wholePeso(Math.max(0, discountCalc.discountedCost));
                   const pi = getPaidInfo(selectedSession);
 
-                  const dpBalance = round2(Math.max(0, dueForPayment - dp));
-                  const dpChange = round2(Math.max(0, dp - dueForPayment));
+                  const dpBalance = wholePeso(Math.max(0, dueForPayment - dp));
+                  const dpChange = wholePeso(Math.max(0, dp - dueForPayment));
 
                   const dpDisp =
                     dpBalance > 0
@@ -1331,12 +1309,12 @@ const Customer_Lists: React.FC = () => {
                     <>
                       <div className="receipt-row">
                         <span>{dpDisp.label}</span>
-                        <span>₱{dpDisp.value.toFixed(2)}</span>
+                        <span>₱{dpDisp.value}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Down Payment</span>
-                        <span>₱{dp.toFixed(2)}</span>
+                        <span>₱{dp}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1346,34 +1324,34 @@ const Customer_Lists: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Discount Amount</span>
-                        <span>₱{discountCalc.discountAmount.toFixed(2)}</span>
+                        <span>₱{wholePeso(discountCalc.discountAmount)}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>System Cost (Payment Basis)</span>
-                        <span>₱{dueForPayment.toFixed(2)}</span>
+                        <span>₱{wholePeso(dueForPayment)}</span>
                       </div>
 
                       <hr />
 
                       <div className="receipt-row">
                         <span>GCash</span>
-                        <span>₱{pi.gcash.toFixed(2)}</span>
+                        <span>₱{pi.gcash}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Cash</span>
-                        <span>₱{pi.cash.toFixed(2)}</span>
+                        <span>₱{pi.cash}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Total Paid</span>
-                        <span>₱{pi.totalPaid.toFixed(2)}</span>
+                        <span>₱{pi.totalPaid}</span>
                       </div>
 
                       <div className="receipt-row">
                         <span>Remaining Balance (After DP)</span>
-                        <span>₱{dpBalance.toFixed(2)}</span>
+                        <span>₱{dpBalance}</span>
                       </div>
 
                       <div className="receipt-row">
@@ -1383,7 +1361,7 @@ const Customer_Lists: React.FC = () => {
 
                       <div className="receipt-total">
                         <span>{bottomLabel}</span>
-                        <span>₱{bottomValue.toFixed(2)}</span>
+                        <span>₱{bottomValue}</span>
                       </div>
                     </>
                   );
@@ -1394,7 +1372,6 @@ const Customer_Lists: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                {/* ✅ VIEW CUSTOMER BUTTON INSIDE RECEIPT (ABOVE CLOSE) */}
                 {(() => {
                   const viewOn = isCustomerViewOnForSession(activeView, selectedSession.id);
                   return (

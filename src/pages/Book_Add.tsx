@@ -19,12 +19,10 @@ import { closeOutline } from "ionicons/icons";
 import BookingModal from "../components/BookingModal";
 import AddOnsModal from "../components/AddOnsModal";
 import PromoModal from "../components/PromoModal";
-import Seat from "../components/Seat"; // ✅ view-only seat image component
+import Seat from "../components/Seat";
 
 import leaves from "../assets/leave.png";
 import studyHubLogo from "../assets/study_hub.png";
-
-// ✅ receipt logo + supabase
 import logo from "../assets/study_hub.png";
 import { supabase } from "../utils/supabaseClient";
 
@@ -36,7 +34,6 @@ const SEAT_GROUPS: SeatGroup[] = [
   { title: "2ndF", seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"] },
 ];
 
-// ✅ same billing constants as Customer_Lists
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 
@@ -77,7 +74,6 @@ interface CustomerSessionReceipt {
   reservation_date: string | null;
 
   total_amount: number;
-
   down_payment: number;
 
   discount_kind: DiscountKind;
@@ -129,7 +125,8 @@ const toMoney = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
+// ✅ WHOLE NUMBER ONLY + ALWAYS ROUND UP
+const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
   if (typeof v === "boolean") return v;
@@ -200,7 +197,7 @@ const normalizeDurationUnit = (v: unknown): DurationUnit => {
 const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
   const v = Number.isFinite(value) ? Math.max(0, value) : 0;
   if (kind === "percent" && v > 0) return `${v}%`;
-  if (kind === "amount" && v > 0) return `₱${v.toFixed(2)}`;
+  if (kind === "amount" && v > 0) return `₱${wholePeso(v)}`;
   return "—";
 };
 
@@ -214,18 +211,27 @@ const applyDiscount = (
 
   if (kind === "percent") {
     const pct = clamp(v, 0, 100);
-    const disc = round2((cost * pct) / 100);
-    const final = round2(Math.max(0, cost - disc));
-    return { discountedCost: final, discountAmount: disc };
+    const discRaw = (cost * pct) / 100;
+    const finalRaw = Math.max(0, cost - discRaw);
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
   if (kind === "amount") {
-    const disc = round2(Math.min(cost, v));
-    const final = round2(Math.max(0, cost - disc));
-    return { discountedCost: final, discountAmount: disc };
+    const discRaw = Math.min(cost, v);
+    const finalRaw = Math.max(0, cost - discRaw);
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
-  return { discountedCost: round2(cost), discountAmount: 0 };
+  return {
+    discountedCost: wholePeso(cost),
+    discountAmount: 0,
+  };
 };
 
 const isOpenTimeSession = (s: CustomerSessionReceipt): boolean => {
@@ -245,7 +251,7 @@ const computeCostWithFreeMinutes = (startIso: string, endIso: string): number =>
   const minutesUsed = diffMinutes(startIso, endIso);
   const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
   const perMinute = HOURLY_RATE / 60;
-  return round2(chargeMinutes * perMinute);
+  return wholePeso(chargeMinutes * perMinute);
 };
 
 const getBaseSystemCost = (s: CustomerSessionReceipt): number => {
@@ -253,22 +259,21 @@ const getBaseSystemCost = (s: CustomerSessionReceipt): number => {
     const nowIso = new Date().toISOString();
     return computeCostWithFreeMinutes(s.time_started, nowIso);
   }
-  return toMoney(s.total_amount);
+  return wholePeso(toMoney(s.total_amount));
 };
 
-// ✅ display balance/change using DB down_payment
 const getDisplayAmount = (s: CustomerSessionReceipt): { label: "Total Balance" | "Total Change"; value: number } => {
   const base = getBaseSystemCost(s);
   const kind = s.discount_kind ?? "none";
   const val = toMoney(s.discount_value ?? 0);
   const disc = applyDiscount(base, kind, val);
 
-  const dp = round2(Math.max(0, toMoney(s.down_payment ?? 0)));
+  const dp = wholePeso(Math.max(0, toMoney(s.down_payment ?? 0)));
 
-  const balance = round2(Math.max(0, disc.discountedCost - dp));
+  const balance = wholePeso(Math.max(0, disc.discountedCost - dp));
   if (balance > 0) return { label: "Total Balance", value: balance };
 
-  const change = round2(Math.max(0, dp - disc.discountedCost));
+  const change = wholePeso(Math.max(0, dp - disc.discountedCost));
   return { label: "Total Change", value: change };
 };
 
@@ -284,38 +289,27 @@ const isPromoReceipt = (r: ReceiptUnion): r is PromoReceipt => r.kind === "promo
 const Book_Add: React.FC = () => {
   const history = useHistory();
 
-  // MAIN MODALS
   const [isBookingOpen, setIsBookingOpen] = useState<boolean>(false);
   const [isAddOnsOpen, setIsAddOnsOpen] = useState<boolean>(false);
   const [isPromoOpen, setIsPromoOpen] = useState<boolean>(false);
-
-  // ✅ Seat View modal
   const [isSeatOpen, setIsSeatOpen] = useState<boolean>(false);
 
-  // BOOKING SAVED ALERT
   const [bookingSavedOpen, setBookingSavedOpen] = useState<boolean>(false);
   const [bookingSavedMessage, setBookingSavedMessage] = useState<string>("Booking saved successfully.");
 
-  // ADD-ONS SENT ALERT
   const [addOnsSentOpen, setAddOnsSentOpen] = useState<boolean>(false);
 
-  // ✅ CUSTOMER VIEW (from staff) via DB
   const [customerViewEnabled, setCustomerViewEnabled] = useState<boolean>(false);
   const [customerSessionId, setCustomerSessionId] = useState<string>("");
 
-  // ✅ receipt overlay
   const [showReceipt, setShowReceipt] = useState<boolean>(false);
   const [receiptLoading, setReceiptLoading] = useState<boolean>(false);
   const [receipt, setReceipt] = useState<ReceiptUnion | null>(null);
 
-  // ✅ realtime channel ref (cleanup)
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  // ✅ keep last good view state (prevents blinking)
   const lastGoodRef = useRef<{ enabled: boolean; sessionId: string }>({ enabled: false, sessionId: "" });
-
-  // ✅ prevent older requests overwriting newer UI (race guard)
   const fetchSeqRef = useRef<number>(0);
 
   const canOpenReceipt = useMemo(
@@ -327,9 +321,6 @@ const Book_Add: React.FC = () => {
     return canOpenReceipt ? "Ready to view your receipt" : "Ready for booking";
   }, [canOpenReceipt]);
 
-  /* =====================
-     CUSTOMER VIEW (DB) - STABLE
-  ===================== */
   const applyViewState = (enabled: boolean, sessionId: string): void => {
     setCustomerViewEnabled(enabled);
     setCustomerSessionId(sessionId);
@@ -441,24 +432,18 @@ const Book_Add: React.FC = () => {
         date: string;
         full_name: string;
         phone_number: string | null;
-
         customer_type: string;
         customer_field: string | null;
         seat_number: string;
-
         time_started: string;
         time_ended: string;
         hour_avail: string;
-
         reservation: string | null;
         reservation_date: string | null;
-
         total_amount: number | string | null;
         down_payment: number | string | null;
-
         discount_kind: unknown;
         discount_value: unknown;
-
         gcash_amount: unknown;
         cash_amount: unknown;
         is_paid: unknown;
@@ -470,26 +455,20 @@ const Book_Add: React.FC = () => {
         date: d.date,
         full_name: d.full_name,
         phone_number: d.phone_number ?? null,
-
         customer_type: d.customer_type,
         customer_field: d.customer_field ?? null,
         seat_number: d.seat_number,
-
         time_started: d.time_started,
         time_ended: d.time_ended,
         hour_avail: d.hour_avail,
-
         reservation: d.reservation ?? null,
         reservation_date: d.reservation_date ?? null,
-
-        total_amount: toMoney(d.total_amount),
-        down_payment: round2(Math.max(0, toMoney(d.down_payment ?? 0))),
-
+        total_amount: wholePeso(toMoney(d.total_amount)),
+        down_payment: wholePeso(Math.max(0, toMoney(d.down_payment ?? 0))),
         discount_kind: normalizeDiscountKind(d.discount_kind),
-        discount_value: round2(toMoney(d.discount_value)),
-
-        gcash_amount: round2(toMoney(d.gcash_amount)),
-        cash_amount: round2(toMoney(d.cash_amount)),
+        discount_value: wholePeso(toMoney(d.discount_value)),
+        gcash_amount: wholePeso(toMoney(d.gcash_amount)),
+        cash_amount: wholePeso(toMoney(d.cash_amount)),
         is_paid: d.is_paid as boolean | number | string | null,
       };
 
@@ -547,21 +526,17 @@ const Book_Add: React.FC = () => {
         created_at: string;
         full_name: string;
         phone_number: string | null;
-
         area: unknown;
         seat_number: string | null;
         start_at: string;
         end_at: string;
-
         price: number | string | null;
         gcash_amount: number | string | null;
         cash_amount: number | string | null;
         is_paid: boolean | number | string | null;
-
         discount_kind: unknown;
         discount_value: unknown;
         discount_reason: string | null;
-
         packages: PackageJoin;
         package_options: OptionJoin;
       };
@@ -575,21 +550,17 @@ const Book_Add: React.FC = () => {
         created_at: d.created_at,
         full_name: d.full_name,
         phone_number: d.phone_number ?? null,
-
         area: normalizeArea(d.area),
         seat_number: d.seat_number ?? null,
         start_at: d.start_at,
         end_at: d.end_at,
-
-        price: round2(toMoney(d.price)),
-        gcash_amount: round2(toMoney(d.gcash_amount)),
-        cash_amount: round2(toMoney(d.cash_amount)),
+        price: wholePeso(toMoney(d.price)),
+        gcash_amount: wholePeso(toMoney(d.gcash_amount)),
+        cash_amount: wholePeso(toMoney(d.cash_amount)),
         is_paid: d.is_paid,
-
         discount_kind: normalizeDiscountKind(d.discount_kind),
-        discount_value: round2(toMoney(d.discount_value)),
+        discount_value: wholePeso(toMoney(d.discount_value)),
         discount_reason: d.discount_reason ?? null,
-
         packages: pkgObj,
         package_options: optObj
           ? {
@@ -641,7 +612,6 @@ const Book_Add: React.FC = () => {
       <IonHeader />
 
       <IonContent fullscreen className="bookadd-content" scrollY={false}>
-        {/* ✅ LEAVES */}
         <div className="leaf leaf-top-left">
           <img src={leaves} className="leaf-img" alt="leaf" />
         </div>
@@ -654,7 +624,6 @@ const Book_Add: React.FC = () => {
         <div className="leaf leaf-bottom-right">
           <img src={leaves} className="leaf-img" alt="leaf" />
         </div>
-
 
         <div className="bookadd-wrapper">
           <div className="bookadd-hero-card">
@@ -712,7 +681,6 @@ const Book_Add: React.FC = () => {
                 </IonButton>
               </div>
 
-              {/* ✅ Add-Ons */}
               <div className="bookadd-btn-card bookadd-btn-addons">
                 <span className="bookadd-btn-label">Add-Ons</span>
                 <p className="bookadd-btn-desc">Enter seat + name then choose add-ons.</p>
@@ -721,7 +689,6 @@ const Book_Add: React.FC = () => {
                 </IonButton>
               </div>
 
-              {/* ✅ Seat View (MODAL view-only) */}
               <div className="bookadd-btn-card bookadd-btn-addons">
                 <span className="bookadd-btn-label">Seat View</span>
                 <p className="bookadd-btn-desc">Check which seats are occupied or available.</p>
@@ -733,7 +700,6 @@ const Book_Add: React.FC = () => {
           </div>
         </div>
 
-        {/* MODALS */}
         <BookingModal
           isOpen={isBookingOpen}
           onClose={() => setIsBookingOpen(false)}
@@ -758,7 +724,6 @@ const Book_Add: React.FC = () => {
           seatGroups={SEAT_GROUPS}
         />
 
-        {/* ✅ SEAT VIEW MODAL (FIXED THEME — NO WHITE BACKGROUND) */}
         <IonModal
           isOpen={isSeatOpen}
           onDidDismiss={() => setIsSeatOpen(false)}
@@ -782,7 +747,6 @@ const Book_Add: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* ALERTS */}
         <IonAlert
           isOpen={bookingSavedOpen}
           header="Saved"
@@ -813,7 +777,6 @@ const Book_Add: React.FC = () => {
           ]}
         />
 
-        {/* ✅ RECEIPT OVERLAY */}
         {showReceipt && (
           <div className="receipt-overlay" onClick={() => setShowReceipt(false)}>
             <div
@@ -850,7 +813,6 @@ const Book_Add: React.FC = () => {
                 </p>
               ) : isPromoReceipt(receipt) ? (
                 <>
-                  {/* PROMO RECEIPT */}
                   <div className="receipt-row">
                     <span>Date</span>
                     <span>{new Date(receipt.created_at).toLocaleString("en-PH")}</span>
@@ -915,25 +877,25 @@ const Book_Add: React.FC = () => {
                   <hr />
 
                   {(() => {
-                    const base = round2(Math.max(0, toMoney(receipt.price)));
+                    const base = wholePeso(Math.max(0, toMoney(receipt.price)));
                     const { discountedCost, discountAmount } = applyDiscount(
                       base,
                       receipt.discount_kind,
                       receipt.discount_value
                     );
-                    const due = round2(discountedCost);
+                    const due = wholePeso(discountedCost);
 
-                    const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount)));
-                    const cash = round2(Math.max(0, toMoney(receipt.cash_amount)));
-                    const totalPaid = round2(gcash + cash);
-                    const remaining = round2(Math.max(0, due - totalPaid));
+                    const gcash = wholePeso(Math.max(0, toMoney(receipt.gcash_amount)));
+                    const cash = wholePeso(Math.max(0, toMoney(receipt.cash_amount)));
+                    const totalPaid = wholePeso(gcash + cash);
+                    const remaining = wholePeso(Math.max(0, due - totalPaid));
                     const paid = toBool(receipt.is_paid);
 
                     return (
                       <>
                         <div className="receipt-row">
                           <span>System Cost (Before)</span>
-                          <span>₱{base.toFixed(2)}</span>
+                          <span>₱{base}</span>
                         </div>
 
                         <div className="receipt-row">
@@ -943,34 +905,34 @@ const Book_Add: React.FC = () => {
 
                         <div className="receipt-row">
                           <span>Discount Amount</span>
-                          <span>₱{discountAmount.toFixed(2)}</span>
+                          <span>₱{discountAmount}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Final Cost</span>
-                          <span>₱{due.toFixed(2)}</span>
+                          <span>₱{due}</span>
                         </div>
 
                         <hr />
 
                         <div className="receipt-row">
                           <span>GCash</span>
-                          <span>₱{gcash.toFixed(2)}</span>
+                          <span>₱{gcash}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Cash</span>
-                          <span>₱{cash.toFixed(2)}</span>
+                          <span>₱{cash}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Total Paid</span>
-                          <span>₱{totalPaid.toFixed(2)}</span>
+                          <span>₱{totalPaid}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Remaining</span>
-                          <span>₱{remaining.toFixed(2)}</span>
+                          <span>₱{remaining}</span>
                         </div>
 
                         <div className="receipt-row">
@@ -980,7 +942,7 @@ const Book_Add: React.FC = () => {
 
                         <div className="receipt-total">
                           <span>TOTAL</span>
-                          <span>₱{due.toFixed(2)}</span>
+                          <span>₱{due}</span>
                         </div>
                       </>
                     );
@@ -993,7 +955,6 @@ const Book_Add: React.FC = () => {
                 </>
               ) : (
                 <>
-                  {/* CUSTOMER SESSION RECEIPT */}
                   {isReservationSession(receipt) && (
                     <div className="receipt-row">
                       <span>Reservation Date</span>
@@ -1071,28 +1032,28 @@ const Book_Add: React.FC = () => {
                     const baseCost = getBaseSystemCost(receipt);
                     const calc = applyDiscount(baseCost, receipt.discount_kind, receipt.discount_value);
 
-                    const dp = round2(Math.max(0, toMoney(receipt.down_payment ?? 0)));
+                    const dp = wholePeso(Math.max(0, toMoney(receipt.down_payment ?? 0)));
 
-                    const gcash = round2(Math.max(0, toMoney(receipt.gcash_amount)));
-                    const cash = round2(Math.max(0, toMoney(receipt.cash_amount)));
-                    const totalPaid = round2(gcash + cash);
+                    const gcash = wholePeso(Math.max(0, toMoney(receipt.gcash_amount)));
+                    const cash = wholePeso(Math.max(0, toMoney(receipt.cash_amount)));
+                    const totalPaid = wholePeso(gcash + cash);
 
-                    const dpBalance = round2(Math.max(0, calc.discountedCost - dp));
-                    const remaining = round2(Math.max(0, dpBalance - totalPaid));
+                    const dpBalance = wholePeso(Math.max(0, calc.discountedCost - dp));
+                    const remaining = wholePeso(Math.max(0, dpBalance - totalPaid));
 
                     const bottomLabel = dpBalance > 0 ? "PAYMENT DUE" : "TOTAL CHANGE";
-                    const bottomValue = dpBalance > 0 ? dpBalance : round2(Math.max(0, dp - calc.discountedCost));
+                    const bottomValue = dpBalance > 0 ? dpBalance : wholePeso(Math.max(0, dp - calc.discountedCost));
 
                     return (
                       <>
                         <div className="receipt-row">
                           <span>{disp.label}</span>
-                          <span>₱{disp.value.toFixed(2)}</span>
+                          <span>₱{disp.value}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Down Payment</span>
-                          <span>₱{dp.toFixed(2)}</span>
+                          <span>₱{dp}</span>
                         </div>
 
                         <div className="receipt-row">
@@ -1102,34 +1063,34 @@ const Book_Add: React.FC = () => {
 
                         <div className="receipt-row">
                           <span>Discount Amount</span>
-                          <span>₱{calc.discountAmount.toFixed(2)}</span>
+                          <span>₱{calc.discountAmount}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>System Cost (Payment Basis)</span>
-                          <span>₱{calc.discountedCost.toFixed(2)}</span>
+                          <span>₱{calc.discountedCost}</span>
                         </div>
 
                         <hr />
 
                         <div className="receipt-row">
                           <span>GCash</span>
-                          <span>₱{gcash.toFixed(2)}</span>
+                          <span>₱{gcash}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Cash</span>
-                          <span>₱{cash.toFixed(2)}</span>
+                          <span>₱{cash}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Total Paid</span>
-                          <span>₱{totalPaid.toFixed(2)}</span>
+                          <span>₱{totalPaid}</span>
                         </div>
 
                         <div className="receipt-row">
                           <span>Remaining Balance (After DP)</span>
-                          <span>₱{remaining.toFixed(2)}</span>
+                          <span>₱{remaining}</span>
                         </div>
 
                         <div className="receipt-row">
@@ -1139,7 +1100,7 @@ const Book_Add: React.FC = () => {
 
                         <div className="receipt-total">
                           <span>{bottomLabel}</span>
-                          <span>₱{bottomValue.toFixed(2)}</span>
+                          <span>₱{bottomValue}</span>
                         </div>
                       </>
                     );

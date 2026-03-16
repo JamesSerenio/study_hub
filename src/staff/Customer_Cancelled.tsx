@@ -1127,7 +1127,12 @@ const Customer_Cancelled: React.FC = () => {
               ) : groupedAddOns.length === 0 ? (
                 <p className="customer-note">No cancelled add-ons found for this date</p>
               ) : (
-                <div className="customer-table-wrap" key={`${selectedDate}-addons`}>
+                <div className="customer-table-wrap" key={`${selectedDate}-addons`}
+                    style={{
+                    maxHeight: "570px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}>
                   <table className="customer-table">
                     <thead>
                       <tr>
@@ -1291,7 +1296,12 @@ const Customer_Cancelled: React.FC = () => {
               ) : rowsSessions.length === 0 ? (
                 <p className="customer-note">No cancelled sessions found for this date</p>
               ) : (
-                <div className="customer-table-wrap" key={`${selectedDate}-${tab}`}>
+                <div className="customer-table-wrap" key={`${selectedDate}-${tab}`}
+                    style={{
+                    maxHeight: "570px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}>
                   <table className="customer-table">
                     <thead>
                       <tr>
@@ -1518,7 +1528,12 @@ const Customer_Cancelled: React.FC = () => {
               ) : rowsPromo.length === 0 ? (
                 <p className="customer-note">No cancelled promo (membership) records found for this date</p>
               ) : (
-                <div className="customer-table-wrap" key={`${selectedDate}-promo`}>
+                <div className="customer-table-wrap" key={`${selectedDate}-promo`}
+                    style={{
+                    maxHeight: "570px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}>
                   <table className="customer-table">
                     <thead>
                       <tr>
@@ -1741,7 +1756,12 @@ const Customer_Cancelled: React.FC = () => {
               ) : rowsConsignment.length === 0 ? (
                 <p className="customer-note">No cancelled consignment records found for this date</p>
               ) : (
-                <div className="customer-table-wrap" key={`${selectedDate}-consignment`}>
+                <div className="customer-table-wrap" key={`${selectedDate}-consignment`}
+                    style={{
+                    maxHeight: "570px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}>
                   <table className="customer-table">
                     <thead>
                       <tr>

@@ -516,7 +516,15 @@ const Customer_Add_ons: React.FC = () => {
           ) : groupedOrders.length === 0 ? (
             <p className="customer-note">No add-ons found for this date</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}>
+                  <div
+                  className="customer-table-wrap"
+                  key={selectedDate}
+                  style={{
+                    maxHeight: "560px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}
+                >
               <table className="customer-table">
                 <thead>
                   <tr>
