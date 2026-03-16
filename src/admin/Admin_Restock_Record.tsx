@@ -1,11 +1,16 @@
 // src/pages/Admin_Restock_Record.tsx
-// ✅ Day/Month filter via IonDatetime modal (same calendar style)
-// ✅ Export CSV (Excel) based on selected Day/Month
-// ✅ Delete by filter (Day/Month): reverses add_ons.restocked then deletes restock rows
-// ✅ Edit RESTOCK (exact value): updates restock qty + adjusts add_ons.restocked by delta
-// ✅ Void row: reverses add_ons.restocked then deletes row
-// ✅ Table shows: image, item, category, restock, restock date, actions
-// ✅ No "any" + safe parsing + normalize join (object or array)
+// ✅ FIX (as you asked):
+// - Hindi ko binago layout mo.
+// - INANGAT yung search bar (inline CSS) para um-align sa row ng REFRESH/DELETE.
+// ✅ FIX (NEW):
+// - Consignment dropdown now shows records correctly by JOINing consignment_restocks -> consignment
+// - Backward compatible if your consignment_restocks already stores item fields.
+// ✅ UI FIX (YOUR REQUEST):
+// - EDIT modal now SAME STYLE as Staff_Consignment_Record EDIT (receipt-overlay / receipt-container)
+// - SAME classnames (receipt-* / money-input / modal-actions / receipt-btn)
+// ✅ NEW (YOUR REQUEST):
+// - Export/Filter mode now supports: DAY / WEEK / MONTH
+// - Delete By filter now supports: DAY / WEEK / MONTH
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -19,17 +24,12 @@ import {
   RefresherEventDetail,
   IonButton,
   IonIcon,
-  IonItem,
-  IonLabel,
-  IonInput,
   IonSpinner,
   IonModal,
   IonButtons,
   IonDatetime,
   IonAlert,
   IonToast,
-  IonSelect,
-  IonSelectOption,
 } from "@ionic/react";
 import {
   refreshOutline,
@@ -43,8 +43,15 @@ import {
 } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
-type FilterMode = "day" | "month";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 
+type FilterMode = "day" | "week" | "month";
+type SourceKind = "add_ons" | "consignment";
+
+/* =========================
+   ADD-ONS TYPES
+========================= */
 type AddOnJoin = {
   name: string | null;
   category: string | null;
@@ -55,9 +62,9 @@ type AddOnJoinRaw = AddOnJoin | AddOnJoin[] | null;
 
 interface RestockRecordRow {
   id: string;
-  created_at: string; // timestamptz
+  created_at: string;
   add_on_id: string;
-  qty: number; // restock qty for this record row
+  qty: number;
   add_ons: AddOnJoin | null;
 }
 
@@ -69,12 +76,55 @@ type RestockRecordRaw = {
   add_ons?: unknown;
 };
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null;
+/* =========================
+   CONSIGNMENT RESTOCK TYPES
+========================= */
+type ConsJoin = {
+  full_name: string | null;
+  category: string | null;
+  item_name: string | null;
+  size: string | null;
+  image_url: string | null;
+};
 
-const asStringOrNull = (v: unknown): string | null =>
-  typeof v === "string" ? v : null;
+type ConsJoinRaw = ConsJoin | ConsJoin[] | null;
 
+type ConsRestockRow = {
+  id: string;
+  created_at: string;
+  consignment_id: string;
+  qty: number;
+
+  full_name: string;
+  category: string | null;
+  item_name: string;
+  size: string | null;
+  image_url: string | null;
+};
+
+type ConsRestockRaw = {
+  id: unknown;
+  created_at: unknown;
+  consignment_id: unknown;
+  qty: unknown;
+
+  // Old/flat fields (if stored in restock table)
+  full_name?: unknown;
+  category?: unknown;
+  item_name?: unknown;
+  size?: unknown;
+  image_url?: unknown;
+
+  // ✅ NEW join payload from Supabase select
+  consignment?: unknown;
+};
+
+/* =========================
+   SAFE PARSERS
+========================= */
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+const asStringOrNull = (v: unknown): string | null => (typeof v === "string" ? v : null);
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
 
 const asNumber = (v: unknown): number => {
@@ -117,7 +167,7 @@ const normalizeAddOns = (v: unknown): AddOnJoin | null => {
   return null;
 };
 
-const normalizeRow = (raw: unknown): RestockRecordRow | null => {
+const normalizeAddOnRow = (raw: unknown): RestockRecordRow | null => {
   if (!isRecord(raw)) return null;
   const r = raw as RestockRecordRaw;
 
@@ -135,30 +185,78 @@ const normalizeRow = (raw: unknown): RestockRecordRow | null => {
   };
 };
 
-const todayKey = (): string => {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+// ✅ NEW: normalize consignment join object
+const normalizeConsJoin = (v: unknown): ConsJoin | null => {
+  if (!v) return null;
+
+  if (Array.isArray(v)) {
+    const first = v[0];
+    if (!isRecord(first)) return null;
+    return {
+      full_name: asStringOrNull(first.full_name),
+      category: asStringOrNull(first.category),
+      item_name: asStringOrNull(first.item_name),
+      size: asStringOrNull(first.size),
+      image_url: asStringOrNull(first.image_url),
+    };
+  }
+
+  if (isRecord(v)) {
+    return {
+      full_name: asStringOrNull(v.full_name),
+      category: asStringOrNull(v.category),
+      item_name: asStringOrNull(v.item_name),
+      size: asStringOrNull(v.size),
+      image_url: asStringOrNull(v.image_url),
+    };
+  }
+
+  return null;
 };
+
+const normalizeConsRow = (raw: unknown): ConsRestockRow | null => {
+  if (!isRecord(raw)) return null;
+  const r = raw as ConsRestockRaw;
+
+  const id = asString(r.id);
+  const created_at = asString(r.created_at);
+  const consignment_id = asString(r.consignment_id);
+  if (!id || !created_at || !consignment_id) return null;
+
+  // Prefer joined consignment fields if present
+  const join = normalizeConsJoin(r.consignment as ConsJoinRaw);
+
+  const full_name = (join?.full_name ?? asString(r.full_name)).trim();
+  const item_name = (join?.item_name ?? asString(r.item_name)).trim();
+
+  // If still missing, skip row (cannot display)
+  if (!full_name || !item_name) return null;
+
+  return {
+    id,
+    created_at,
+    consignment_id,
+    qty: asNumber(r.qty),
+    full_name,
+    category: join?.category ?? asStringOrNull(r.category),
+    item_name,
+    size: join?.size ?? asStringOrNull(r.size),
+    image_url: join?.image_url ?? asStringOrNull(r.image_url),
+  };
+};
+
+/* =========================
+   DATE HELPERS
+========================= */
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+const ymd = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+const todayKey = (): string => ymd(new Date());
 
 const monthKeyNow = (): string => {
   const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
-};
-
-const formatDateTime = (iso: string): string => {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 };
 
 const dateKeyFromISO = (iso: string): string => iso.split("T")[0] || "";
@@ -174,38 +272,74 @@ const normalizeMonthValue = (v: string): string => {
   return base;
 };
 
-const buildCSV = (rows: RestockRecordRow[]): string => {
-  const header = ["Restock Date", "Item Name", "Category", "Restock"];
-  const lines = [header.join(",")];
-
-  for (const r of rows) {
-    const d = dateKeyFromISO(r.created_at);
-    const name = (r.add_ons?.name ?? "Unknown").replaceAll('"', '""');
-    const cat = (r.add_ons?.category ?? "—").replaceAll('"', '""');
-    const qty = String(r.qty);
-
-    lines.push([`="${d}"`, `"${name}"`, `"${cat}"`, qty].join(","));
-  }
-
-  return "\uFEFF" + lines.join("\n");
+const formatDateTime = (iso: string): string => {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 };
 
-const downloadCSV = (filename: string, csv: string): void => {
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+// ✅ Week helpers (Monday-start week)
+const startOfWeekISO = (ymdStr: string): string => {
+  const [yy, mm, dd] = ymdStr.split("-").map((x) => Number(x));
+  if (!yy || !mm || !dd) return ymdStr;
 
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const d = new Date(yy, mm - 1, dd);
+  // JS: Sun=0..Sat=6 ; we want Monday=0..Sunday=6
+  const dow = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - dow);
+  return ymd(d);
+};
 
-  URL.revokeObjectURL(url);
+const addDaysISO = (ymdStr: string, days: number): string => {
+  const [yy, mm, dd] = ymdStr.split("-").map((x) => Number(x));
+  if (!yy || !mm || !dd) return ymdStr;
+  const d = new Date(yy, mm - 1, dd);
+  d.setDate(d.getDate() + days);
+  return ymd(d);
+};
+
+const inInclusiveRange = (targetISODate: string, startISO: string, endISO: string): boolean =>
+  targetISODate >= startISO && targetISODate <= endISO;
+
+/* =========================
+   EXCEL IMAGE HELPERS
+========================= */
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const res = reader.result;
+      if (typeof res !== "string") return reject(new Error("Failed to convert image"));
+      const base64 = res.split(",")[1] ?? "";
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("FileReader error"));
+    reader.readAsDataURL(blob);
+  });
+
+const fetchImageBase64 = async (url: string): Promise<{ base64: string; ext: "png" | "jpeg" }> => {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Image fetch failed");
+
+  const ct = (r.headers.get("content-type") ?? "").toLowerCase();
+  const blob = await r.blob();
+  const base64 = await blobToBase64(blob);
+
+  const isPng = ct.includes("png") || url.toLowerCase().includes(".png");
+  const ext: "png" | "jpeg" = isPng ? "png" : "jpeg";
+  return { base64, ext };
 };
 
 const Admin_Restock_Record: React.FC = () => {
-  const [records, setRecords] = useState<RestockRecordRow[]>([]);
+  const [source, setSource] = useState<SourceKind>("add_ons");
+
+  const [recordsAddOn, setRecordsAddOn] = useState<RestockRecordRow[]>([]);
+  const [recordsCons, setRecordsCons] = useState<ConsRestockRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   const [toastOpen, setToastOpen] = useState(false);
@@ -215,43 +349,91 @@ const Admin_Restock_Record: React.FC = () => {
 
   const [filterMode, setFilterMode] = useState<FilterMode>("day");
   const [selectedDate, setSelectedDate] = useState<string>("");
+  const [selectedWeek, setSelectedWeek] = useState<string>(""); // store an anchor date (YYYY-MM-DD)
   const [selectedMonth, setSelectedMonth] = useState<string>("");
 
   const [dateModalOpen, setDateModalOpen] = useState<boolean>(false);
   const [showDeleteFilterAlert, setShowDeleteFilterAlert] = useState(false);
 
-  // ✅ EDIT EXACT VALUE
+  // ✅ Edit overlay (same as Staff_Consignment_Record)
   const [editOpen, setEditOpen] = useState(false);
-  const [editingRow, setEditingRow] = useState<RestockRecordRow | null>(null);
-  const [editQty, setEditQty] = useState<string>("0"); // new exact restock value
+  const [editQty, setEditQty] = useState<string>("0");
 
-  const [voidRow, setVoidRow] = useState<RestockRecordRow | null>(null);
+  const [editingAddOn, setEditingAddOn] = useState<RestockRecordRow | null>(null);
+  const [editingCons, setEditingCons] = useState<ConsRestockRow | null>(null);
+
+  const [voidAddOn, setVoidAddOn] = useState<RestockRecordRow | null>(null);
+  const [voidCons, setVoidCons] = useState<ConsRestockRow | null>(null);
 
   const notify = (msg: string): void => {
     setToastMsg(msg);
     setToastOpen(true);
   };
 
+  const fetchAddOnRecords = async (): Promise<void> => {
+    const { data, error } = await supabase
+      .from("add_on_restocks")
+      .select("id, created_at, add_on_id, qty, add_ons(name, category, image_url)")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const rawList: unknown[] = Array.isArray(data) ? (data as unknown[]) : [];
+    const normalized = rawList.map((x) => normalizeAddOnRow(x)).filter((x): x is RestockRecordRow => x !== null);
+    setRecordsAddOn(normalized);
+  };
+
+  // ✅ FIXED: JOIN consignment_restocks -> consignment
+  const fetchConsRecords = async (): Promise<void> => {
+    const joined = await supabase
+      .from("consignment_restocks")
+      .select(
+        `
+        id,
+        created_at,
+        consignment_id,
+        qty,
+        consignment:consignment_id (
+          full_name,
+          category,
+          item_name,
+          size,
+          image_url
+        )
+      `
+      )
+      .order("created_at", { ascending: false });
+
+    if (!joined.error) {
+      const rawList: unknown[] = Array.isArray(joined.data) ? (joined.data as unknown[]) : [];
+      const normalized = rawList.map((x) => normalizeConsRow(x)).filter((x): x is ConsRestockRow => x !== null);
+      setRecordsCons(normalized);
+      return;
+    }
+
+    const flat = await supabase
+      .from("consignment_restocks")
+      .select("id, created_at, consignment_id, qty, full_name, category, item_name, size, image_url")
+      .order("created_at", { ascending: false });
+
+    if (flat.error) throw flat.error;
+
+    const rawList: unknown[] = Array.isArray(flat.data) ? (flat.data as unknown[]) : [];
+    const normalized = rawList.map((x) => normalizeConsRow(x)).filter((x): x is ConsRestockRow => x !== null);
+    setRecordsCons(normalized);
+  };
+
   const fetchRecords = async (): Promise<void> => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("add_on_restocks")
-        .select("id, created_at, add_on_id, qty, add_ons(name, category, image_url)")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-
-      const rawList: unknown[] = Array.isArray(data) ? (data as unknown[]) : [];
-      const normalized = rawList
-        .map((x) => normalizeRow(x))
-        .filter((x): x is RestockRecordRow => x !== null);
-
-      setRecords(normalized);
+      if (source === "add_ons") await fetchAddOnRecords();
+      else await fetchConsRecords();
     } catch (err) {
-      console.error("Error fetching restock records:", err);
-      setRecords([]);
+      // eslint-disable-next-line no-console
+      console.error("Error fetching records:", err);
       notify("Failed to load restock records.");
+      if (source === "add_ons") setRecordsAddOn([]);
+      else setRecordsCons([]);
     } finally {
       setLoading(false);
     }
@@ -259,26 +441,56 @@ const Admin_Restock_Record: React.FC = () => {
 
   useEffect(() => {
     void fetchRecords();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source]);
 
   const handleRefresh = (event: CustomEvent<RefresherEventDetail>): void => {
     void fetchRecords().then(() => event.detail.complete());
   };
 
+  // ✅ Active filter label (DAY / WEEK RANGE / MONTH)
   const activeDateLabel = useMemo(() => {
     if (filterMode === "day") return selectedDate || todayKey();
-    return selectedMonth || monthKeyNow();
-  }, [filterMode, selectedDate, selectedMonth]);
 
-  const filtered = useMemo(() => {
+    if (filterMode === "week") {
+      const anchor = selectedWeek || todayKey();
+      const start = startOfWeekISO(anchor);
+      const end = addDaysISO(start, 6);
+      return `${start} to ${end}`;
+    }
+
+    return selectedMonth || monthKeyNow();
+  }, [filterMode, selectedDate, selectedWeek, selectedMonth]);
+
+  // ✅ helper: check if row matches active filter
+  const rowMatchesFilter = (createdAtISO: string): boolean => {
+    const d = dateKeyFromISO(createdAtISO);
+
+    if (filterMode === "day") {
+      const key = selectedDate || "";
+      if (!key) return true; // no filter chosen -> show all
+      return d === key;
+    }
+
+    if (filterMode === "week") {
+      const anchor = selectedWeek || "";
+      if (!anchor) return true; // no filter chosen -> show all
+      const start = startOfWeekISO(anchor);
+      const end = addDaysISO(start, 6);
+      return inInclusiveRange(d, start, end);
+    }
+
+    // month
+    const mk = selectedMonth || "";
+    if (!mk) return true;
+    return monthKeyFromISO(createdAtISO) === mk;
+  };
+
+  const filteredAddOn = useMemo(() => {
     const q = search.trim().toLowerCase();
 
-    return records.filter((r) => {
-      if (filterMode === "day") {
-        if (selectedDate && dateKeyFromISO(r.created_at) !== selectedDate) return false;
-      } else {
-        if (selectedMonth && monthKeyFromISO(r.created_at) !== selectedMonth) return false;
-      }
+    return recordsAddOn.filter((r) => {
+      if (!rowMatchesFilter(r.created_at)) return false;
 
       if (!q) return true;
 
@@ -286,146 +498,228 @@ const Admin_Restock_Record: React.FC = () => {
       const category = (r.add_ons?.category ?? "").toLowerCase();
       return name.includes(q) || category.includes(q);
     });
-  }, [records, search, filterMode, selectedDate, selectedMonth]);
+  }, [recordsAddOn, search, filterMode, selectedDate, selectedWeek, selectedMonth]);
 
-  const openCalendar = (): void => setDateModalOpen(true);
+  const filteredCons = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return recordsCons.filter((r) => {
+      if (!rowMatchesFilter(r.created_at)) return false;
+
+      if (!q) return true;
+
+      const item = (r.item_name ?? "").toLowerCase();
+      const cat = (r.category ?? "").toLowerCase();
+      const owner = (r.full_name ?? "").toLowerCase();
+      return item.includes(q) || cat.includes(q) || owner.includes(q);
+    });
+  }, [recordsCons, search, filterMode, selectedDate, selectedWeek, selectedMonth]);
+
+  const activeRowsCount = source === "add_ons" ? filteredAddOn.length : filteredCons.length;
+
+  const totalQty = useMemo(() => {
+    if (source === "add_ons") return filteredAddOn.reduce((sum, r) => sum + (Number.isFinite(r.qty) ? r.qty : 0), 0);
+    return filteredCons.reduce((sum, r) => sum + (Number.isFinite(r.qty) ? r.qty : 0), 0);
+  }, [source, filteredAddOn, filteredCons]);
 
   const clearFilterValue = (): void => {
     if (filterMode === "day") setSelectedDate("");
+    else if (filterMode === "week") setSelectedWeek("");
     else setSelectedMonth("");
   };
 
-  const exportCSV = (): void => {
-    const csv = buildCSV(filtered);
-    const suffix =
-      filterMode === "day"
-        ? selectedDate || todayKey()
-        : selectedMonth || monthKeyNow();
-    downloadCSV(`restock_records_${suffix}.csv`, csv);
-  };
+  const hasActiveFilter = useMemo(() => {
+    if (filterMode === "day") return !!selectedDate;
+    if (filterMode === "week") return !!selectedWeek;
+    return !!selectedMonth;
+  }, [filterMode, selectedDate, selectedWeek, selectedMonth]);
 
   /* ==========================
-     DB HELPERS
+     DB HELPERS (ADD-ONS)
   =========================== */
-
-  const adjustRestocked = async (addOnId: string, delta: number): Promise<void> => {
+  const adjustRestockedAddOns = async (addOnId: string, delta: number): Promise<void> => {
     if (!Number.isFinite(delta) || delta === 0) return;
 
-    const { data: currentRow, error: readErr } = await supabase
-      .from("add_ons")
-      .select("restocked")
-      .eq("id", addOnId)
-      .single();
-
+    const { data: currentRow, error: readErr } = await supabase.from("add_ons").select("restocked").eq("id", addOnId).single();
     if (readErr) throw readErr;
 
     const currentRestocked = asNumber((currentRow as Record<string, unknown>)["restocked"]);
     const next = currentRestocked + delta;
     const safeNext = next < 0 ? 0 : next;
 
-    const { error: upErr } = await supabase
-      .from("add_ons")
-      .update({ restocked: safeNext })
-      .eq("id", addOnId);
-
+    const { error: upErr } = await supabase.from("add_ons").update({ restocked: safeNext }).eq("id", addOnId);
     if (upErr) throw upErr;
   };
 
-  const doVoidRow = async (row: RestockRecordRow): Promise<void> => {
+  /* ==========================
+     DB HELPERS (CONSIGNMENT)
+  =========================== */
+  const adjustRestockedConsignment = async (consignmentId: string, delta: number): Promise<void> => {
+    if (!Number.isFinite(delta) || delta === 0) return;
+
+    const { data: currentRow, error: readErr } = await supabase.from("consignment").select("restocked").eq("id", consignmentId).single();
+    if (readErr) throw readErr;
+
+    const currentRestocked = asNumber((currentRow as Record<string, unknown>)["restocked"]);
+    const next = currentRestocked + delta;
+    const safeNext = next < 0 ? 0 : next;
+
+    const { error: upErr } = await supabase.from("consignment").update({ restocked: safeNext }).eq("id", consignmentId);
+    if (upErr) throw upErr;
+  };
+
+  const doVoidAddOnRow = async (row: RestockRecordRow): Promise<void> => {
     try {
-      await adjustRestocked(row.add_on_id, -row.qty);
-
-      const { error: delErr } = await supabase
-        .from("add_on_restocks")
-        .delete()
-        .eq("id", row.id);
-
+      await adjustRestockedAddOns(row.add_on_id, -row.qty);
+      const { error: delErr } = await supabase.from("add_on_restocks").delete().eq("id", row.id);
       if (delErr) throw delErr;
 
-      setRecords((prev) => prev.filter((x) => x.id !== row.id));
+      setRecordsAddOn((prev) => prev.filter((x) => x.id !== row.id));
       notify("Voided. Restock and stocks reverted.");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Failed to void record.");
     }
   };
 
-  // ✅ OPEN EDIT (exact value)
-  const openEdit = (row: RestockRecordRow): void => {
-    setEditingRow(row);
-    setEditQty(String(row.qty)); // show current qty as editable
+  const doVoidConsRow = async (row: ConsRestockRow): Promise<void> => {
+    try {
+      await adjustRestockedConsignment(row.consignment_id, -row.qty);
+      const { error: delErr } = await supabase.from("consignment_restocks").delete().eq("id", row.id);
+      if (delErr) throw delErr;
+
+      setRecordsCons((prev) => prev.filter((x) => x.id !== row.id));
+      notify("Voided. Consignment restock reverted.");
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      notify("Failed to void consignment record.");
+    }
+  };
+
+  const openEditAddOn = (row: RestockRecordRow): void => {
+    setEditingAddOn(row);
+    setEditingCons(null);
+    setEditQty(String(row.qty));
     setEditOpen(true);
   };
 
-  // ✅ SAVE EDIT (exact value) with delta adjustment
-  const saveEditQty = async (): Promise<void> => {
-    if (!editingRow) return;
+  const openEditCons = (row: ConsRestockRow): void => {
+    setEditingCons(row);
+    setEditingAddOn(null);
+    setEditQty(String(row.qty));
+    setEditOpen(true);
+  };
 
+  const closeEdit = (): void => {
+    setEditOpen(false);
+    setEditingAddOn(null);
+    setEditingCons(null);
+  };
+
+  const saveEditQty = async (): Promise<void> => {
     const newQty = clampInt(editQty, 0);
     if (newQty <= 0) {
       notify("Restock must be at least 1.");
       return;
     }
 
-    const oldQty = editingRow.qty;
-    const delta = newQty - oldQty; // ✅ only affects THIS row difference
-
     try {
-      await adjustRestocked(editingRow.add_on_id, delta);
+      if (editingAddOn) {
+        const oldQty = editingAddOn.qty;
+        const delta = newQty - oldQty;
 
-      const { data: upData, error: upErr } = await supabase
-        .from("add_on_restocks")
-        .update({ qty: newQty })
-        .eq("id", editingRow.id)
-        .select("id")
-        .maybeSingle();
+        await adjustRestockedAddOns(editingAddOn.add_on_id, delta);
 
-      if (upErr) throw upErr;
-      if (!upData) {
-        notify("Update blocked (check RLS policy for add_on_restocks).");
-        return;
+        const { data: upData, error: upErr } = await supabase
+          .from("add_on_restocks")
+          .update({ qty: newQty })
+          .eq("id", editingAddOn.id)
+          .select("id")
+          .maybeSingle();
+
+        if (upErr) throw upErr;
+        if (!upData) {
+          notify("Update blocked (check RLS policy).");
+          return;
+        }
+
+        setRecordsAddOn((prev) => prev.map((x) => (x.id === editingAddOn.id ? { ...x, qty: newQty } : x)));
+        notify("Restock edited.");
       }
 
-      setRecords((prev) =>
-        prev.map((x) => (x.id === editingRow.id ? { ...x, qty: newQty } : x))
-      );
+      if (editingCons) {
+        const oldQty = editingCons.qty;
+        const delta = newQty - oldQty;
 
-      notify("Restock edited.");
-      setEditOpen(false);
-      setEditingRow(null);
+        await adjustRestockedConsignment(editingCons.consignment_id, delta);
 
+        const { data: upData, error: upErr } = await supabase
+          .from("consignment_restocks")
+          .update({ qty: newQty })
+          .eq("id", editingCons.id)
+          .select("id")
+          .maybeSingle();
+
+        if (upErr) throw upErr;
+        if (!upData) {
+          notify("Update blocked (check RLS policy).");
+          return;
+        }
+
+        setRecordsCons((prev) => prev.map((x) => (x.id === editingCons.id ? { ...x, qty: newQty } : x)));
+        notify("Consignment restock edited.");
+      }
+
+      closeEdit();
       void fetchRecords();
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Failed to edit restock.");
     }
   };
 
   const deleteByFilter = async (): Promise<void> => {
-    const rowsToDelete = filtered;
-
-    if (rowsToDelete.length === 0) {
-      notify("No records to delete for the selected filter.");
-      setShowDeleteFilterAlert(false);
-      return;
-    }
-
     try {
-      for (const r of rowsToDelete) {
-        await adjustRestocked(r.add_on_id, -r.qty);
+      const mode = filterMode;
+
+      if (source === "add_ons") {
+        const rowsToDelete = filteredAddOn;
+        if (rowsToDelete.length === 0) {
+          notify("No records to delete for the selected filter.");
+          setShowDeleteFilterAlert(false);
+          return;
+        }
+
+        for (const r of rowsToDelete) await adjustRestockedAddOns(r.add_on_id, -r.qty);
+
+        const ids = rowsToDelete.map((r) => r.id);
+        const { error: delErr } = await supabase.from("add_on_restocks").delete().in("id", ids);
+        if (delErr) throw delErr;
+
+        setRecordsAddOn((prev) => prev.filter((x) => !ids.includes(x.id)));
+        notify(`Deleted add-ons records by ${mode.toUpperCase()} and reverted restock/stocks.`);
+      } else {
+        const rowsToDelete = filteredCons;
+        if (rowsToDelete.length === 0) {
+          notify("No records to delete for the selected filter.");
+          setShowDeleteFilterAlert(false);
+          return;
+        }
+
+        for (const r of rowsToDelete) await adjustRestockedConsignment(r.consignment_id, -r.qty);
+
+        const ids = rowsToDelete.map((r) => r.id);
+        const { error: delErr } = await supabase.from("consignment_restocks").delete().in("id", ids);
+        if (delErr) throw delErr;
+
+        setRecordsCons((prev) => prev.filter((x) => !ids.includes(x.id)));
+        notify(`Deleted consignment restock records by ${mode.toUpperCase()} and reverted restock.`);
       }
-
-      const ids = rowsToDelete.map((r) => r.id);
-      const { error: delErr } = await supabase
-        .from("add_on_restocks")
-        .delete()
-        .in("id", ids);
-
-      if (delErr) throw delErr;
-
-      setRecords((prev) => prev.filter((x) => !ids.includes(x.id)));
-      notify("Deleted records and reverted restock/stocks.");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       notify("Failed to delete by filter.");
     } finally {
@@ -433,136 +727,355 @@ const Admin_Restock_Record: React.FC = () => {
     }
   };
 
+  const exportExcel = async (): Promise<void> => {
+    try {
+      const now = new Date();
+      const modeLabel = filterMode.toUpperCase();
+
+      // ✅ Export label depends on day/week/month
+      let filterLabel = "";
+      if (filterMode === "day") {
+        filterLabel = selectedDate || todayKey();
+      } else if (filterMode === "week") {
+        const anchor = selectedWeek || todayKey();
+        const start = startOfWeekISO(anchor);
+        const end = addDaysISO(start, 6);
+        filterLabel = `${start}_to_${end}`;
+      } else {
+        filterLabel = selectedMonth || monthKeyNow();
+      }
+
+      const title = source === "add_ons" ? "ADD-ONS RESTOCK RECORDS REPORT" : "CONSIGNMENT RESTOCK RECORDS REPORT";
+      const generated = `Generated: ${now.toLocaleString()}`;
+      const info = `Source: ${source.toUpperCase()}   Mode: ${modeLabel}   Filter: ${filterLabel.replaceAll("_", " ")}   Search: ${
+        search.trim() ? search.trim() : "—"
+      }`;
+      const summary = `Total Rows: ${activeRowsCount}   Total Restock Qty: ${totalQty}`;
+
+      const workbook = new ExcelJS.Workbook();
+      const ws = workbook.addWorksheet("Restocks", { views: [{ state: "frozen", ySplit: 6 }] });
+
+      ws.columns =
+        source === "add_ons"
+          ? [
+              { header: "Image", key: "image", width: 14 },
+              { header: "Item Name", key: "name", width: 34 },
+              { header: "Category", key: "category", width: 18 },
+              { header: "Restock Qty", key: "qty", width: 14 },
+              { header: "Restock Date", key: "date", width: 18 },
+              { header: "Restock Time", key: "time", width: 14 },
+            ]
+          : [
+              { header: "Image", key: "image", width: 14 },
+              { header: "Item Name", key: "name", width: 34 },
+              { header: "Owner", key: "owner", width: 22 },
+              { header: "Category", key: "category", width: 18 },
+              { header: "Restock Qty", key: "qty", width: 14 },
+              { header: "Restock Date", key: "date", width: 18 },
+              { header: "Restock Time", key: "time", width: 14 },
+            ];
+
+      const colCount = ws.columns.length;
+
+      ws.mergeCells(1, 1, 1, colCount);
+      ws.mergeCells(2, 1, 2, colCount);
+      ws.mergeCells(3, 1, 3, colCount);
+      ws.mergeCells(4, 1, 4, colCount);
+
+      ws.getCell("A1").value = title;
+      ws.getCell("A2").value = generated;
+      ws.getCell("A3").value = info;
+      ws.getCell("A4").value = summary;
+
+      ws.getCell("A1").font = { bold: true, size: 16 };
+      ws.getCell("A2").font = { size: 11 };
+      ws.getCell("A3").font = { size: 11 };
+      ws.getCell("A4").font = { size: 11, bold: true };
+
+      ws.addRow([]);
+
+      const headerRow = ws.getRow(6);
+      const headers = ws.columns.map((c) => String(c.header ?? ""));
+      headerRow.values = ["", ...headers];
+      headerRow.font = { bold: true };
+      headerRow.alignment = { vertical: "middle", horizontal: "center" };
+      headerRow.height = 20;
+
+      headerRow.eachCell((cell) => {
+        cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEFEF" } };
+      });
+
+      let rowIndex = 7;
+
+      if (source === "add_ons") {
+        for (const r of filteredAddOn) {
+          const row = ws.getRow(rowIndex);
+
+          const name = r.add_ons?.name ?? "Unknown";
+          const cat = r.add_ons?.category ?? "—";
+
+          const d = new Date(r.created_at);
+          const datePart = isNaN(d.getTime()) ? dateKeyFromISO(r.created_at) : ymd(d);
+          const timePart = isNaN(d.getTime()) ? "" : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+          row.getCell(2).value = name;
+          row.getCell(3).value = cat;
+          row.getCell(4).value = Number(r.qty ?? 0);
+          row.getCell(5).value = datePart;
+          row.getCell(6).value = timePart;
+
+          row.height = 52;
+
+          for (let c = 1; c <= 6; c++) {
+            const cell = row.getCell(c);
+            cell.alignment = c === 2 ? { vertical: "middle", horizontal: "left", wrapText: true } : { vertical: "middle", horizontal: "center" };
+            cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+          }
+
+          const imgUrl = r.add_ons?.image_url ?? null;
+          if (imgUrl) {
+            try {
+              const { base64, ext } = await fetchImageBase64(imgUrl);
+              const imgId = workbook.addImage({ base64, extension: ext });
+              ws.addImage(imgId, { tl: { col: 0.15, row: rowIndex - 1 + 0.15 }, ext: { width: 48, height: 48 } });
+            } catch {
+              // ignore
+            }
+          }
+
+          row.commit();
+          rowIndex++;
+        }
+      } else {
+        for (const r of filteredCons) {
+          const row = ws.getRow(rowIndex);
+
+          const name = r.item_name ?? "Unknown";
+          const owner = r.full_name ?? "—";
+          const cat = r.category ?? "—";
+
+          const d = new Date(r.created_at);
+          const datePart = isNaN(d.getTime()) ? dateKeyFromISO(r.created_at) : ymd(d);
+          const timePart = isNaN(d.getTime()) ? "" : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+          row.getCell(2).value = name;
+          row.getCell(3).value = owner;
+          row.getCell(4).value = cat;
+          row.getCell(5).value = Number(r.qty ?? 0);
+          row.getCell(6).value = datePart;
+          row.getCell(7).value = timePart;
+
+          row.height = 52;
+
+          for (let c = 1; c <= 7; c++) {
+            const cell = row.getCell(c);
+            cell.alignment =
+              c === 2 || c === 3 ? { vertical: "middle", horizontal: "left", wrapText: true } : { vertical: "middle", horizontal: "center" };
+            cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+          }
+
+          const imgUrl = r.image_url ?? null;
+          if (imgUrl) {
+            try {
+              const { base64, ext } = await fetchImageBase64(imgUrl);
+              const imgId = workbook.addImage({ base64, extension: ext });
+              ws.addImage(imgId, { tl: { col: 0.15, row: rowIndex - 1 + 0.15 }, ext: { width: 48, height: 48 } });
+            } catch {
+              // ignore
+            }
+          }
+
+          row.commit();
+          rowIndex++;
+        }
+      }
+
+      const buf = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      saveAs(blob, `restock_records_${source}_${modeLabel}_${filterLabel}.xlsx`);
+      notify("Exported Excel successfully.");
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+      notify("Export failed.");
+    }
+  };
+
+  const sourceLabel = source === "add_ons" ? "Add-ons Restock" : "Consignment Restock";
+
+  // ✅ label for edit overlay
+  const editTitle = editingAddOn ? "EDIT RESTOCK" : editingCons ? "EDIT CONSIGNMENT RESTOCK" : "EDIT RESTOCK";
+
+  // ✅ Delete alert message per mode
+  const deleteAlertMessage = useMemo(() => {
+    const src = source === "add_ons" ? "ADD-ONS" : "CONSIGNMENT";
+
+    if (filterMode === "day") {
+      const d = selectedDate || todayKey();
+      return `This will DELETE all ${src} restock records for ${d} and REVERT restock. Continue?`;
+    }
+
+    if (filterMode === "week") {
+      const anchor = selectedWeek || todayKey();
+      const start = startOfWeekISO(anchor);
+      const end = addDaysISO(start, 6);
+      return `This will DELETE all ${src} restock records for WEEK ${start} to ${end} and REVERT restock. Continue?`;
+    }
+
+    const m = selectedMonth || monthKeyNow();
+    return `This will DELETE all ${src} restock records for ${m} and REVERT restock. Continue?`;
+  }, [filterMode, selectedDate, selectedWeek, selectedMonth, source]);
+
   return (
     <IonPage>
       <IonHeader>
         <IonToolbar>
-          <IonTitle>Restock Records</IonTitle>
+          <IonTitle>Admin Restock Record</IonTitle>
         </IonToolbar>
       </IonHeader>
 
-      {/* ✅ SAME BACKGROUND AS OTHERS */}
-      <IonContent className="staff-content" scrollY={false}>
+      <IonContent className="staff-content">
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent />
         </IonRefresher>
 
         <div className="customer-lists-container restock-wrap">
-          {/* ✅ TOP BAR (same as Customer_Lists) */}
           <div className="customer-topbar restock-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Restock Record</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{activeDateLabel}</strong>{" "}
+                Source: <strong>{sourceLabel}</strong> • Showing records for: <strong>{activeDateLabel}</strong>{" "}
                 <span style={{ marginLeft: 8 }}>
-                  (Total: <strong>{filtered.length}</strong>)
+                  (Total: <strong>{activeRowsCount}</strong> | Qty: <strong>{totalQty}</strong>)
                 </span>
               </div>
             </div>
 
             <div className="customer-topbar-right restock-actions">
-              <IonButton className="receipt-btn" fill="outline" onClick={exportCSV}>
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Source</span>
+                <select className="date-pill-input" value={source} onChange={(e) => setSource(e.currentTarget.value as SourceKind)}>
+                  <option value="add_ons">Add-ons Restock</option>
+                  <option value="consignment">Consignment Restock</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
+
+              <label className="date-pill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">Mode</span>
+                <select
+                  className="date-pill-input"
+                  value={filterMode}
+                  onChange={(e) => setFilterMode(e.currentTarget.value as FilterMode)}
+                >
+                  <option value="day">Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+                <span className="date-pill-icon" aria-hidden="true">
+                  ▾
+                </span>
+              </label>
+
+              <IonButton className="receipt-btn" fill="outline" onClick={() => void exportExcel()}>
                 <IonIcon icon={downloadOutline} slot="start" />
                 Export Excel
               </IonButton>
 
-              <IonButton
-                className="receipt-btn"
-                color="danger"
-                fill="outline"
-                onClick={() => setShowDeleteFilterAlert(true)}
-              >
-                <IonIcon icon={trashOutline} slot="start" />
-                Delete By {filterMode === "day" ? "Date" : "Month"}
-              </IonButton>
+              <label className="date-pill restock-datepill" style={{ marginLeft: 10 }}>
+                <span className="date-pill-label">
+                  {filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}
+                </span>
 
-              <IonButton className="receipt-btn" fill="outline" onClick={() => void fetchRecords()}>
-                <IonIcon icon={refreshOutline} slot="start" />
-                Refresh
-              </IonButton>
-            </div>
-          </div>
-
-          {/* ✅ FILTER ROW */}
-          <div className="restock-filters">
-            <div className="restock-left">
-              <div className="restock-search">
-                <div className="restock-label">Search (item / category)</div>
-                <input
-                  className="restock-input"
-                  value={search}
-                  placeholder="Type to search…"
-                  onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
-                />
-              </div>
-            </div>
-
-            <div className="restock-right">
-              <div className="restock-mode">
-                <div className="restock-label">Mode</div>
-                <IonItem lines="none" className="restock-ionitem">
-                  <IonSelect
-                    value={filterMode}
-                    interface="popover"
-                    onIonChange={(e) => setFilterMode(String(e.detail.value) as FilterMode)}
-                  >
-                    <IonSelectOption value="day">Day</IonSelectOption>
-                    <IonSelectOption value="month">Month</IonSelectOption>
-                  </IonSelect>
-                </IonItem>
-              </div>
-
-              {/* ✅ DATE PILL (same vibe) */}
-              <label className="date-pill restock-datepill">
-                <span className="date-pill-label">{filterMode === "day" ? "Date" : "Month"}</span>
-
-                {/* display as text, open modal on click */}
                 <button
                   type="button"
-                  className="restock-datebtn"
-                  onClick={openCalendar}
+                  className="date-pill-input restock-datebtn"
+                  onClick={() => setDateModalOpen(true)}
                   title="Open calendar"
                 >
                   {activeDateLabel}
                 </button>
 
-                <button
-                  type="button"
-                  className="restock-iconbtn"
-                  onClick={openCalendar}
-                  title="Calendar"
-                >
+                <button type="button" className="restock-iconbtn" onClick={() => setDateModalOpen(true)} title="Calendar">
                   <IonIcon icon={calendarOutline} />
                 </button>
 
                 <button
                   type="button"
                   className="restock-iconbtn"
-                  disabled={filterMode === "day" ? !selectedDate : !selectedMonth}
+                  disabled={!hasActiveFilter}
                   onClick={clearFilterValue}
                   title="Clear filter"
                 >
                   <IonIcon icon={closeCircleOutline} />
                 </button>
               </label>
+
+              <IonButton className="receipt-btn" fill="outline" onClick={() => void fetchRecords()}>
+                <IonIcon icon={refreshOutline} slot="start" />
+                Refresh
+              </IonButton>
+
+              <IonButton className="receipt-btn" color="danger" fill="outline" onClick={() => setShowDeleteFilterAlert(true)}>
+                <IonIcon icon={trashOutline} slot="start" />
+                Delete By {filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}
+              </IonButton>
             </div>
           </div>
 
-          {/* ✅ TABLE */}
+          {/* ✅ SEARCH (INANGAT LANG) */}
+          <div
+            className="restock-filters"
+            style={{
+              marginTop: -55,
+              marginBottom: 8,
+            }}
+          >
+            <div className="restock-left">
+              <div className="customer-searchbar-inline" style={{ maxWidth: 420 }}>
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+                    placeholder={source === "add_ons" ? "Search item or category..." : "Search item / owner / category..."}
+                  />
+
+                  {search.trim() && (
+                    <button className="customer-search-clear" onClick={() => setSearch("")} type="button">
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="restock-right" />
+          </div>
+
           {loading ? (
             <div className="customer-note restock-loading">
               <IonSpinner />
               <span>Loading records…</span>
             </div>
-          ) : filtered.length === 0 ? (
+          ) : activeRowsCount === 0 ? (
             <p className="customer-note">No restock records found.</p>
           ) : (
-            <div className="customer-table-wrap restock-tablewrap" key={activeDateLabel}>
+            <div className="customer-table-wrap restock-tablewrap" key={`${source}-${activeDateLabel}`}>
               <table className="customer-table restock-table">
                 <thead>
                   <tr>
                     <th>Image</th>
                     <th>Item Name</th>
+                    {source === "consignment" ? <th>Owner</th> : null}
                     <th>Category</th>
                     <th>Restock</th>
                     <th>Restock Date</th>
@@ -571,54 +1084,87 @@ const Admin_Restock_Record: React.FC = () => {
                 </thead>
 
                 <tbody>
-                  {filtered.map((r) => (
-                    <tr key={r.id} className="restock-row">
-                      <td>
-                        {r.add_ons?.image_url ? (
-                          <img
-                            className="restock-img"
-                            src={r.add_ons.image_url}
-                            alt={r.add_ons?.name ?? "item"}
-                          />
-                        ) : (
-                          <div className="restock-imgFallback">No Image</div>
-                        )}
-                      </td>
+                  {source === "add_ons"
+                    ? filteredAddOn.map((r) => (
+                        <tr key={r.id} className="restock-row">
+                          <td>
+                            {r.add_ons?.image_url ? (
+                              <img className="restock-img" src={r.add_ons.image_url} alt={r.add_ons?.name ?? "item"} />
+                            ) : (
+                              <div className="restock-imgFallback">No Image</div>
+                            )}
+                          </td>
 
-                      <td>
-                        <div className="cell-stack">
-                          <span className="cell-strong">{r.add_ons?.name ?? "Unknown Item"}</span>
-                        </div>
-                      </td>
+                          <td>
+                            <div className="cell-stack">
+                              <span className="cell-strong">{r.add_ons?.name ?? "Unknown Item"}</span>
+                            </div>
+                          </td>
 
-                      <td>{r.add_ons?.category ?? "—"}</td>
+                          <td>{r.add_ons?.category ?? "—"}</td>
 
-                      <td>
-                        <span className="pill pill--dark">{r.qty}</span>
-                      </td>
+                          <td>
+                            <span className="pill pill--dark">{r.qty}</span>
+                          </td>
 
-                      <td>{formatDateTime(r.created_at)}</td>
+                          <td>{formatDateTime(r.created_at)}</td>
 
-                      <td>
-                        {/* actions behavior same, css only */}
-                        <div className="action-stack action-stack--row">
-                          <button className="receipt-btn" onClick={() => openEdit(r)} title="Edit">
-                            <IonIcon icon={createOutline} />
-                            <span style={{ marginLeft: 6 }}>Edit</span>
-                          </button>
+                          <td>
+                            <div className="action-stack action-stack--row">
+                              <button className="receipt-btn" onClick={() => openEditAddOn(r)} title="Edit">
+                                <IonIcon icon={createOutline} />
+                                <span style={{ marginLeft: 6 }}>Edit</span>
+                              </button>
 
-                          <button
-                            className="receipt-btn btn-danger"
-                            onClick={() => setVoidRow(r)}
-                            title="Void"
-                          >
-                            <IonIcon icon={voidIcon} />
-                            <span style={{ marginLeft: 6 }}>Void</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                              <button className="receipt-btn btn-danger" onClick={() => setVoidAddOn(r)} title="Void">
+                                <IonIcon icon={voidIcon} />
+                                <span style={{ marginLeft: 6 }}>Void</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    : filteredCons.map((r) => (
+                        <tr key={r.id} className="restock-row">
+                          <td>
+                            {r.image_url ? (
+                              <img className="restock-img" src={r.image_url} alt={r.item_name ?? "item"} />
+                            ) : (
+                              <div className="restock-imgFallback">No Image</div>
+                            )}
+                          </td>
+
+                          <td>
+                            <div className="cell-stack">
+                              <span className="cell-strong">{r.item_name ?? "Unknown Item"}</span>
+                              {r.size ? <span className="cell-sub">{r.size}</span> : null}
+                            </div>
+                          </td>
+
+                          <td>{r.full_name}</td>
+                          <td>{r.category ?? "—"}</td>
+
+                          <td>
+                            <span className="pill pill--dark">{r.qty}</span>
+                          </td>
+
+                          <td>{formatDateTime(r.created_at)}</td>
+
+                          <td>
+                            <div className="action-stack action-stack--row">
+                              <button className="receipt-btn" onClick={() => openEditCons(r)} title="Edit">
+                                <IonIcon icon={createOutline} />
+                                <span style={{ marginLeft: 6 }}>Edit</span>
+                              </button>
+
+                              <button className="receipt-btn btn-danger" onClick={() => setVoidCons(r)} title="Void">
+                                <IonIcon icon={voidIcon} />
+                                <span style={{ marginLeft: 6 }}>Void</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
                 </tbody>
               </table>
             </div>
@@ -628,7 +1174,9 @@ const Admin_Restock_Record: React.FC = () => {
           <IonModal isOpen={dateModalOpen} onDidDismiss={() => setDateModalOpen(false)}>
             <IonHeader>
               <IonToolbar>
-                <IonTitle>{filterMode === "day" ? "Select Date" : "Select Month"}</IonTitle>
+                <IonTitle>
+                  {filterMode === "day" ? "Select Date" : filterMode === "week" ? "Select Week (Pick any day)" : "Select Month"}
+                </IonTitle>
                 <IonButtons slot="end">
                   <IonButton onClick={() => setDateModalOpen(false)}>
                     <IonIcon icon={closeOutline} />
@@ -646,6 +1194,16 @@ const Admin_Restock_Record: React.FC = () => {
                     const val = (e.detail.value ?? "").toString();
                     if (!val) return;
                     setSelectedDate(val.split("T")[0]);
+                  }}
+                />
+              ) : filterMode === "week" ? (
+                <IonDatetime
+                  presentation="date"
+                  value={(selectedWeek || todayKey()) + "T00:00:00"}
+                  onIonChange={(e) => {
+                    const val = (e.detail.value ?? "").toString();
+                    if (!val) return;
+                    setSelectedWeek(val.split("T")[0]);
                   }}
                 />
               ) : (
@@ -670,100 +1228,129 @@ const Admin_Restock_Record: React.FC = () => {
           <IonAlert
             isOpen={showDeleteFilterAlert}
             onDidDismiss={() => setShowDeleteFilterAlert(false)}
-            header={`Delete by ${filterMode === "day" ? "Date" : "Month"}?`}
-            message={
-              filterMode === "day"
-                ? `This will DELETE all restock records for ${selectedDate || todayKey()} and REVERT stocks. Continue?`
-                : `This will DELETE all restock records for ${selectedMonth || monthKeyNow()} and REVERT stocks. Continue?`
-            }
+            header={`Delete by ${filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}?`}
+            message={deleteAlertMessage}
             buttons={[
               { text: "Cancel", role: "cancel" },
               { text: "Delete", role: "destructive", handler: () => void deleteByFilter() },
             ]}
           />
 
-          {/* VOID CONFIRM */}
+          {/* VOID CONFIRM (ADD-ONS) */}
           <IonAlert
-            isOpen={!!voidRow}
-            onDidDismiss={() => setVoidRow(null)}
+            isOpen={!!voidAddOn}
+            onDidDismiss={() => setVoidAddOn(null)}
             header="VOID this restock?"
             message="This will revert restock/stocks and delete the record."
             buttons={[
-              { text: "Cancel", role: "cancel", handler: () => setVoidRow(null) },
+              { text: "Cancel", role: "cancel", handler: () => setVoidAddOn(null) },
               {
                 text: "VOID",
                 role: "destructive",
                 handler: () => {
-                  if (voidRow) void doVoidRow(voidRow);
-                  setVoidRow(null);
+                  if (voidAddOn) void doVoidAddOnRow(voidAddOn);
+                  setVoidAddOn(null);
                 },
               },
             ]}
           />
 
-          {/* EDIT MODAL */}
-          <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
-            <IonHeader>
-              <IonToolbar>
-                <IonTitle>Edit Restock</IonTitle>
-                <IonButtons slot="end">
-                  <IonButton onClick={() => setEditOpen(false)}>
-                    <IonIcon icon={closeOutline} />
-                  </IonButton>
-                </IonButtons>
-              </IonToolbar>
-            </IonHeader>
-
-            <IonContent className="ion-padding restock-edit">
-              {editingRow && (
-                <>
-                  <div className="restock-editInfo">
-                    <div><b>Item:</b> {editingRow.add_ons?.name ?? "Unknown"}</div>
-                    <div><b>Category:</b> {editingRow.add_ons?.category ?? "—"}</div>
-                    <div><b>Current Restock:</b> {editingRow.qty}</div>
-                    <div><b>Date:</b> {formatDateTime(editingRow.created_at)}</div>
-                  </div>
-
-                  <IonItem>
-                    <IonLabel position="stacked">New Restock (Exact Value)</IonLabel>
-                    <IonInput
-                      type="number"
-                      value={editQty}
-                      onIonChange={(e) => setEditQty((e.detail.value ?? "").toString())}
-                    />
-                  </IonItem>
-
-                  <div className="restock-help">
-                    Change will affect only this row difference (delta).
-                  </div>
-
-                  <div className="restock-editBtns">
-                    <IonButton expand="block" onClick={() => void saveEditQty()}>
-                      Save
-                    </IonButton>
-
-                    <IonButton
-                      expand="block"
-                      fill="clear"
-                      onClick={() => {
-                        setEditOpen(false);
-                        setEditingRow(null);
-                      }}
-                    >
-                      Cancel
-                    </IonButton>
-                  </div>
-                </>
-              )}
-            </IonContent>
-          </IonModal>
-
-          <IonToast
-            isOpen={toastOpen}
-            message={toastMsg}
-            duration={2500}
-            onDidDismiss={() => setToastOpen(false)}
+          {/* VOID CONFIRM (CONSIGNMENT) */}
+          <IonAlert
+            isOpen={!!voidCons}
+            onDidDismiss={() => setVoidCons(null)}
+            header="VOID this consignment restock?"
+            message="This will revert consignment restock and delete the record."
+            buttons={[
+              { text: "Cancel", role: "cancel", handler: () => setVoidCons(null) },
+              {
+                text: "VOID",
+                role: "destructive",
+                handler: () => {
+                  if (voidCons) void doVoidConsRow(voidCons);
+                  setVoidCons(null);
+                },
+              },
+            ]}
           />
+
+          {/* ✅ EDIT OVERLAY (SAME CLASSNAMES AS Staff_Consignment_Record) */}
+          {editOpen && (
+            <div className="receipt-overlay" onClick={() => closeEdit()}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">{editTitle}</h3>
+
+                <p className="receipt-subtitle">
+                  {editingAddOn ? (
+                    <>
+                      {editingAddOn.add_ons?.name ?? "Unknown Item"} • Category: {editingAddOn.add_ons?.category ?? "—"}
+                    </>
+                  ) : editingCons ? (
+                    <>
+                      {editingCons.item_name ?? "Unknown Item"} • Owner: {editingCons.full_name ?? "—"}
+                    </>
+                  ) : (
+                    "-"
+                  )}
+                </p>
+
+                <hr />
+
+                {editingAddOn && (
+                  <div style={{ display: "grid", gap: 6, fontSize: 13, opacity: 0.9, marginBottom: 10 }}>
+                    <div>
+                      Current Restock: <b>{editingAddOn.qty}</b>
+                    </div>
+                    <div>
+                      Date: <b>{formatDateTime(editingAddOn.created_at)}</b>
+                    </div>
+                  </div>
+                )}
+
+                {editingCons && (
+                  <div style={{ display: "grid", gap: 6, fontSize: 13, opacity: 0.9, marginBottom: 10 }}>
+                    <div>
+                      Current Restock: <b>{editingCons.qty}</b>
+                    </div>
+                    <div>
+                      Category: <b>{editingCons.category ?? "—"}</b> {editingCons.size ? <>• Size: <b>{editingCons.size}</b></> : null}
+                    </div>
+                    <div>
+                      Date: <b>{formatDateTime(editingCons.created_at)}</b>
+                    </div>
+                  </div>
+                )}
+
+                <div className="receipt-row">
+                  <span>New Restock (Exact)</span>
+                  <input
+                    className="money-input"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={editQty}
+                    onChange={(e) => setEditQty(e.currentTarget.value)}
+                    placeholder="0"
+                  />
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85 }}>
+                  Note: Delta lang ang ia-adjust (difference) at a-update ang stocks/restocked.
+                </div>
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button className="receipt-btn" onClick={() => closeEdit()}>
+                    Close
+                  </button>
+                  <button className="receipt-btn" onClick={() => void saveEditQty()}>
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <IonToast isOpen={toastOpen} message={toastMsg} duration={2500} onDidDismiss={() => setToastOpen(false)} />
         </div>
       </IonContent>
     </IonPage>

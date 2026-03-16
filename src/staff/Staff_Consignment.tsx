@@ -1,4 +1,4 @@
-// src/pages/Admin_Add_Ons.tsx
+// src/pages/Staff_Consignment.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   IonPage,
@@ -22,19 +22,24 @@ import { supabase } from "../utils/supabaseClient";
 
 type Profile = { role: string };
 
-const normalizeCategory = (v: string): string =>
-  v.trim().replace(/\s+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-const normalizeSize = (v: string): string => v.trim();
-
 type AddOnSize = "None" | "XS" | "S" | "M" | "L" | "XL" | "2XL" | "3XL" | "4XL" | "5XL";
-
 const SIZE_OPTIONS: AddOnSize[] = ["None", "XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
 
-const Admin_Add_Ons: React.FC = () => {
+const normalizeSize = (v: string): string => v.trim();
+const normalizeText = (v: string): string => v.trim().replace(/\s+/g, " ");
+
+type CategoryRow = { id: string };
+
+type ConsignmentSuggestRow = {
+  full_name: string | null;
+  category: string | null;
+};
+
+const Staff_Consignment: React.FC = () => {
+  const [fullName, setFullName] = useState<string>("");
   const [category, setCategory] = useState<string>("");
-  const [size, setSize] = useState<AddOnSize>("None"); // ✅ optional
-  const [name, setName] = useState<string>("");
+  const [itemName, setItemName] = useState<string>("");
+  const [size, setSize] = useState<AddOnSize>("None");
 
   const [restocked, setRestocked] = useState<number | undefined>(undefined);
   const [price, setPrice] = useState<number | undefined>(undefined);
@@ -43,59 +48,109 @@ const Admin_Add_Ons: React.FC = () => {
   const [showToast, setShowToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
 
-  const [allCategories, setAllCategories] = useState<string[]>([]);
+  const [allFullNames, setAllFullNames] = useState<string[]>([]);
+  const [fullOpen, setFullOpen] = useState<boolean>(false);
+  const [fullEvent, setFullEvent] = useState<MouseEvent | undefined>(undefined);
+  const fullBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // ✅ Popover: MANUAL ONLY
+  const [allCategories, setAllCategories] = useState<string[]>([]);
   const [catOpen, setCatOpen] = useState<boolean>(false);
   const [catEvent, setCatEvent] = useState<MouseEvent | undefined>(undefined);
-  const iconBtnRef = useRef<HTMLButtonElement | null>(null);
+  const catBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const [consignmentCategoryId, setConsignmentCategoryId] = useState<string | null>(null);
 
   useEffect(() => {
-    const loadCategories = async (): Promise<void> => {
-      const { data, error } = await supabase.from("add_ons").select("category").not("category", "is", null);
+    const loadPrereqs = async (): Promise<void> => {
+      const { data: catRow, error: catErr } = await supabase
+        .from("addon_categories")
+        .select("id")
+        .ilike("name", "Consignment")
+        .limit(1);
+
+      if (catErr) {
+        console.error("Load addon_categories error:", catErr);
+        setToastMessage("Failed to load addon_categories.");
+        setShowToast(true);
+      } else {
+        const id: string | null = (catRow?.[0] as CategoryRow | undefined)?.id ?? null;
+        setConsignmentCategoryId(id);
+      }
+
+      const { data, error } = await supabase.from("consignment").select("full_name, category");
 
       if (error) {
-        console.error("Load categories error:", error);
+        console.error("Load suggestions error:", error);
         return;
       }
 
-      const unique: string[] = Array.from(
-        new Set(
-          (data ?? [])
-            .map((r: { category?: string | null }) => (r.category ?? "").trim())
-            .filter((c) => c.length > 0)
-        )
+      const rows: ConsignmentSuggestRow[] = (data ?? []) as ConsignmentSuggestRow[];
+
+      const uniqFull: string[] = Array.from(
+        new Set(rows.map((r) => normalizeText(r.full_name ?? "")).filter((v) => v.length > 0))
       ).sort((a, b) => a.localeCompare(b));
 
-      setAllCategories(unique);
+      const uniqCat: string[] = Array.from(
+        new Set(rows.map((r) => normalizeText(r.category ?? "")).filter((v) => v.length > 0))
+      ).sort((a, b) => a.localeCompare(b));
+
+      setAllFullNames(uniqFull);
+      setAllCategories(uniqCat);
     };
 
-    void loadCategories();
+    void loadPrereqs();
   }, []);
 
-  // ✅ show more than 5 in data, but only 5 visible via CSS scroll box
-  const shownCats = useMemo(() => allCategories.slice(0, 30), [allCategories]);
+  const shownFullNames = useMemo(() => allFullNames.slice(0, 30), [allFullNames]);
+  const shownCategories = useMemo(() => allCategories.slice(0, 30), [allCategories]);
 
-  const closePopover = (): void => {
+  const closeFullPopover = (): void => {
+    setFullOpen(false);
+    setFullEvent(undefined);
+  };
+
+  const closeCatPopover = (): void => {
     setCatOpen(false);
     setCatEvent(undefined);
   };
 
-  const onDropdownClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
+  const onFullDropdownClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFullEvent(e.nativeEvent);
+    setFullOpen(true);
+  };
+
+  const onCatDropdownClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
     e.preventDefault();
     e.stopPropagation();
     setCatEvent(e.nativeEvent);
     setCatOpen(true);
   };
 
-  const handlePickCategory = (picked: string): void => {
-    setCategory(picked);
-    requestAnimationFrame(() => closePopover());
+  const handlePickFullName = (picked: string): void => {
+    setFullName(picked);
+    requestAnimationFrame(() => closeFullPopover());
   };
 
-  const handleAddOnSubmit = async (): Promise<void> => {
-    if (!category || !name || restocked === undefined || price === undefined) {
+  const handlePickCategory = (picked: string): void => {
+    setCategory(picked);
+    requestAnimationFrame(() => closeCatPopover());
+  };
+
+  const handleSubmit = async (): Promise<void> => {
+    const fullNameFinal = normalizeText(fullName);
+    const categoryFinal = normalizeText(category);
+    const itemNameFinal = normalizeText(itemName);
+
+    if (!fullNameFinal || !categoryFinal || !itemNameFinal || restocked === undefined || price === undefined) {
       setToastMessage("Please fill in all required fields!");
+      setShowToast(true);
+      return;
+    }
+
+    if (!consignmentCategoryId) {
+      setToastMessage("Consignment category not found. Run: insert into addon_categories(name) values ('Consignment');");
       setShowToast(true);
       return;
     }
@@ -114,7 +169,9 @@ const Admin_Add_Ons: React.FC = () => {
         .single<Profile>();
 
       if (profErr) throw profErr;
-      if (!profile || profile.role !== "admin") throw new Error("Admin only");
+
+      const role = (profile?.role ?? "").toLowerCase();
+      if (role !== "admin" && role !== "staff") throw new Error("Admin/Staff only");
 
       let imageUrl: string | null = null;
 
@@ -124,52 +181,58 @@ const Admin_Add_Ons: React.FC = () => {
         const fileName: string = `${Date.now()}.${fileExt}`;
         const filePath: string = `${userId}/${fileName}`;
 
-        const { error: uploadError } = await supabase.storage.from("add-ons").upload(filePath, imageFile, {
+        const { error: uploadError } = await supabase.storage.from("consignment").upload(filePath, imageFile, {
           contentType: imageFile.type,
           upsert: false,
         });
 
         if (uploadError) throw uploadError;
 
-        const { data: urlData } = supabase.storage.from("add-ons").getPublicUrl(filePath);
+        const { data: urlData } = supabase.storage.from("consignment").getPublicUrl(filePath);
         imageUrl = urlData.publicUrl;
       }
 
-      const categoryFinal = normalizeCategory(category);
       const sizeFinal = normalizeSize(size);
-
-      // ✅ optional size: store null or "None" based on your preference
-      // Here: if "None", store null (cleaner). If you prefer text "None", change to "None".
       const sizeDb: string | null = sizeFinal === "None" ? null : sizeFinal;
 
-      const { error: insertErr } = await supabase.from("add_ons").insert([
+      const { error: insertConsErr } = await supabase.from("consignment").insert([
         {
-          admin_id: userId,
+          created_by: userId,
+          category_id: consignmentCategoryId,
+          full_name: fullNameFinal,
           category: categoryFinal,
-          size: sizeDb, // ✅ NEW FIELD (optional)
-          name: name.trim(),
+          item_name: itemNameFinal,
+          size: sizeDb,
           restocked,
           price,
           image_url: imageUrl,
+          approval_status: "pending",
         },
       ]);
 
-      if (insertErr) throw insertErr;
+      if (insertConsErr) throw insertConsErr;
+
+      setAllFullNames((prev) => {
+        if (prev.some((n) => n.toLowerCase() === fullNameFinal.toLowerCase())) return prev;
+        return [...prev, fullNameFinal].sort((a, b) => a.localeCompare(b));
+      });
 
       setAllCategories((prev) => {
         if (prev.some((c) => c.toLowerCase() === categoryFinal.toLowerCase())) return prev;
         return [...prev, categoryFinal].sort((a, b) => a.localeCompare(b));
       });
 
+      setFullName("");
       setCategory("");
+      setItemName("");
       setSize("None");
-      setName("");
       setRestocked(undefined);
       setPrice(undefined);
       setImageFile(null);
-      closePopover();
+      closeFullPopover();
+      closeCatPopover();
 
-      setToastMessage("Add-on added successfully!");
+      setToastMessage("Consignment item submitted for admin approval!");
       setShowToast(true);
     } catch (err: unknown) {
       console.error(err);
@@ -189,15 +252,69 @@ const Admin_Add_Ons: React.FC = () => {
           <div className="aao-card">
             <div className="aao-card-head">
               <div>
-                <div className="aao-card-title">Add New Product</div>
-                <div className="aao-card-sub">Fill the details below to add an add-on item</div>
+                <div className="aao-card-title">Add Consignment Item</div>
+                <div className="aao-card-sub">Fill the details below to add a consignment product</div>
               </div>
             </div>
 
             <div className="aao-grid">
-              {/* LEFT */}
               <div className="aao-col aao-col-left">
-                {/* CATEGORY */}
+                <IonItem className="aao-item" lines="none">
+                  <IonLabel position="stacked" className="aao-label">
+                    Full Name <span className="aao-req">*</span>
+                  </IonLabel>
+
+                  <div className="aao-field aao-field--withIcon">
+                    <IonInput
+                      className="aao-input"
+                      value={fullName}
+                      placeholder="Tap to choose full name"
+                      onIonInput={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
+                        const v = (e.detail.value ?? "").toString();
+                        setFullName(v);
+                      }}
+                      onIonFocus={() => {
+                        if (fullOpen) closeFullPopover();
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+
+                    <button
+                      ref={fullBtnRef}
+                      type="button"
+                      className="aao-dropbtn"
+                      aria-label="Open full name suggestions"
+                      onClick={onFullDropdownClick}
+                    >
+                      <IonIcon className="aao-field-icon aao-field-icon--click" icon={chevronDownOutline} />
+                    </button>
+                  </div>
+                </IonItem>
+
+                <IonPopover
+                  isOpen={fullOpen}
+                  event={fullEvent}
+                  onDidDismiss={closeFullPopover}
+                  side="bottom"
+                  alignment="start"
+                  className="aao-popover"
+                  showBackdrop={false}
+                >
+                  <IonContent className="aao-popover-content">
+                    <IonText className="aao-popover-hint">Suggestions (tap to select)</IonText>
+
+                    <div className="aao-popover-scroll">
+                      <IonList className="aao-popover-list">
+                        {shownFullNames.map((n) => (
+                          <IonItem key={n} button className="aao-popover-item" onClick={() => handlePickFullName(n)}>
+                            <IonLabel className="aao-popover-label">{n}</IonLabel>
+                          </IonItem>
+                        ))}
+                      </IonList>
+                    </div>
+                  </IonContent>
+                </IonPopover>
+
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Category <span className="aao-req">*</span>
@@ -213,28 +330,27 @@ const Admin_Add_Ons: React.FC = () => {
                         setCategory(v);
                       }}
                       onIonFocus={() => {
-                        if (catOpen) closePopover();
+                        if (catOpen) closeCatPopover();
                       }}
                       onClick={(e) => e.stopPropagation()}
                     />
 
                     <button
-                      ref={iconBtnRef}
+                      ref={catBtnRef}
                       type="button"
                       className="aao-dropbtn"
                       aria-label="Open category suggestions"
-                      onClick={onDropdownClick}
+                      onClick={onCatDropdownClick}
                     >
                       <IonIcon className="aao-field-icon aao-field-icon--click" icon={chevronDownOutline} />
                     </button>
                   </div>
                 </IonItem>
 
-                {/* ✅ POPOVER */}
                 <IonPopover
                   isOpen={catOpen}
                   event={catEvent}
-                  onDidDismiss={closePopover}
+                  onDidDismiss={closeCatPopover}
                   side="bottom"
                   alignment="start"
                   className="aao-popover"
@@ -243,12 +359,11 @@ const Admin_Add_Ons: React.FC = () => {
                   <IonContent className="aao-popover-content">
                     <IonText className="aao-popover-hint">Suggestions (tap to select)</IonText>
 
-                    {/* ✅ scroll wrapper so only 5 items visible */}
                     <div className="aao-popover-scroll">
                       <IonList className="aao-popover-list">
-                        {shownCats.map((c) => (
-                          <IonItem key={c} button className="aao-popover-item" onClick={() => handlePickCategory(c)}>
-                            <IonLabel className="aao-popover-label">{c}</IonLabel>
+                        {shownCategories.map((n) => (
+                          <IonItem key={n} button className="aao-popover-item" onClick={() => handlePickCategory(n)}>
+                            <IonLabel className="aao-popover-label">{n}</IonLabel>
                           </IonItem>
                         ))}
                       </IonList>
@@ -256,7 +371,6 @@ const Admin_Add_Ons: React.FC = () => {
                   </IonContent>
                 </IonPopover>
 
-                {/* ✅ SIZE (OPTIONAL) - inserted between Category and Item Name */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Size <span className="aao-opt">(optional)</span>
@@ -278,10 +392,9 @@ const Admin_Add_Ons: React.FC = () => {
                     </IonSelect>
                   </div>
 
-                  <div className="aao-help">Choose size if applicable (ex: Small/Medium/Large/XL). If not, keep None.</div>
+                  <div className="aao-help">Choose size if applicable. If not, keep None.</div>
                 </IonItem>
 
-                {/* NAME */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Item Name <span className="aao-req">*</span>
@@ -289,14 +402,13 @@ const Admin_Add_Ons: React.FC = () => {
                   <div className="aao-field">
                     <IonInput
                       className="aao-input"
-                      value={name}
-                      placeholder="Example: Choco Syrup"
-                      onIonChange={(e) => setName((e.detail.value ?? "").toString())}
+                      value={itemName}
+                      placeholder="Example: Nike Shoes"
+                      onIonChange={(e) => setItemName((e.detail.value ?? "").toString())}
                     />
                   </div>
                 </IonItem>
 
-                {/* IMAGE */}
                 <IonItem className="aao-item" lines="none">
                   <IonLabel position="stacked" className="aao-label">
                     Image
@@ -320,7 +432,6 @@ const Admin_Add_Ons: React.FC = () => {
                 </IonItem>
               </div>
 
-              {/* RIGHT */}
               <div className="aao-col aao-col-right">
                 <div className="aao-rightCard">
                   <div className="aao-rightTitle">Pricing & Stock</div>
@@ -364,13 +475,13 @@ const Admin_Add_Ons: React.FC = () => {
                     </div>
                   </IonItem>
 
-                  <IonButton className="aao-btn aao-btn--primary aao-btn-right" expand="block" onClick={handleAddOnSubmit}>
+                  <IonButton className="aao-btn aao-btn--primary aao-btn-right" expand="block" onClick={handleSubmit}>
                     <IonIcon slot="start" icon={addCircleOutline} />
-                    Add Add-On
+                    Submit for Approval
                   </IonButton>
 
                   <div className="aao-footnote aao-footnote-right">
-                    Tip: Category suggestions will only appear when the category field is empty.
+                    Item will only display after admin approval.
                   </div>
                 </div>
               </div>
@@ -378,10 +489,15 @@ const Admin_Add_Ons: React.FC = () => {
           </div>
         </div>
 
-        <IonToast isOpen={showToast} message={toastMessage} duration={2000} onDidDismiss={() => setShowToast(false)} />
+        <IonToast
+          isOpen={showToast}
+          message={toastMessage}
+          duration={2200}
+          onDidDismiss={() => setShowToast(false)}
+        />
       </IonContent>
     </IonPage>
   );
 };
 
-export default Admin_Add_Ons;
+export default Staff_Consignment;
