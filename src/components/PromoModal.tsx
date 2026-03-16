@@ -130,20 +130,46 @@ const clampInt = (n: number, min: number, max: number): number => {
   return Math.min(max, Math.max(min, x));
 };
 
-const localToIso = (v: string): string => new Date(v).toISOString();
+const localToIso = (v: string): string => {
+  if (!v) return "";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+};
 
 const isoToLocal = (iso: string): string => {
+  if (!iso) return "";
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+
   const pad = (n: number) => String(n).padStart(2, "0");
   const yyyy = d.getFullYear();
   const mm = pad(d.getMonth() + 1);
   const dd = pad(d.getDate());
   const hh = pad(d.getHours());
   const mi = pad(d.getMinutes());
+
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 };
 
-const minLocalNow = (): string => isoToLocal(new Date().toISOString());
+const isSameOrFutureDay = (iso: string): boolean => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+
+  const now = new Date();
+
+  const selectedY = d.getFullYear();
+  const selectedM = d.getMonth();
+  const selectedD = d.getDate();
+
+  const nowY = now.getFullYear();
+  const nowM = now.getMonth();
+  const nowD = now.getDate();
+
+  const selectedDay = new Date(selectedY, selectedM, selectedD).getTime();
+  const todayDay = new Date(nowY, nowM, nowD).getTime();
+
+  return selectedDay >= todayDay;
+};
 
 const parseAmenities = (text: string | null): string[] => {
   if (!text) return [];
@@ -537,10 +563,14 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
     if (!startIso) return showAlert("Required", "Select start date & time.");
     if (!endIso) return showAlert("Required", "Invalid end time.");
 
-    const startMs = new Date(startIso).getTime();
-    if (!Number.isFinite(startMs) || startMs < Date.now()) {
-      return showAlert("Invalid", "Start time must be today or later.");
-    }
+const startMs = new Date(startIso).getTime();
+if (!Number.isFinite(startMs)) {
+  return showAlert("Invalid", "Please select a valid start date and time.");
+}
+
+if (!isSameOrFutureDay(startIso)) {
+  return showAlert("Invalid", "Start date must be today or later.");
+}
 
     if (area === "common_area") {
       if (!seatNumber) return showAlert("Required", "Seat number is required for Common Area.");
@@ -951,18 +981,17 @@ const PromoModal: React.FC<PromoModalProps> = ({ isOpen, onClose, onSaved, seatG
             </IonCard>
           ) : null}
 
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Start Date & Time</IonLabel>
-            <IonInput
-              type="datetime-local"
-              min={minLocalNow()}
-              value={startIso ? isoToLocal(startIso) : ""}
-              onIonInput={(e) => {
-                const v = String(e.detail.value ?? "");
-                setStartIso(v ? localToIso(v) : "");
-              }}
-            />
-          </IonItem>
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Start Date & Time</IonLabel>
+              <IonInput
+                type="datetime-local"
+                value={startIso ? isoToLocal(startIso) : ""}
+                onIonInput={(e) => {
+                  const v = String(e.detail.value ?? "");
+                  setStartIso(localToIso(v));
+                }}
+              />
+            </IonItem>
 
           {area === "common_area" ? (
             <IonItem className="form-item">
