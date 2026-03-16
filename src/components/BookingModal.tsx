@@ -11,7 +11,7 @@
 //    - reservation openTime => end_at = end of the selected reservation date (23:59:59.999)
 //    - so when you pick NEXT DAY, seats are FREE automatically
 // ✅ Non-reservation openTime can stay FAR_FUTURE (seat is "N/A" so no seat blocking)
-// ✅ NEW: If Reservation Time Started is earlier than CURRENT TIME -> show modal + block saving
+// ✅ FIX: Removed strict "past reservation time" blocking
 // ✅ FIX: DB `date` ALWAYS saves CURRENT DATE (local) even for reservation
 // ✅ NO any
 // ✅ NEW UI: Reservation Date uses scroll/wheel picker (IonDatetimeButton + modal)
@@ -56,14 +56,14 @@ type CustomerType = "reviewer" | "student" | "regular" | "";
 
 interface CustomerForm {
   full_name: string;
-  phone_number: string; // ✅ NEW
+  phone_number: string;
   customer_type: CustomerType;
   customer_field: string;
   has_id: boolean;
   id_number: string;
   seat_number: string[];
   reservation: boolean;
-  reservation_date?: string; // "YYYY-MM-DD"
+  reservation_date?: string;
   time_started: string;
 }
 
@@ -93,28 +93,21 @@ const toYYYYMMDD = (v: string): string | null => {
   return m ? m[1] : null;
 };
 
-// ✅ LOCAL current date in YYYY-MM-DD (no red, no UTC issue)
 const todayLocalYYYYMMDD = (): string => new Date().toLocaleDateString("en-CA");
 
 /* =========================
-   ✅ PHONE HELPERS (NEW)
+   PHONE HELPERS
 ========================= */
 
-// keep digits and optional leading +, normalize +63 to 09, remove spaces/dashes
 const normalizePhonePH = (raw: string): string => {
   const trimmed = String(raw ?? "").trim();
   if (!trimmed) return "";
 
-  // keep digits and +
   let s = trimmed.replace(/[^\d+]/g, "");
 
-  // if starts with +63XXXXXXXXXX => 0XXXXXXXXXX
   if (s.startsWith("+63")) s = "0" + s.slice(3);
-
-  // if starts with 63XXXXXXXXXX (no +) => 0XXXXXXXXXX
   if (s.startsWith("63")) s = "0" + s.slice(2);
 
-  // remove all non-digits now
   s = s.replace(/[^\d]/g, "");
 
   return s;
@@ -129,12 +122,10 @@ const validatePhonePH = (raw: string): PhoneValidation => {
 
   if (!normalized) return { ok: false, message: "Phone Number is required." };
 
-  // must start with 09
   if (!normalized.startsWith("09")) {
     return { ok: false, message: 'Phone Number must start with "09". Example: 09XXXXXXXXX' };
   }
 
-  // must be exactly 11 digits (09 + 9 digits)
   if (normalized.length < 11) {
     return { ok: false, message: "Phone Number is too short. It must be 11 digits (09XXXXXXXXX)." };
   }
@@ -142,7 +133,6 @@ const validatePhonePH = (raw: string): PhoneValidation => {
     return { ok: false, message: "Phone Number is too long. It must be 11 digits (09XXXXXXXXX)." };
   }
 
-  // digits only check
   if (!/^09\d{9}$/.test(normalized)) {
     return { ok: false, message: "Phone Number must contain digits only. Example: 09XXXXXXXXX" };
   }
@@ -256,7 +246,6 @@ const normalizeReservationTime = (raw: string): string | null => {
   return null;
 };
 
-// Input MUST be "HH:MM am/pm"
 const parseReservationToISO = (time12: string, yyyyMmDd: string): string | null => {
   const tm = time12.trim().toLowerCase().match(/^(\d{2}):(\d{2})\s*(am|pm)$/);
   const dm = yyyyMmDd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -281,7 +270,6 @@ const parseReservationToISO = (time12: string, yyyyMmDd: string): string | null 
   return local.toISOString();
 };
 
-// ✅ reservation end of local day (so NEXT DAY seats are free)
 const endOfLocalDayIso = (yyyyMmDd: string): string => {
   const m = yyyyMmDd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return new Date().toISOString();
@@ -291,7 +279,6 @@ const endOfLocalDayIso = (yyyyMmDd: string): string => {
   return new Date(y, mo, d, 23, 59, 59, 999).toISOString();
 };
 
-// ✅ clamp helper: don't let reservation spill into next day
 const clampToReservationDay = (endIso: string, reservationDate?: string): string => {
   if (!reservationDate) return endIso;
   const eod = endOfLocalDayIso(reservationDate);
@@ -299,13 +286,6 @@ const clampToReservationDay = (endIso: string, reservationDate?: string): string
   const eodMs = new Date(eod).getTime();
   if (!Number.isFinite(endMs) || !Number.isFinite(eodMs)) return endIso;
   return endMs > eodMs ? eod : endIso;
-};
-
-// ✅ NEW: prevent reservation start time earlier than current time
-const isReservationStartInPast = (startIso: string): boolean => {
-  const startMs = new Date(startIso).getTime();
-  if (!Number.isFinite(startMs)) return true;
-  return startMs < Date.now();
 };
 
 type SeatBlockInsert = {
@@ -319,7 +299,6 @@ type SeatBlockInsert = {
 
 type SeatBlockInsertResult = { id: string; seat_number: string };
 
-// ✅ NEW: create/get user session automatically (anonymous)
 const ensureAuthUserId = async (): Promise<string> => {
   const { data: sess } = await supabase.auth.getSession();
   if (sess?.session?.user?.id) return sess.session.user.id;
@@ -362,10 +341,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [refreshSeatsTick, setRefreshSeatsTick] = useState(0);
 
-  const [timeAlertOpen, setTimeAlertOpen] = useState(false);
-  const [timeAlertMsg, setTimeAlertMsg] = useState("");
-
-  // ✅ PHONE ERROR MODAL (NEW)
   const [phoneAlertOpen, setPhoneAlertOpen] = useState(false);
   const [phoneAlertMsg, setPhoneAlertMsg] = useState("");
 
@@ -570,7 +545,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setOccupiedSeats([]);
     setDateTouchTick(0);
     setRefreshSeatsTick((x) => x + 1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   useEffect(() => {
@@ -614,7 +588,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     }
 
     void fetchOccupiedSeats(startIso, endIso);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isOpen,
     form.reservation,
@@ -626,6 +599,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     reservationStartIso,
     dateTouchTick,
     refreshSeatsTick,
+    timeAvail,
   ]);
 
   const formatPH = (d: Date) =>
@@ -655,18 +629,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const timeOutDisplay = openTime ? "OPEN TIME" : formatPH(new Date(summaryEndIso));
 
   const handleSubmitBooking = async (): Promise<void> => {
-    if (form.reservation && reservationStartIso) {
-      if (isReservationStartInPast(reservationStartIso)) {
-        setTimeAlertMsg("Time Started cannot be earlier than the current time. Please choose a valid future time.");
-        setTimeAlertOpen(true);
-        return;
-      }
-    }
-
     const trimmedName = form.full_name.trim();
     if (!trimmedName) return alert("Full Name is required.");
 
-    // ✅ PHONE VALIDATION MODAL (NEW)
     const phoneCheck = validatePhonePH(form.phone_number);
     if (!phoneCheck.ok) {
       setPhoneAlertMsg(phoneCheck.message);
@@ -696,7 +661,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
     }
 
-    // ✅ no-login needed; auto anonymous user id
     let userId: string;
     try {
       userId = await ensureAuthUserId();
@@ -708,7 +672,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const startIsoToStore =
       form.reservation && reservationStartIso ? reservationStartIso : new Date().toISOString();
 
-    // ✅ ALWAYS current date saved to DB
     const dateToStore = todayLocalYYYYMMDD();
 
     const timeEndedToStore = (() => {
@@ -771,7 +734,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         staff_id: null,
         date: dateToStore,
         full_name: trimmedName,
-        phone_number: phoneToStore, // ✅ store normalized phone (passes DB check)
+        phone_number: phoneToStore,
         customer_type: form.customer_type,
         customer_field: form.customer_field,
         has_id: form.has_id,
@@ -837,16 +800,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         </IonToolbar>
       </IonHeader>
 
-      {/* Time Started modal */}
-      <IonAlert
-        isOpen={timeAlertOpen}
-        header="Invalid Time Started"
-        message={timeAlertMsg}
-        buttons={["OK"]}
-        onDidDismiss={() => setTimeAlertOpen(false)}
-      />
-
-      {/* ✅ Phone Number modal */}
       <IonAlert
         isOpen={phoneAlertOpen}
         header="Invalid Phone Number"
