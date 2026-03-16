@@ -115,8 +115,18 @@ interface SelectedItem {
 type SeatGroup = { title: string; seats: string[] };
 
 const DEFAULT_SEAT_GROUPS: SeatGroup[] = [
-  { title: "1stF", seats: ["1", "2", "3", "4", "5", "6"] },
-  { title: "2ndF", seats: ["7a", "7b", "8a", "8b", "9", "10"] },
+  {
+    title: "1stF",
+    seats: ["1", "2", "3", "4", "5", "6", "7a", "7b","8a","8b","9", "10", "11"],
+  },
+  {
+    title: "TATAMI AREA",
+    seats: ["12a", "12b", "12c"],
+  },
+  {
+    title: "2ndF",
+    seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"],
+  },
 ];
 
 const SUCCESS_MESSAGE =
