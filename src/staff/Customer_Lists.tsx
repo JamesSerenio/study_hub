@@ -23,6 +23,11 @@
 // - ALL MONEY VALUES are WHOLE NUMBERS ONLY
 // - If value has decimal, ALWAYS ROUND UP
 //   Example: 10.01 => 11, 10.99 => 11
+// ✅ REMOVED:
+// - customer_field
+// - id_number
+// - Field column
+// - Specific ID column
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -47,9 +52,7 @@ interface CustomerSession {
   full_name: string;
   phone_number?: string | null;
   customer_type: string;
-  customer_field: string | null;
   has_id: boolean;
-  id_number: string | null;
   hour_avail: string;
   time_started: string;
   time_ended: string;
@@ -87,7 +90,6 @@ const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
-
 
 // ✅ NEW: whole peso, always round UP if may decimal
 const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
@@ -766,15 +768,15 @@ const Customer_Lists: React.FC = () => {
           ) : filteredSessions.length === 0 ? (
             <p className="customer-note">No data found for this date</p>
           ) : (
-                <div
-                  className="customer-table-wrap"
-                  key={selectedDate}
-                  style={{
-                    maxHeight: "560px",
-                    overflowY: "auto",
-                    overflowX: "auto",
-                  }}
-                >
+            <div
+              className="customer-table-wrap"
+              key={selectedDate}
+              style={{
+                maxHeight: "560px",
+                overflowY: "auto",
+                overflowX: "auto",
+              }}
+            >
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -782,9 +784,7 @@ const Customer_Lists: React.FC = () => {
                     <th>Full Name</th>
                     <th>Phone #</th>
                     <th>Type</th>
-                    <th>Field</th>
                     <th>Has ID</th>
-                    <th>Specific ID</th>
                     <th>Hours</th>
                     <th>Time In</th>
                     <th>Time Out</th>
@@ -817,9 +817,7 @@ const Customer_Lists: React.FC = () => {
                         <td>{session.full_name}</td>
                         <td>{phoneText(session)}</td>
                         <td>{session.customer_type}</td>
-                        <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
-                        <td>{session.id_number ?? "N/A"}</td>
                         <td>{session.hour_avail}</td>
                         <td>{formatTimeText(session.time_started)}</td>
                         <td>{renderTimeOut(session)}</td>
@@ -1239,8 +1237,8 @@ const Customer_Lists: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Field</span>
-                  <span>{selectedSession.customer_field ?? ""}</span>
+                  <span>Has ID</span>
+                  <span>{selectedSession.has_id ? "Yes" : "No"}</span>
                 </div>
 
                 <div className="receipt-row">
