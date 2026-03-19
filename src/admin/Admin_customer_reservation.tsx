@@ -21,6 +21,11 @@
 // - ALL MONEY VALUES are WHOLE NUMBERS ONLY
 // - If value has decimal, ALWAYS ROUND UP
 //   Example: 10.01 => 11, 10.99 => 11
+// ✅ REMOVED:
+// - customer_field
+// - id_number
+// - Field column
+// - Specific ID column
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -44,9 +49,7 @@ interface CustomerSession {
   phone_number?: string | null;
 
   customer_type: string;
-  customer_field: string | null;
   has_id: boolean;
-  id_number: string | null;
   hour_avail: string;
   time_started: string;
   time_ended: string;
@@ -150,7 +153,7 @@ const toMoney = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-// ✅ whole peso, always round UP if may decimal
+// ✅ whole peso, always round UP
 const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
@@ -895,9 +898,7 @@ const Admin_customer_reservation: React.FC = () => {
         { header: "Reservation Date", key: "reservation_date", width: 16 },
         { header: "Full Name", key: "full_name", width: 26 },
         { header: "Phone Number", key: "phone_number", width: 16 },
-        { header: "Field", key: "field", width: 18 },
         { header: "Has ID", key: "has_id", width: 10 },
-        { header: "Specific ID", key: "id_number", width: 16 },
         { header: "Hours", key: "hours", width: 10 },
         { header: "Time In", key: "time_in", width: 10 },
         { header: "Time Out", key: "time_out", width: 10 },
@@ -931,9 +932,7 @@ const Admin_customer_reservation: React.FC = () => {
       ws.getRow(1).height = 26;
 
       ws.mergeCells(`A2:${lastColLetter}2`);
-      ws.getCell("A2").value = `Range: ${label}${rangeMode === "day" ? "" : `  •  (${start} → ${end})`}   •   Records: ${
-        filteredSessions.length
-      }`;
+      ws.getCell("A2").value = `Range: ${label}${rangeMode === "day" ? "" : `  •  (${start} → ${end})`}   •   Records: ${filteredSessions.length}`;
       ws.getCell("A2").font = { size: 11 };
       ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
       ws.getRow(2).height = 18;
@@ -998,9 +997,7 @@ const Admin_customer_reservation: React.FC = () => {
           reservation_date: String(s.reservation_date ?? ""),
           full_name: s.full_name,
           phone_number: safePhone(s.phone_number),
-          field: s.customer_field ?? "",
           has_id: s.has_id ? "Yes" : "No",
-          id_number: s.id_number ?? "N/A",
           hours: s.hour_avail,
           time_in: String(formatTimeText(s.time_started)),
           time_out: open ? "OPEN" : String(formatTimeText(s.time_ended)),
@@ -1041,7 +1038,7 @@ const Admin_customer_reservation: React.FC = () => {
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
         });
 
-        const textCols = [1, 3, 8, 9];
+        const textCols = [1, 3, 6, 7];
         textCols.forEach((c) => {
           const cell = ws.getCell(rowIndex, c);
           cell.numFmt = "@";
@@ -1187,21 +1184,22 @@ const Admin_customer_reservation: React.FC = () => {
           ) : filteredSessions.length === 0 ? (
             <p className="customer-note">No reservation records found for this range</p>
           ) : (
-            <div className="customer-table-wrap" key={`${rangeMode}-${selectedDate}`}
-                    style={{
-                    maxHeight: "560px",
-                    overflowY: "auto",
-                    overflowX: "auto",
-                  }}>
+            <div
+              className="customer-table-wrap"
+              key={`${rangeMode}-${selectedDate}`}
+              style={{
+                maxHeight: "560px",
+                overflowY: "auto",
+                overflowX: "auto",
+              }}
+            >
               <table className="customer-table">
                 <thead>
                   <tr>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
                     <th>Phone #</th>
-                    <th>Field</th>
                     <th>Has ID</th>
-                    <th>Specific ID</th>
                     <th>Hours</th>
                     <th>Time In</th>
                     <th>Time Out</th>
@@ -1236,9 +1234,7 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>{session.reservation_date ?? "N/A"}</td>
                         <td>{session.full_name}</td>
                         <td>{safePhone(session.phone_number)}</td>
-                        <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
-                        <td>{session.id_number ?? "N/A"}</td>
                         <td>{session.hour_avail}</td>
                         <td>{formatTimeText(session.time_started)}</td>
                         <td>{renderTimeOut(session)}</td>
@@ -1594,6 +1590,11 @@ const Admin_customer_reservation: React.FC = () => {
                 <div className="receipt-row">
                   <span>Phone #</span>
                   <span>{safePhone(selectedSession.phone_number)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Has ID</span>
+                  <span>{selectedSession.has_id ? "Yes" : "No"}</span>
                 </div>
 
                 <div className="receipt-row">
