@@ -26,6 +26,8 @@
 // - id_number
 // - Field column
 // - Specific ID column
+// ✅ NEW:
+// - SORT BY TIME IN ASCENDING (earliest first)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -344,12 +346,30 @@ const Admin_customer_reservation: React.FC = () => {
     });
 
     const q = searchText.trim().toLowerCase();
-    if (!q) return byRange;
 
-    return byRange.filter((s) => {
-      const name = String(s.full_name ?? "").toLowerCase();
-      const phone = String(s.phone_number ?? "").toLowerCase();
-      return name.includes(q) || phone.includes(q);
+    const searched = !q
+      ? byRange
+      : byRange.filter((s) => {
+          const name = String(s.full_name ?? "").toLowerCase();
+          const phone = String(s.phone_number ?? "").toLowerCase();
+          return name.includes(q) || phone.includes(q);
+        });
+
+    return searched.sort((a, b) => {
+      const dateCompare = String(b.reservation_date ?? "").localeCompare(String(a.reservation_date ?? ""));
+      if (dateCompare !== 0) return dateCompare;
+
+      const aTime = new Date(a.time_started).getTime();
+      const bTime = new Date(b.time_started).getTime();
+
+      const aValid = Number.isFinite(aTime);
+      const bValid = Number.isFinite(bTime);
+
+      if (!aValid && !bValid) return 0;
+      if (!aValid) return 1;
+      if (!bValid) return -1;
+
+      return aTime - bTime; // earliest first
     });
   }, [sessions, currentRange, searchText]);
 
