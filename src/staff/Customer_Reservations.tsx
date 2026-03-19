@@ -28,6 +28,8 @@
 // - id_number
 // - Field column
 // - Specific ID column
+// ✅ NEW:
+// - SORT BY TIME IN ASCENDING (earliest first)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -342,14 +344,29 @@ const Customer_Reservations: React.FC = () => {
 
   const filteredSessions = useMemo(() => {
     const q = searchName.trim().toLowerCase();
-    return sessions.filter((s) => {
-      const sameDate = (s.reservation_date ?? "") === selectedDate;
-      if (!sameDate) return false;
 
-      if (!q) return true;
-      const name = String(s.full_name ?? "").toLowerCase();
-      return name.includes(q);
-    });
+    return sessions
+      .filter((s) => {
+        const sameDate = (s.reservation_date ?? "") === selectedDate;
+        if (!sameDate) return false;
+
+        if (!q) return true;
+        const name = String(s.full_name ?? "").toLowerCase();
+        return name.includes(q);
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.time_started).getTime();
+        const bTime = new Date(b.time_started).getTime();
+
+        const aValid = Number.isFinite(aTime);
+        const bValid = Number.isFinite(bTime);
+
+        if (!aValid && !bValid) return 0;
+        if (!aValid) return 1;
+        if (!bValid) return -1;
+
+        return aTime - bTime;
+      });
   }, [sessions, selectedDate, searchName]);
 
   const fetchReservationSessions = async (): Promise<void> => {
