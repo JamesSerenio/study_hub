@@ -4,7 +4,7 @@
 // ✅ Export EXCEL (.xlsx) supports Day / Week / Month
 // ✅ Delete supports Day / Week / Month ✅ ALSO deletes related seat_blocked_times
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both) in table + receipt
-// ✅ Discount + Discount Reason (saved, NOT shown on receipt UI)  (still stored in DB)
+// ✅ Discount + Discount Reason (saved, NOT shown on receipt UI) (still stored in DB)
 // ✅ Down Payment is EDITABLE (per reservation) like Admin_customer_list.tsx
 // ✅ Payment modal = FREE INPUTS (NO LIMIT) like Admin_customer_list.tsx
 // ✅ Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
@@ -16,18 +16,10 @@
 // ✅ No "any"
 // ✅ Phone Number column (table + receipt + excel)
 // ✅ Refresh button (same classname "receipt-btn")
-// ✅ Search bar EXACT SAME UI as Admin_customer_list.tsx (customer-searchbar-inline + icon + clear)
-// ✅ NEW FIX:
-// - ALL MONEY VALUES are WHOLE NUMBERS ONLY
-// - If value has decimal, ALWAYS ROUND UP
-//   Example: 10.01 => 11, 10.99 => 11
-// ✅ REMOVED:
-// - customer_field
-// - id_number
-// - Field column
-// - Specific ID column
-// ✅ NEW:
-// - SORT BY TIME IN ASCENDING (earliest first)
+// ✅ Search bar EXACT SAME UI as Admin_customer_list.tsx
+// ✅ ALL MONEY VALUES are WHOLE NUMBERS ONLY
+// ✅ Cancel reservation = move to customer_sessions_cancelled then delete original row
+// ✅ SORT BY TIME IN ASCENDING (earliest first)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -45,12 +37,15 @@ type RangeMode = "day" | "week" | "month";
 
 interface CustomerSession {
   id: string;
+  created_at?: string | null;
+  staff_id?: string | null;
+
   date: string;
   full_name: string;
-
   phone_number?: string | null;
 
   customer_type: string;
+  customer_field?: string | null;
   has_id: boolean;
   hour_avail: string;
   time_started: string;
@@ -62,6 +57,9 @@ interface CustomerSession {
   reservation: string;
   reservation_date: string | null;
   seat_number: string;
+
+  id_number?: string | null;
+  promo_booking_id?: string | null;
 
   down_payment?: number | string | null;
 
@@ -150,12 +148,12 @@ const formatTimeText = (iso: string): string => {
 };
 
 const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
+
 const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
 
-// ✅ whole peso, always round UP
 const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
@@ -207,7 +205,7 @@ const splitSeats = (seatStr: string): string[] => {
 };
 
 /* =========================
-   Excel helpers (logo)
+   Excel helpers
 ========================= */
 const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
   try {
@@ -268,6 +266,10 @@ const Admin_customer_reservation: React.FC = () => {
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
+
+  const [cancelTarget, setCancelTarget] = useState<CustomerSession | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>("");
+  const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
 
   useEffect(() => {
     void fetchReservations();
@@ -369,7 +371,7 @@ const Admin_customer_reservation: React.FC = () => {
       if (!aValid) return 1;
       if (!bValid) return -1;
 
-      return aTime - bTime; // earliest first
+      return aTime - bTime;
     });
   }, [sessions, currentRange, searchText]);
 
@@ -482,7 +484,8 @@ const Admin_customer_reservation: React.FC = () => {
     return { gcash, cash, totalPaid };
   };
 
-  const renderTimeOut = (s: CustomerSession): string => (isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended));
+  const renderTimeOut = (s: CustomerSession): string =>
+    isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
 
   const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
     const seats = splitSeats(session.seat_number);
@@ -506,7 +509,7 @@ const Admin_customer_reservation: React.FC = () => {
     if (rows.length === 0) {
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
-        .update({ end_at: nowIso, note: "stopped (fallback)" })
+        .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
         .in("seat_number", seats)
         .eq("source", "reserved")
         .gt("end_at", nowIso);
@@ -519,7 +522,10 @@ const Admin_customer_reservation: React.FC = () => {
 
     const ids = rows.map((r) => r.id);
 
-    const { error: upErr } = await supabase.from("seat_blocked_times").update({ end_at: nowIso, note: "stopped" }).in("id", ids);
+    const { error: upErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped/cancelled" })
+      .in("id", ids);
 
     if (upErr) {
       console.warn("releaseSeatBlocksNow update:", upErr.message);
@@ -591,6 +597,113 @@ const Admin_customer_reservation: React.FC = () => {
       alert("Stop Time failed.");
     } finally {
       setStoppingId(null);
+    }
+  };
+
+  const openCancelModal = (session: CustomerSession): void => {
+    setCancelTarget(session);
+    setCancelReason("");
+  };
+
+  const submitCancel = async (): Promise<void> => {
+    if (!cancelTarget) return;
+
+    const reason = cancelReason.trim();
+    if (!reason) {
+      alert("Cancel reason is required.");
+      return;
+    }
+
+    try {
+      setCancellingBusy(true);
+
+      const { data: freshRow, error: fetchErr } = await supabase
+        .from("customer_sessions")
+        .select("*")
+        .eq("id", cancelTarget.id)
+        .single();
+
+      if (fetchErr || !freshRow) {
+        alert(`Cancel failed: ${fetchErr?.message ?? "Session not found."}`);
+        return;
+      }
+
+      const row = freshRow as CustomerSession;
+
+      const cancelPayload = {
+        id: row.id,
+        cancelled_at: new Date().toISOString(),
+        cancel_reason: reason,
+
+        created_at: row.created_at ?? null,
+        staff_id: row.staff_id ?? null,
+
+        date: row.date,
+        full_name: row.full_name,
+        customer_type: row.customer_type,
+        customer_field: row.customer_field ?? null,
+        has_id: row.has_id,
+        hour_avail: row.hour_avail,
+        time_started: row.time_started,
+        time_ended: row.time_ended ?? row.time_started,
+
+        total_time: toMoney(row.total_time),
+        total_amount: toMoney(row.total_amount),
+
+        reservation: row.reservation ?? "yes",
+        reservation_date: row.reservation_date ?? null,
+
+        id_number: row.id_number ?? null,
+        seat_number: String(row.seat_number ?? "").trim() || "N/A",
+
+        promo_booking_id: row.promo_booking_id ?? null,
+
+        discount_kind: row.discount_kind ?? "none",
+        discount_value: Math.max(0, toMoney(row.discount_value ?? 0)),
+        discount_reason: row.discount_reason ?? null,
+
+        gcash_amount: Math.max(0, toMoney(row.gcash_amount ?? 0)),
+        cash_amount: Math.max(0, toMoney(row.cash_amount ?? 0)),
+        is_paid: toBool(row.is_paid),
+        paid_at: row.paid_at ?? null,
+
+        phone_number: row.phone_number ?? null,
+        down_payment: row.down_payment == null ? null : wholePeso(toMoney(row.down_payment)),
+      };
+
+      const { error: insertErr } = await supabase
+        .from("customer_sessions_cancelled")
+        .insert(cancelPayload);
+
+      if (insertErr) {
+        alert(`Cancel failed: ${insertErr.message}`);
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      await releaseSeatBlocksNow(row, nowIso);
+
+      const { error: deleteErr } = await supabase
+        .from("customer_sessions")
+        .delete()
+        .eq("id", row.id);
+
+      if (deleteErr) {
+        alert(`Cancelled copy saved, but delete failed: ${deleteErr.message}`);
+        return;
+      }
+
+      setSessions((prev) => prev.filter((s) => s.id !== row.id));
+      setSelectedSession((prev) => (prev?.id === row.id ? null : prev));
+
+      setCancelTarget(null);
+      setCancelReason("");
+      alert("Reservation cancelled successfully.");
+    } catch (e) {
+      console.error(e);
+      alert("Cancel failed.");
+    } finally {
+      setCancellingBusy(false);
     }
   };
 
@@ -685,9 +798,6 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // DISCOUNT MODAL
-  // -----------------------
   const openDiscountModal = (s: CustomerSession): void => {
     const di = getDiscountInfo(s);
     setDiscountTarget(s);
@@ -747,9 +857,6 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // DOWN PAYMENT MODAL
-  // -----------------------
   const openDpModal = (s: CustomerSession): void => {
     setDpTarget(s);
     setDpInput(String(getDownPayment(s)));
@@ -800,9 +907,6 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // PAYMENT MODAL
-  // -----------------------
   const openPaymentModal = (s: CustomerSession): void => {
     const pi = getPaidInfo(s);
     setPaymentTarget(s);
@@ -852,9 +956,6 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  // -----------------------
-  // PAID / UNPAID TOGGLE
-  // -----------------------
   const togglePaid = async (s: CustomerSession): Promise<void> => {
     try {
       setTogglingPaidId(s.id);
@@ -887,9 +988,6 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  /* =========================
-     Export Excel
-  ========================= */
   const exportToExcel = async (): Promise<void> => {
     if (!selectedDate) {
       alert("Please select a date.");
@@ -923,20 +1021,15 @@ const Admin_customer_reservation: React.FC = () => {
         { header: "Time In", key: "time_in", width: 10 },
         { header: "Time Out", key: "time_out", width: 10 },
         { header: "Total Time", key: "total_time", width: 14 },
-
         { header: "Amount Label", key: "amount_label", width: 14 },
         { header: "Amount", key: "amount", width: 12 },
-
         { header: "Discount", key: "discount", width: 12 },
         { header: "Discount Amount", key: "discount_amount", width: 16 },
-
         { header: "Down Payment", key: "down_payment", width: 14 },
         { header: "System Cost", key: "system_cost", width: 14 },
-
         { header: "GCash", key: "gcash", width: 12 },
         { header: "Cash", key: "cash", width: 12 },
         { header: "Total Paid", key: "total_paid", width: 12 },
-
         { header: "Remaining (After DP)", key: "remaining", width: 18 },
         { header: "Paid?", key: "paid", width: 10 },
         { header: "Seat", key: "seat", width: 12 },
@@ -995,7 +1088,16 @@ const Admin_customer_reservation: React.FC = () => {
         };
       });
 
-      const moneyCols = new Set(["amount", "discount_amount", "down_payment", "system_cost", "gcash", "cash", "total_paid", "remaining"]);
+      const moneyCols = new Set([
+        "amount",
+        "discount_amount",
+        "down_payment",
+        "system_cost",
+        "gcash",
+        "cash",
+        "total_paid",
+        "remaining",
+      ]);
 
       filteredSessions.forEach((s, idx) => {
         const open = isOpenTimeSession(s);
@@ -1139,7 +1241,7 @@ const Admin_customer_reservation: React.FC = () => {
                   />
 
                   {searchText.trim() && (
-                    <button className="customer-search-clear" onClick={() => setSearchText("")}>
+                    <button className="customer-search-clear" onClick={() => setSearchText("")} type="button">
                       Clear
                     </button>
                   )}
@@ -1174,7 +1276,7 @@ const Admin_customer_reservation: React.FC = () => {
                   </span>
                 </label>
 
-                <button className="receipt-btn" onClick={() => void refreshAll()} disabled={refreshing || loading}>
+                <button className="receipt-btn" onClick={() => void refreshAll()} disabled={refreshing || loading} type="button">
                   {refreshing ? "Refreshing..." : "Refresh"}
                 </button>
 
@@ -1183,6 +1285,7 @@ const Admin_customer_reservation: React.FC = () => {
                   onClick={() => void exportToExcel()}
                   disabled={filteredSessions.length === 0 || exporting}
                   title={filteredSessions.length === 0 ? "No data to export" : "Export .xlsx for Day/Week/Month"}
+                  type="button"
                 >
                   {exporting ? "Exporting..." : "Export to Excel"}
                 </button>
@@ -1192,6 +1295,7 @@ const Admin_customer_reservation: React.FC = () => {
                   onClick={() => void deleteByRange()}
                   disabled={deletingRange || filteredSessions.length === 0}
                   title={filteredSessions.length === 0 ? "No data to delete" : "Delete ALL records for selected range"}
+                  type="button"
                 >
                   {deletingRange ? "Deleting..." : "Delete"}
                 </button>
@@ -1242,7 +1346,6 @@ const Admin_customer_reservation: React.FC = () => {
                     const disp = getDisplayAmount(session);
 
                     const dp = getDownPayment(session);
-
                     const due = getSessionBalanceAfterDP(session);
                     const pi = getPaidInfo(session);
 
@@ -1258,7 +1361,6 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>{session.hour_avail}</td>
                         <td>{formatTimeText(session.time_started)}</td>
                         <td>{renderTimeOut(session)}</td>
-
                         <td>{formatMinutesToTime(mins)}</td>
 
                         <td>
@@ -1271,7 +1373,7 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">{getDiscountText(session)}</span>
-                            <button className="receipt-btn" onClick={() => openDiscountModal(session)}>
+                            <button className="receipt-btn" onClick={() => openDiscountModal(session)} type="button">
                               Discount
                             </button>
                           </div>
@@ -1280,7 +1382,7 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">₱{dp}</span>
-                            <button className="receipt-btn" onClick={() => openDpModal(session)}>
+                            <button className="receipt-btn" onClick={() => openDpModal(session)} type="button">
                               Edit DP
                             </button>
                           </div>
@@ -1302,6 +1404,7 @@ const Admin_customer_reservation: React.FC = () => {
                               onClick={() => openPaymentModal(session)}
                               disabled={due <= 0}
                               title={due <= 0 ? "No balance due" : "Set Cash & GCash freely (no limit)"}
+                              type="button"
                             >
                               Payment
                             </button>
@@ -1314,6 +1417,7 @@ const Admin_customer_reservation: React.FC = () => {
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
+                            type="button"
                           >
                             {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
                           </button>
@@ -1329,19 +1433,30 @@ const Admin_customer_reservation: React.FC = () => {
                                 className="receipt-btn"
                                 disabled={stoppingId === session.id}
                                 onClick={() => void stopReservationTime(session)}
+                                type="button"
                               >
                                 {stoppingId === session.id ? "Stopping..." : "Stop Time"}
                               </button>
                             )}
 
-                            <button className="receipt-btn" onClick={() => setSelectedSession(session)}>
+                            <button className="receipt-btn" onClick={() => setSelectedSession(session)} type="button">
                               View Receipt
+                            </button>
+
+                            <button
+                              className="receipt-btn admin-danger"
+                              onClick={() => openCancelModal(session)}
+                              disabled={cancellingBusy}
+                              type="button"
+                            >
+                              Cancel
                             </button>
 
                             <button
                               className="receipt-btn admin-neutral"
                               disabled={deletingId === session.id}
                               onClick={() => void deleteSession(session)}
+                              type="button"
                             >
                               {deletingId === session.id ? "Deleting..." : "Delete"}
                             </button>
@@ -1352,6 +1467,62 @@ const Admin_customer_reservation: React.FC = () => {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {cancelTarget && (
+            <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL RESERVATION</h3>
+                <p className="receipt-subtitle">
+                  {cancelTarget.full_name} — {safePhone(cancelTarget.phone_number)}
+                </p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Reservation Date</span>
+                  <span>{cancelTarget.reservation_date ?? "N/A"}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{cancelTarget.seat_number}</span>
+                </div>
+
+                <hr />
+
+                <div className="receipt-row" style={{ display: "grid", gap: 8 }}>
+                  <span style={{ fontWeight: 800 }}>Description / Reason (required)</span>
+                  <textarea
+                    className="reason-input"
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.currentTarget.value)}
+                    placeholder="e.g. Customer changed mind, wrong input, staff mistake..."
+                    rows={4}
+                    style={{ width: "100%", resize: "vertical" }}
+                    disabled={cancellingBusy}
+                  />
+                  <div style={{ fontSize: 12, opacity: 0.85 }}>
+                    ⚠️ This record will be moved to <strong>customer_sessions_cancelled</strong>.
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancellingBusy} type="button">
+                    Back
+                  </button>
+
+                  <button
+                    className="receipt-btn admin-danger"
+                    onClick={() => void submitCancel()}
+                    disabled={cancellingBusy || cancelReason.trim().length === 0}
+                    type="button"
+                  >
+                    {cancellingBusy ? "Cancelling..." : "Submit Cancel"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1378,10 +1549,10 @@ const Admin_customer_reservation: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDpTarget(null)} disabled={savingDp}>
+                  <button className="receipt-btn" onClick={() => setDpTarget(null)} disabled={savingDp} type="button">
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDownPayment()} disabled={savingDp}>
+                  <button className="receipt-btn" onClick={() => void saveDownPayment()} disabled={savingDp} type="button">
                     {savingDp ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1493,10 +1664,10 @@ const Admin_customer_reservation: React.FC = () => {
                 })()}
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDiscountTarget(null)} disabled={savingDiscount}>
+                  <button className="receipt-btn" onClick={() => setDiscountTarget(null)} disabled={savingDiscount} type="button">
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount}>
+                  <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount} type="button">
                     {savingDiscount ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1573,10 +1744,10 @@ const Admin_customer_reservation: React.FC = () => {
                       </div>
 
                       <div className="modal-actions">
-                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} disabled={savingPayment}>
+                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} disabled={savingPayment} type="button">
                           Cancel
                         </button>
-                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment}>
+                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment} type="button">
                           {savingPayment ? "Saving..." : "Save"}
                         </button>
                       </div>
@@ -1645,6 +1816,7 @@ const Admin_customer_reservation: React.FC = () => {
                       className="receipt-btn btn-full"
                       disabled={stoppingId === selectedSession.id}
                       onClick={() => void stopReservationTime(selectedSession)}
+                      type="button"
                     >
                       {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
                     </button>
@@ -1728,7 +1900,7 @@ const Admin_customer_reservation: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <button className="close-btn" onClick={() => setSelectedSession(null)}>
+                <button className="close-btn" onClick={() => setSelectedSession(null)} type="button">
                   Close
                 </button>
               </div>
