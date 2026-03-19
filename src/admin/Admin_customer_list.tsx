@@ -18,6 +18,11 @@
 // - ALL MONEY VALUES are WHOLE NUMBERS ONLY
 // - If value has decimal, ALWAYS ROUND UP
 //   Example: 10.01 => 11, 10.99 => 11
+// ✅ REMOVED:
+// - customer_field
+// - id_number
+// - Field column
+// - Specific ID column
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -60,9 +65,7 @@ interface CustomerSession {
   phone_number?: string | null;
 
   customer_type: string;
-  customer_field: string | null;
   has_id: boolean;
-  id_number: string | null;
   hour_avail: string;
   time_started: string;
   time_ended: string;
@@ -855,9 +858,7 @@ const Admin_customer_list: React.FC = () => {
         { header: "Full Name", key: "full_name", width: 26 },
         { header: "Phone #", key: "phone_number", width: 16 },
         { header: "Type", key: "customer_type", width: 14 },
-        { header: "Field", key: "customer_field", width: 18 },
         { header: "Has ID", key: "has_id", width: 10 },
-        { header: "Specific ID", key: "id_number", width: 16 },
         { header: "Hours", key: "hour_avail", width: 10 },
         { header: "Time In", key: "time_in", width: 10 },
         { header: "Time Out", key: "time_out", width: 10 },
@@ -880,7 +881,7 @@ const Admin_customer_list: React.FC = () => {
         { header: "Seat", key: "seat", width: 10 },
       ];
 
-      const lastColLetter = "W";
+      const lastColLetter = "U";
 
       ws.mergeCells(`A1:${lastColLetter}1`);
       ws.getCell("A1").value = "ME TYME LOUNGE — Admin Customer Lists (Non-Reservation)";
@@ -901,7 +902,7 @@ const Admin_customer_list: React.FC = () => {
           const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
           const imgId = wb.addImage({ buffer: ab, extension: ext });
           ws.addImage(imgId, {
-            tl: { col: 18.5, row: 0.25 },
+            tl: { col: 16.5, row: 0.25 },
             ext: { width: 170, height: 64 },
           });
         }
@@ -945,9 +946,7 @@ const Admin_customer_list: React.FC = () => {
           full_name: s.full_name,
           phone_number: phoneText(s),
           customer_type: s.customer_type,
-          customer_field: s.customer_field ?? "",
           has_id: s.has_id ? "Yes" : "No",
-          id_number: s.id_number ?? "N/A",
           hour_avail: s.hour_avail,
           time_in: formatTimeText(s.time_started),
           time_out: open ? "OPEN" : formatTimeText(s.time_ended),
@@ -1134,12 +1133,15 @@ const Admin_customer_list: React.FC = () => {
           ) : filteredSessions.length === 0 ? (
             <p className="customer-note">No data found for this range</p>
           ) : (
-            <div className="customer-table-wrap" key={`${filterMode}-${activeRange.fileLabel}`}
-                    style={{
-                    maxHeight: "560px",
-                    overflowY: "auto",
-                    overflowX: "auto",
-                  }}>
+            <div
+              className="customer-table-wrap"
+              key={`${filterMode}-${activeRange.fileLabel}`}
+              style={{
+                maxHeight: "560px",
+                overflowY: "auto",
+                overflowX: "auto",
+              }}
+            >
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -1147,9 +1149,7 @@ const Admin_customer_list: React.FC = () => {
                     <th>Full Name</th>
                     <th>Phone #</th>
                     <th>Type</th>
-                    <th>Field</th>
                     <th>Has ID</th>
-                    <th>Specific ID</th>
                     <th>Hours</th>
                     <th>Time In</th>
                     <th>Time Out</th>
@@ -1183,9 +1183,7 @@ const Admin_customer_list: React.FC = () => {
                         <td>{session.full_name}</td>
                         <td>{phoneText(session)}</td>
                         <td>{session.customer_type}</td>
-                        <td>{session.customer_field ?? ""}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
-                        <td>{session.id_number ?? "N/A"}</td>
                         <td>{session.hour_avail}</td>
                         <td>{formatTimeText(session.time_started)}</td>
                         <td>{renderTimeOut(session)}</td>
@@ -1597,8 +1595,8 @@ const Admin_customer_list: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Field</span>
-                  <span>{selectedSession.customer_field ?? ""}</span>
+                  <span>Has ID</span>
+                  <span>{selectedSession.has_id ? "Yes" : "No"}</span>
                 </div>
 
                 <div className="receipt-row">
