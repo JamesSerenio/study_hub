@@ -8,16 +8,17 @@
 // ✅ Auto refresh seats when date/time changes
 // ✅ Auto-delete expired reserved blocks (end_at < now) so seats come back
 // ✅ FIX: Reservation "Open Time" will NOT use 2999 anymore
-//    - reservation openTime => end_at = end of the selected reservation date (23:59:59.999)
-//    - so when you pick NEXT DAY, seats are FREE automatically
-// ✅ Non-reservation openTime can stay FAR_FUTURE (seat is "N/A" so no seat blocking)
+// ✅ Reservation openTime => end_at = end of selected reservation date
+// ✅ Non-reservation openTime can stay FAR_FUTURE
 // ✅ FIX: Removed strict "past reservation time" blocking
 // ✅ FIX: DB `date` ALWAYS saves CURRENT DATE (local) even for reservation
 // ✅ NO any
-// ✅ NEW UI: Reservation Date uses scroll/wheel picker (IonDatetimeButton + modal)
+// ✅ NEW UI: Reservation Date uses BEAUTIFUL CALENDAR PICKER
 // ✅ NEW FIX: Can save even without login (auto anonymous auth)
-// ✅ NEW: Phone Number required (both reservation and non-reservation)
-// ✅ NEW: Phone validation MODAL (kulang/sobra/hindi 09)
+// ✅ NEW: Phone Number required
+// ✅ NEW: Phone validation MODAL
+// ✅ REMOVED: Customer Field
+// ✅ REMOVED: Specific ID input / id_number
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -36,7 +37,6 @@ import {
   IonSelectOption,
   IonToggle,
   IonDatetime,
-  IonDatetimeButton,
   IonAlert,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
@@ -58,9 +58,7 @@ interface CustomerForm {
   full_name: string;
   phone_number: string;
   customer_type: CustomerType;
-  customer_field: string;
   has_id: boolean;
-  id_number: string;
   seat_number: string[];
   reservation: boolean;
   reservation_date?: string;
@@ -95,10 +93,6 @@ const toYYYYMMDD = (v: string): string | null => {
 
 const todayLocalYYYYMMDD = (): string => new Date().toLocaleDateString("en-CA");
 
-/* =========================
-   PHONE HELPERS
-========================= */
-
 const normalizePhonePH = (raw: string): string => {
   const trimmed = String(raw ?? "").trim();
   if (!trimmed) return "";
@@ -109,7 +103,6 @@ const normalizePhonePH = (raw: string): string => {
   if (s.startsWith("63")) s = "0" + s.slice(2);
 
   s = s.replace(/[^\d]/g, "");
-
   return s;
 };
 
@@ -129,6 +122,7 @@ const validatePhonePH = (raw: string): PhoneValidation => {
   if (normalized.length < 11) {
     return { ok: false, message: "Phone Number is too short. It must be 11 digits (09XXXXXXXXX)." };
   }
+
   if (normalized.length > 11) {
     return { ok: false, message: "Phone Number is too long. It must be 11 digits (09XXXXXXXXX)." };
   }
@@ -141,11 +135,7 @@ const validatePhonePH = (raw: string): PhoneValidation => {
 };
 
 const normalizeTimeAvail = (value: string): string | null => {
-  const raw = value
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "")
-    .replace(/[^0-9:]/g, "");
+  const raw = value.trim().toLowerCase().replace(/\s+/g, "").replace(/[^0-9:]/g, "");
 
   if (!raw) return null;
 
@@ -315,9 +305,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     full_name: "",
     phone_number: "",
     customer_type: "",
-    customer_field: "",
     has_id: false,
-    id_number: "",
     seat_number: [],
     reservation: false,
     reservation_date: undefined,
@@ -336,9 +324,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [timeSnapshotIso, setTimeSnapshotIso] = useState(new Date().toISOString());
 
-  const dateRef = useRef<HTMLIonDatetimeElement | null>(null);
   const [dateTouchTick, setDateTouchTick] = useState(0);
-
   const [refreshSeatsTick, setRefreshSeatsTick] = useState(0);
 
   const [phoneAlertOpen, setPhoneAlertOpen] = useState(false);
@@ -605,11 +591,24 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const formatPH = (d: Date) =>
     d.toLocaleString("en-PH", {
       year: "numeric",
-      month: "short",
-      day: "2-digit",
+      month: "long",
+      day: "numeric",
+      weekday: "long",
       hour: "2-digit",
       minute: "2-digit",
     });
+
+  const formatReservationDateOnly = (yyyyMmDd?: string): string => {
+    if (!yyyyMmDd) return "No date selected";
+    const [y, m, d] = yyyyMmDd.split("-").map(Number);
+    const dt = new Date(y, (m ?? 1) - 1, d ?? 1);
+    return dt.toLocaleDateString("en-PH", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  };
 
   const summaryStartIso = useMemo(() => {
     if (!form.reservation) return timeSnapshotIso;
@@ -736,9 +735,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         full_name: trimmedName,
         phone_number: phoneToStore,
         customer_type: form.customer_type,
-        customer_field: form.customer_field,
         has_id: form.has_id,
-        id_number: form.id_number,
         hour_avail: openTime ? "OPEN" : timeAvail,
         time_started: startIsoToStore,
         time_ended: timeEndedToStore,
@@ -764,9 +761,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       full_name: "",
       phone_number: "",
       customer_type: "",
-      customer_field: "",
       has_id: false,
-      id_number: "",
       seat_number: [],
       reservation: false,
       reservation_date: undefined,
@@ -854,29 +849,10 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           </IonItem>
 
           <IonItem className="form-item">
-            <IonLabel position="stacked">Customer Field</IonLabel>
-            <IonInput
-              value={form.customer_field}
-              onIonChange={(e) => setForm({ ...form, customer_field: e.detail.value ?? "" })}
-            />
-          </IonItem>
-
-          <IonItem className="form-item">
             <IonLabel>ID</IonLabel>
             <IonToggle checked={form.has_id} onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })} />
             <IonLabel slot="end">{form.has_id ? "With" : "Without"}</IonLabel>
           </IonItem>
-
-          {form.has_id && (
-            <IonItem className="form-item">
-              <IonLabel position="stacked">Specific ID</IonLabel>
-              <IonInput
-                value={form.id_number}
-                placeholder="e.g., National ID, Student ID"
-                onIonChange={(e) => setForm({ ...form, id_number: e.detail.value ?? "" })}
-              />
-            </IonItem>
-          )}
 
           <IonItem className="form-item">
             <IonLabel>Reservation</IonLabel>
@@ -906,26 +882,33 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
           {form.reservation && (
             <>
-              <IonItem className="form-item">
-                <IonLabel position="stacked">Reservation Date</IonLabel>
-
-                <div style={{ marginTop: 8, width: "100%" }}>
-                  <IonDatetimeButton datetime="reservation-date" />
+              <div
+                className="form-item"
+                style={{
+                  marginTop: 14,
+                  padding: 14,
+                  borderRadius: 16,
+                  background: "var(--ion-color-light, #f8f9fb)",
+                  border: "1px solid rgba(0,0,0,0.08)",
+                }}
+              >
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>Reservation Date</div>
+                  <div style={{ fontSize: 13, opacity: 0.75, marginTop: 4 }}>
+                    {formatReservationDateOnly(form.reservation_date)}
+                  </div>
                 </div>
 
-                <IonModal keepContentsMounted>
-                  <IonDatetime
-                    id="reservation-date"
-                    ref={dateRef}
-                    presentation="date"
-                    preferWheel={true}
-                    showDefaultButtons={true}
-                    min={todayLocalYYYYMMDD()}
-                    value={form.reservation_date}
-                    onIonChange={(e) => applyPickedDate(e.detail.value)}
-                  />
-                </IonModal>
-              </IonItem>
+                <IonDatetime
+                  presentation="date"
+                  preferWheel={false}
+                  showDefaultTitle={true}
+                  locale="en-PH"
+                  min={todayLocalYYYYMMDD()}
+                  value={form.reservation_date}
+                  onIonChange={(e) => applyPickedDate(e.detail.value)}
+                />
+              </div>
 
               <IonItem className="form-item">
                 <IonLabel position="stacked">Time Started (Reservation)</IonLabel>
@@ -1063,6 +1046,3 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     </IonModal>
   );
 }
-
-
-
