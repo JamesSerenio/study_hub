@@ -28,6 +28,8 @@
 // - id_number
 // - Field column
 // - Specific ID column
+// ✅ NEW:
+// - SORT BY TIME IN ASCENDING (earliest first, e.g. 8:00 AM before 9:00 AM)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -91,7 +93,7 @@ const toMoney = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-// ✅ NEW: whole peso, always round UP if may decimal
+// ✅ whole peso, always round UP if may decimal
 const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
@@ -221,14 +223,29 @@ const Customer_Lists: React.FC = () => {
 
   const filteredSessions = useMemo(() => {
     const q = searchName.trim().toLowerCase();
-    return sessions.filter((s) => {
-      const sameDate = (s.date ?? "") === selectedDate;
-      if (!sameDate) return false;
 
-      if (!q) return true;
-      const name = String(s.full_name ?? "").toLowerCase();
-      return name.includes(q);
-    });
+    return sessions
+      .filter((s) => {
+        const sameDate = (s.date ?? "") === selectedDate;
+        if (!sameDate) return false;
+
+        if (!q) return true;
+        const name = String(s.full_name ?? "").toLowerCase();
+        return name.includes(q);
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.time_started).getTime();
+        const bTime = new Date(b.time_started).getTime();
+
+        const aValid = Number.isFinite(aTime);
+        const bValid = Number.isFinite(bTime);
+
+        if (!aValid && !bValid) return 0;
+        if (!aValid) return 1;
+        if (!bValid) return -1;
+
+        return aTime - bTime; // ✅ earliest time in first
+      });
   }, [sessions, selectedDate, searchName]);
 
   const fetchCustomerSessions = async (): Promise<void> => {
