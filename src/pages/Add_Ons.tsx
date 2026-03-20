@@ -1130,7 +1130,7 @@ const Add_Ons: React.FC = () => {
                 <div key={`cat-${index}`} className="addon-block">
                   <div className="addon-row">
                     <IonItem className="ao-form-item ao-form-item-compact addon-flex">
-                      <IonLabel position="stacked">Select Category {index + 1}</IonLabel>
+                      <IonLabel position="stacked">Select Order {index + 1}</IonLabel>
                       <IonSelect
                         value={category}
                         placeholder="Choose a category"

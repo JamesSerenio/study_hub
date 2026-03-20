@@ -1304,8 +1304,8 @@ const Admin_customer_reservation: React.FC = () => {
                       setDateFilterMode(e.currentTarget.value as DateFilterMode)
                     }
                   >
-                    <option value="reserved_on">Reserved On</option>
-                    <option value="start_date">Start Date</option>
+                    <option value="reserved_on">Advance Booking</option>
+                    <option value="start_date">Today Reservation</option>
                   </select>
                 </label>
 

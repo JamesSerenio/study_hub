@@ -953,6 +953,28 @@ const Admin_Restock_Record: React.FC = () => {
             </div>
 
             <div className="customer-topbar-right restock-actions">
+              <div className="customer-searchbar-inline restock-search-inline">
+                <div className="customer-searchbar-inner">
+                  <span className="customer-search-icon" aria-hidden="true">
+                    🔎
+                  </span>
+
+                  <input
+                    className="customer-search-input"
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
+                    placeholder={source === "add_ons" ? "Search item or category..." : "Search item / owner / category..."}
+                  />
+
+                  {search.trim() && (
+                    <button className="customer-search-clear" onClick={() => setSearch("")} type="button">
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <label className="date-pill" style={{ marginLeft: 10 }}>
                 <span className="date-pill-label">Source</span>
                 <select className="date-pill-input" value={source} onChange={(e) => setSource(e.currentTarget.value as SourceKind)}>
@@ -1024,41 +1046,6 @@ const Admin_Restock_Record: React.FC = () => {
                 Delete By {filterMode === "day" ? "Date" : filterMode === "week" ? "Week" : "Month"}
               </IonButton>
             </div>
-          </div>
-
-          {/* ✅ SEARCH (INANGAT LANG) */}
-          <div
-            className="restock-filters"
-            style={{
-              marginTop: -55,
-              marginBottom: 8,
-            }}
-          >
-            <div className="restock-left">
-              <div className="customer-searchbar-inline" style={{ maxWidth: 420 }}>
-                <div className="customer-searchbar-inner">
-                  <span className="customer-search-icon" aria-hidden="true">
-                    🔎
-                  </span>
-
-                  <input
-                    className="customer-search-input"
-                    type="text"
-                    value={search}
-                    onChange={(e) => setSearch(String(e.currentTarget.value ?? ""))}
-                    placeholder={source === "add_ons" ? "Search item or category..." : "Search item / owner / category..."}
-                  />
-
-                  {search.trim() && (
-                    <button className="customer-search-clear" onClick={() => setSearch("")} type="button">
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="restock-right" />
           </div>
 
           {loading ? (

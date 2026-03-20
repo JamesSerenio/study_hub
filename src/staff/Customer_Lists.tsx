@@ -237,8 +237,10 @@ const Customer_Lists: React.FC = () => {
         if (!sameDate) return false;
 
         if (!q) return true;
-        const name = String(s.full_name ?? "").toLowerCase();
-        return name.includes(q);
+      const name = String(s.full_name ?? "").toLowerCase();
+      const code = String(s.booking_code ?? "").toLowerCase();
+
+      return name.includes(q) || code.includes(q);
       })
       .sort((a, b) => {
         const aTime = new Date(a.time_started).getTime();
@@ -907,6 +909,7 @@ const Customer_Lists: React.FC = () => {
                   <tr>
                     <th>Date</th>
                     <th>Full Name</th>
+                    <th>Booking Code</th>
                     <th>Phone #</th>
                     <th>Type</th>
                     <th>Has ID</th>
@@ -940,6 +943,7 @@ const Customer_Lists: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.date}</td>
                         <td>{session.full_name}</td>
+                        <td>{session.booking_code ?? "—"}</td>
                         <td>{phoneText(session)}</td>
                         <td>{session.customer_type}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
@@ -1091,6 +1095,20 @@ const Customer_Lists: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
+
+                  <button
+                    className="receipt-btn"
+                    onClick={() => {
+                      if (selectedSession?.booking_code) {
+                        navigator.clipboard.writeText(selectedSession.booking_code);
+                        alert("Booking code copied!");
+                      }
+                    }}
+                    type="button"
+                  >
+                    Copy Code
+                  </button>
+                  
                   <button
                     className="receipt-btn"
                     onClick={() => setCancelTarget(null)}
@@ -1357,6 +1375,11 @@ const Customer_Lists: React.FC = () => {
                 <div className="receipt-row">
                   <span>Customer</span>
                   <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Booking Code</span>
+                  <span>{selectedSession.booking_code ?? "—"}</span>
                 </div>
 
                 <div className="receipt-row">

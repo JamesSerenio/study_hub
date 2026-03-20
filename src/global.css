@@ -6029,6 +6029,15 @@ ion-content.aao-content{
   justify-content: flex-end;
 }
 
+.restock-search-inline {
+  width: min(100%, 420px);
+}
+
+.restock-search-inline .customer-searchbar-inner {
+  width: 100%;
+  max-width: 420px;
+}
+
 /* =========================
    FILTER ROW
 ========================= */
