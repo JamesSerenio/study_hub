@@ -1,8 +1,16 @@
 // src/pages/Admin_customer_reservation.tsx
 // ✅ Same classnames/layout as Admin_customer_list.tsx (one CSS)
-// ✅ Date filter now supports RANGE: Day / Week / Month (uses reservation_date)
-// ✅ Export EXCEL (.xlsx) supports Day / Week / Month
-// ✅ Delete supports Day / Week / Month ✅ ALSO deletes related seat_blocked_times
+// ✅ FILTER UI now matches Customer_Reservations:
+//    - Search by Full Name only
+//    - ONE date input only
+//    - ONE dropdown to choose date basis:
+//      1) Reserved On  -> created_at
+//      2) Start Date   -> reservation_date
+// ✅ Start Date filter now supports reservation coverage
+//    Example: reservation_date = March 2 + hour_avail = 1 week
+//    -> it will still appear on March 3, March 4, etc. until coverage ends
+// ✅ Export EXCEL (.xlsx) exports CURRENT filtered rows
+// ✅ Delete button deletes CURRENT filtered rows ✅ ALSO deletes related seat_blocked_times
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change (NOT both) in table + receipt
 // ✅ Discount + Discount Reason (saved, NOT shown on receipt UI) (still stored in DB)
 // ✅ Down Payment is EDITABLE (per reservation) like Admin_customer_list.tsx
@@ -16,7 +24,7 @@
 // ✅ No "any"
 // ✅ Phone Number column (table + receipt + excel)
 // ✅ Refresh button (same classname "receipt-btn")
-// ✅ Search bar EXACT SAME UI as Admin_customer_list.tsx
+// ✅ Search bar EXACT SAME UI as Customer_Reservations
 // ✅ ALL MONEY VALUES are WHOLE NUMBERS ONLY
 // ✅ Cancel reservation = move to customer_sessions_cancelled then delete original row
 // ✅ SORT BY TIME IN ASCENDING (earliest first)
@@ -33,7 +41,7 @@ const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 
 type DiscountKind = "none" | "percent" | "amount";
-type RangeMode = "day" | "week" | "month";
+type DateFilterMode = "reserved_on" | "start_date";
 
 interface CustomerSession {
   id: string;
@@ -95,50 +103,23 @@ const parseYmd = (ymd: string): Date => {
   const y = Number(yS);
   const m = Number(mS);
   const d = Number(dS);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return new Date();
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    return new Date();
+  }
   return new Date(y, m - 1, d, 0, 0, 0, 0);
 };
 
-const startOfWeekMonday = (ymd: string): string => {
-  const dt = parseYmd(ymd);
-  const day = dt.getDay();
-  const diffToMonday = (day + 6) % 7;
-  dt.setDate(dt.getDate() - diffToMonday);
-  return yyyyMmDdLocal(dt);
+const formatDateDisplay = (dateStr: string | null | undefined): string => {
+  if (!dateStr) return "—";
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return String(dateStr);
+  return d.toLocaleDateString("en-GB");
 };
 
-const endOfWeekMonday = (ymd: string): string => {
-  const start = parseYmd(startOfWeekMonday(ymd));
-  start.setDate(start.getDate() + 6);
-  return yyyyMmDdLocal(start);
-};
-
-const startOfMonth = (ymd: string): string => {
-  const dt = parseYmd(ymd);
-  const s = new Date(dt.getFullYear(), dt.getMonth(), 1);
-  return yyyyMmDdLocal(s);
-};
-
-const endOfMonth = (ymd: string): string => {
-  const dt = parseYmd(ymd);
-  const e = new Date(dt.getFullYear(), dt.getMonth() + 1, 0);
-  return yyyyMmDdLocal(e);
-};
-
-const getRange = (mode: RangeMode, anchorYmd: string): { start: string; end: string; label: string } => {
-  if (mode === "week") {
-    const start = startOfWeekMonday(anchorYmd);
-    const end = endOfWeekMonday(anchorYmd);
-    return { start, end, label: `Week (${start} → ${end})` };
-  }
-  if (mode === "month") {
-    const start = startOfMonth(anchorYmd);
-    const end = endOfMonth(anchorYmd);
-    const dt = parseYmd(anchorYmd);
-    const monthName = dt.toLocaleString([], { month: "long", year: "numeric" });
-    return { start, end, label: `Month (${monthName})` };
-  }
-  return { start: anchorYmd, end: anchorYmd, label: `Day (${anchorYmd})` };
+const getLocalDateFromIso = (iso: string | null | undefined): string => {
+  const d = new Date(String(iso ?? ""));
+  if (!Number.isFinite(d.getTime())) return "";
+  return yyyyMmDdLocal(d);
 };
 
 const formatTimeText = (iso: string): string => {
@@ -205,6 +186,61 @@ const splitSeats = (seatStr: string): string[] => {
 };
 
 /* =========================
+   Reservation coverage helpers
+========================= */
+const getCoverageEndDate = (reservationDate: string | null, hourAvail: string | null | undefined): string => {
+  const startYmd = String(reservationDate ?? "").trim();
+  if (!startYmd) return "";
+
+  const text = String(hourAvail ?? "").trim().toLowerCase();
+  const start = parseYmd(startYmd);
+
+  if (!text || text === "open" || text === "closed") {
+    return startYmd;
+  }
+
+  const numMatch = text.match(/(\d+(?:\.\d+)?)/);
+  const qtyRaw = numMatch ? Number(numMatch[1]) : 0;
+  const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 0;
+
+  if (qty <= 0) return startYmd;
+
+  if (text.includes("month")) {
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    end.setMonth(end.getMonth() + Math.floor(qty));
+    end.setDate(end.getDate() - 1);
+    return yyyyMmDdLocal(end);
+  }
+
+  if (text.includes("week")) {
+    const days = Math.max(1, Math.ceil(qty * 7));
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    end.setDate(end.getDate() + (days - 1));
+    return yyyyMmDdLocal(end);
+  }
+
+  if (text.includes("day")) {
+    const days = Math.max(1, Math.ceil(qty));
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    end.setDate(end.getDate() + (days - 1));
+    return yyyyMmDdLocal(end);
+  }
+
+  return startYmd;
+};
+
+const isDateWithinCoverage = (
+  selectedYmd: string,
+  reservationDate: string | null,
+  hourAvail: string | null | undefined
+): boolean => {
+  const start = String(reservationDate ?? "").trim();
+  if (!start || !selectedYmd) return false;
+  const end = getCoverageEndDate(reservationDate, hourAvail);
+  return selectedYmd >= start && selectedYmd <= end;
+};
+
+/* =========================
    Excel helpers
 ========================= */
 const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
@@ -240,8 +276,8 @@ const Admin_customer_reservation: React.FC = () => {
 
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
-  const [rangeMode, setRangeMode] = useState<RangeMode>("day");
-  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>("start_date");
+  const [filterDate, setFilterDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   const [searchText, setSearchText] = useState<string>("");
 
@@ -292,6 +328,12 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
+  const clearFilters = (): void => {
+    setDateFilterMode("start_date");
+    setFilterDate(yyyyMmDdLocal(new Date()));
+    setSearchText("");
+  };
+
   const toNum = (v: number | string | null | undefined): number => {
     if (typeof v === "number") return Number.isFinite(v) ? v : 0;
     if (typeof v === "string") {
@@ -336,44 +378,41 @@ const Admin_customer_reservation: React.FC = () => {
     setLoading(false);
   };
 
-  const currentRange = useMemo(() => getRange(rangeMode, selectedDate), [rangeMode, selectedDate]);
-
   const filteredSessions = useMemo(() => {
-    const { start, end } = currentRange;
-
-    const byRange = sessions.filter((s) => {
-      const d = String(s.reservation_date ?? "");
-      if (!d) return false;
-      return d >= start && d <= end;
-    });
-
     const q = searchText.trim().toLowerCase();
 
-    const searched = !q
-      ? byRange
-      : byRange.filter((s) => {
-          const name = String(s.full_name ?? "").toLowerCase();
-          const phone = String(s.phone_number ?? "").toLowerCase();
-          return name.includes(q) || phone.includes(q);
-        });
+    return sessions
+      .filter((s) => {
+        if (filterDate) {
+          if (dateFilterMode === "reserved_on") {
+            const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
+            if (createdLocalDate !== filterDate) return false;
+          } else {
+            if (!isDateWithinCoverage(filterDate, s.reservation_date, s.hour_avail)) {
+              return false;
+            }
+          }
+        }
 
-    return searched.sort((a, b) => {
-      const dateCompare = String(b.reservation_date ?? "").localeCompare(String(a.reservation_date ?? ""));
-      if (dateCompare !== 0) return dateCompare;
+        if (!q) return true;
 
-      const aTime = new Date(a.time_started).getTime();
-      const bTime = new Date(b.time_started).getTime();
+        const name = String(s.full_name ?? "").toLowerCase();
+        return name.includes(q);
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.time_started).getTime();
+        const bTime = new Date(b.time_started).getTime();
 
-      const aValid = Number.isFinite(aTime);
-      const bValid = Number.isFinite(bTime);
+        const aValid = Number.isFinite(aTime);
+        const bValid = Number.isFinite(bTime);
 
-      if (!aValid && !bValid) return 0;
-      if (!aValid) return 1;
-      if (!bValid) return -1;
+        if (!aValid && !bValid) return 0;
+        if (!aValid) return 1;
+        if (!bValid) return -1;
 
-      return aTime - bTime;
-    });
-  }, [sessions, currentRange, searchText]);
+        return aTime - bTime;
+      });
+  }, [sessions, filterDate, dateFilterMode, searchText]);
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -437,7 +476,9 @@ const Admin_customer_reservation: React.FC = () => {
   };
 
   const getBaseSystemCost = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return computeCostWithFreeMinutes(s.time_started, new Date(nowTick).toISOString());
+    if (isOpenTimeSession(s)) {
+      return computeCostWithFreeMinutes(s.time_started, new Date(nowTick).toISOString());
+    }
     return wholePeso(toNum(s.total_amount));
   };
 
@@ -737,62 +778,40 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-  const deleteByRange = async (): Promise<void> => {
-    if (!selectedDate) {
-      alert("Please select a date first.");
+  const deleteByFilter = async (): Promise<void> => {
+    if (filteredSessions.length === 0) {
+      alert("No reservation records found for this filter.");
       return;
     }
 
-    const { start, end, label } = currentRange;
-
-    const rangeRows = sessions.filter((s) => {
-      const d = String(s.reservation_date ?? "");
-      return d && d >= start && d <= end && String(s.reservation ?? "") === "yes" && !isPromoType(s.customer_type);
-    });
-
-    if (rangeRows.length === 0) {
-      alert("No reservation records found for this range.");
-      return;
-    }
+    const label =
+      dateFilterMode === "reserved_on"
+        ? `Reserved On: ${filterDate || "All"}`
+        : `Start Date coverage: ${filterDate || "All"}`;
 
     const ok = window.confirm(
-      `Delete ALL reservation records for:\n${label}\n\nThis will delete ${rangeRows.length} record(s) from the database.\n\n⚠️ This also deletes related seat_blocked_times.`
+      `Delete ALL filtered reservation records?\n\n${label}\n\nThis will delete ${filteredSessions.length} record(s) from the database.\n\n⚠️ This also deletes related seat_blocked_times.`
     );
     if (!ok) return;
 
     try {
       setDeletingRange(true);
 
-      await deleteSeatBlocksForList(rangeRows);
+      await deleteSeatBlocksForList(filteredSessions);
 
-      let q = supabase.from("customer_sessions").delete().eq("reservation", "yes").neq("customer_type", "promo");
-      q = q.gte("reservation_date", start).lte("reservation_date", end);
+      const ids = filteredSessions.map((s) => s.id);
+      const { error } = await supabase.from("customer_sessions").delete().in("id", ids);
 
-      const { error } = await q;
       if (error) {
-        alert(`Delete range error: ${error.message}`);
+        alert(`Delete filter error: ${error.message}`);
         return;
       }
 
-      setSessions((prev) =>
-        prev.filter((s) => {
-          const d = String(s.reservation_date ?? "");
-          if (!d) return true;
-          if (String(s.reservation ?? "") !== "yes") return true;
-          if (isPromoType(s.customer_type)) return true;
-          return !(d >= start && d <= end);
-        })
-      );
-
-      setSelectedSession((prev) => {
-        const d = String(prev?.reservation_date ?? "");
-        if (!prev) return null;
-        if (!d) return prev;
-        return d >= start && d <= end ? null : prev;
-      });
+      setSessions((prev) => prev.filter((s) => !ids.includes(s.id)));
+      setSelectedSession((prev) => (prev && ids.includes(prev.id) ? null : prev));
     } catch (e) {
       console.error(e);
-      alert("Delete range failed.");
+      alert("Delete filter failed.");
     } finally {
       setDeletingRange(false);
     }
@@ -989,19 +1008,17 @@ const Admin_customer_reservation: React.FC = () => {
   };
 
   const exportToExcel = async (): Promise<void> => {
-    if (!selectedDate) {
+    if (!filterDate) {
       alert("Please select a date.");
       return;
     }
     if (filteredSessions.length === 0) {
-      alert("No records for this range.");
+      alert("No records for this filter.");
       return;
     }
 
     try {
       setExporting(true);
-
-      const { start, end, label } = currentRange;
 
       const wb = new ExcelJS.Workbook();
       wb.creator = "Me Tyme Lounge";
@@ -1013,11 +1030,13 @@ const Admin_customer_reservation: React.FC = () => {
       });
 
       ws.columns = [
+        { header: "Reserved On", key: "created_at", width: 22 },
         { header: "Reservation Date", key: "reservation_date", width: 16 },
+        { header: "Coverage End", key: "coverage_end", width: 16 },
         { header: "Full Name", key: "full_name", width: 26 },
         { header: "Phone Number", key: "phone_number", width: 16 },
         { header: "Has ID", key: "has_id", width: 10 },
-        { header: "Hours", key: "hours", width: 10 },
+        { header: "Hours", key: "hours", width: 12 },
         { header: "Time In", key: "time_in", width: 10 },
         { header: "Time Out", key: "time_out", width: 10 },
         { header: "Total Time", key: "total_time", width: 14 },
@@ -1045,7 +1064,9 @@ const Admin_customer_reservation: React.FC = () => {
       ws.getRow(1).height = 26;
 
       ws.mergeCells(`A2:${lastColLetter}2`);
-      ws.getCell("A2").value = `Range: ${label}${rangeMode === "day" ? "" : `  •  (${start} → ${end})`}   •   Records: ${filteredSessions.length}`;
+      ws.getCell("A2").value = `Filter By: ${
+        dateFilterMode === "reserved_on" ? "Reserved On" : "Start Date"
+      }   •   Date: ${filterDate}   •   Records: ${filteredSessions.length}`;
       ws.getCell("A2").font = { size: 11 };
       ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
       ws.getRow(2).height = 18;
@@ -1062,7 +1083,10 @@ const Admin_customer_reservation: React.FC = () => {
       if (isLikelyUrl(logo)) {
         const ab = await fetchAsArrayBuffer(logo);
         if (ab) {
-          const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
+          const ext =
+            logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg")
+              ? "jpeg"
+              : "png";
           const imgId = wb.addImage({ buffer: ab, extension: ext });
           ws.addImage(imgId, {
             tl: { col: Math.max(0, ws.columns.length - 5.8), row: 0.2 },
@@ -1116,7 +1140,9 @@ const Admin_customer_reservation: React.FC = () => {
         const status = getStatus(s);
 
         const row = ws.addRow({
+          created_at: s.created_at ? new Date(s.created_at).toLocaleString("en-PH") : "",
           reservation_date: String(s.reservation_date ?? ""),
+          coverage_end: getCoverageEndDate(s.reservation_date, s.hour_avail),
           full_name: s.full_name,
           phone_number: safePhone(s.phone_number),
           has_id: s.has_id ? "Yes" : "No",
@@ -1148,7 +1174,7 @@ const Admin_customer_reservation: React.FC = () => {
         ws.getRow(rowIndex).height = 18;
 
         row.eachCell((cell, colNumber) => {
-          cell.alignment = { vertical: "middle", horizontal: colNumber === 2 ? "left" : "center", wrapText: true };
+          cell.alignment = { vertical: "middle", horizontal: colNumber === 4 ? "left" : "center", wrapText: true };
           cell.border = {
             top: { style: "thin", color: { argb: "FFE5E7EB" } },
             left: { style: "thin", color: { argb: "FFE5E7EB" } },
@@ -1160,7 +1186,7 @@ const Admin_customer_reservation: React.FC = () => {
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } };
         });
 
-        const textCols = [1, 3, 6, 7];
+        const textCols = [1, 2, 3, 5, 8, 9];
         textCols.forEach((c) => {
           const cell = ws.getCell(rowIndex, c);
           cell.numFmt = "@";
@@ -1196,10 +1222,11 @@ const Admin_customer_reservation: React.FC = () => {
       };
 
       const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const blob = new Blob([buf], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
 
-      const fileTag = rangeMode === "day" ? selectedDate : `${currentRange.start}_to_${currentRange.end}`;
-      saveAs(blob, `admin-reservations-${rangeMode}-${fileTag}.xlsx`);
+      saveAs(blob, `admin-reservations-${dateFilterMode}-${filterDate}.xlsx`);
     } catch (e) {
       console.error(e);
       alert("Export failed.");
@@ -1215,14 +1242,21 @@ const Admin_customer_reservation: React.FC = () => {
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Customer Reservations</h2>
+
               <div className="customer-subtext">
-                Showing records for: <strong>{currentRange.label}</strong> ({filteredSessions.length})
+                Filter By:{" "}
+                <strong>
+                  {dateFilterMode === "reserved_on" ? "Reserved On" : "Start Date"}
+                </strong>
               </div>
-              {rangeMode !== "day" && (
-                <div className="customer-subtext" style={{ opacity: 0.8, fontSize: 12 }}>
-                  Range: <strong>{currentRange.start}</strong> → <strong>{currentRange.end}</strong>
-                </div>
-              )}
+
+              <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
+                Date: <strong>{filterDate || "All"}</strong>
+              </div>
+
+              <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
+                Records: <strong>{filteredSessions.length}</strong>
+              </div>
             </div>
 
             <div className="customer-topbar-right">
@@ -1235,31 +1269,43 @@ const Admin_customer_reservation: React.FC = () => {
                   <input
                     className="customer-search-input"
                     type="text"
-                    placeholder="Search full name or phone..."
+                    placeholder="Search by Full Name..."
                     value={searchText}
                     onChange={(e) => setSearchText(e.currentTarget.value)}
                   />
 
                   {searchText.trim() && (
-                    <button className="customer-search-clear" onClick={() => setSearchText("")} type="button">
+                    <button
+                      className="customer-search-clear"
+                      onClick={() => setSearchText("")}
+                      type="button"
+                    >
                       Clear
                     </button>
                   )}
                 </div>
               </div>
 
-              <div className="admin-tools-row" style={{ alignItems: "center" }}>
-                <label className="date-pill" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="date-pill-label">Range</span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  justifyContent: "flex-end",
+                }}
+              >
+                <label className="date-pill">
+                  <span className="date-pill-label">Filter By</span>
                   <select
                     className="date-pill-input"
-                    value={rangeMode}
-                    onChange={(e) => setRangeMode(e.currentTarget.value as RangeMode)}
-                    style={{ padding: "6px 10px" }}
+                    value={dateFilterMode}
+                    onChange={(e) =>
+                      setDateFilterMode(e.currentTarget.value as DateFilterMode)
+                    }
                   >
-                    <option value="day">Day</option>
-                    <option value="week">Week</option>
-                    <option value="month">Month</option>
+                    <option value="reserved_on">Reserved On</option>
+                    <option value="start_date">Start Date</option>
                   </select>
                 </label>
 
@@ -1268,15 +1314,31 @@ const Admin_customer_reservation: React.FC = () => {
                   <input
                     className="date-pill-input"
                     type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                    value={filterDate}
+                    onChange={(e) => setFilterDate(String(e.currentTarget.value ?? ""))}
                   />
                   <span className="date-pill-icon" aria-hidden="true">
                     📅
                   </span>
                 </label>
 
-                <button className="receipt-btn" onClick={() => void refreshAll()} disabled={refreshing || loading} type="button">
+                {(searchText.trim() || filterDate || dateFilterMode !== "start_date") && (
+                  <button
+                    className="receipt-btn"
+                    type="button"
+                    onClick={clearFilters}
+                    title="Clear filters"
+                  >
+                    Clear Filters
+                  </button>
+                )}
+
+                <button
+                  className="receipt-btn"
+                  onClick={() => void refreshAll()}
+                  disabled={refreshing || loading}
+                  type="button"
+                >
                   {refreshing ? "Refreshing..." : "Refresh"}
                 </button>
 
@@ -1284,7 +1346,7 @@ const Admin_customer_reservation: React.FC = () => {
                   className="receipt-btn"
                   onClick={() => void exportToExcel()}
                   disabled={filteredSessions.length === 0 || exporting}
-                  title={filteredSessions.length === 0 ? "No data to export" : "Export .xlsx for Day/Week/Month"}
+                  title={filteredSessions.length === 0 ? "No data to export" : "Export current filtered rows"}
                   type="button"
                 >
                   {exporting ? "Exporting..." : "Export to Excel"}
@@ -1292,9 +1354,9 @@ const Admin_customer_reservation: React.FC = () => {
 
                 <button
                   className="receipt-btn admin-danger"
-                  onClick={() => void deleteByRange()}
+                  onClick={() => void deleteByFilter()}
                   disabled={deletingRange || filteredSessions.length === 0}
-                  title={filteredSessions.length === 0 ? "No data to delete" : "Delete ALL records for selected range"}
+                  title={filteredSessions.length === 0 ? "No data to delete" : "Delete current filtered rows"}
                   type="button"
                 >
                   {deletingRange ? "Deleting..." : "Delete"}
@@ -1306,11 +1368,11 @@ const Admin_customer_reservation: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
-            <p className="customer-note">No reservation records found for this range</p>
+            <p className="customer-note">No reservation records found for this filter/date</p>
           ) : (
             <div
               className="customer-table-wrap"
-              key={`${rangeMode}-${selectedDate}`}
+              key={`${dateFilterMode}-${filterDate}`}
               style={{
                 maxHeight: "560px",
                 overflowY: "auto",
@@ -1320,6 +1382,7 @@ const Admin_customer_reservation: React.FC = () => {
               <table className="customer-table">
                 <thead>
                   <tr>
+                    <th>Reserved On</th>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
                     <th>Phone #</th>
@@ -1354,7 +1417,12 @@ const Admin_customer_reservation: React.FC = () => {
 
                     return (
                       <tr key={session.id}>
-                        <td>{session.reservation_date ?? "N/A"}</td>
+                        <td>
+                          {session.created_at
+                            ? new Date(session.created_at).toLocaleString("en-PH")
+                            : "—"}
+                        </td>
+                        <td>{formatDateDisplay(session.reservation_date)}</td>
                         <td>{session.full_name}</td>
                         <td>{safePhone(session.phone_number)}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
@@ -1373,7 +1441,11 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">{getDiscountText(session)}</span>
-                            <button className="receipt-btn" onClick={() => openDiscountModal(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openDiscountModal(session)}
+                              type="button"
+                            >
                               Discount
                             </button>
                           </div>
@@ -1382,7 +1454,11 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">₱{dp}</span>
-                            <button className="receipt-btn" onClick={() => openDpModal(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openDpModal(session)}
+                              type="button"
+                            >
                               Edit DP
                             </button>
                           </div>
@@ -1396,7 +1472,9 @@ const Admin_customer_reservation: React.FC = () => {
 
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
                               {due > 0 ? `Due ₱${due}` : "No Due"} •{" "}
-                              {remainingPay >= 0 ? `Remaining ₱${wholePeso(remainingPay)}` : `Change ₱${wholePeso(Math.abs(remainingPay))}`}
+                              {remainingPay >= 0
+                                ? `Remaining ₱${wholePeso(remainingPay)}`
+                                : `Change ₱${wholePeso(Math.abs(remainingPay))}`}
                             </span>
 
                             <button
@@ -1413,13 +1491,19 @@ const Admin_customer_reservation: React.FC = () => {
 
                         <td>
                           <button
-                            className={`receipt-btn pay-badge ${toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"}`}
+                            className={`receipt-btn pay-badge ${
+                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
+                            }`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
                             title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
                             type="button"
                           >
-                            {togglingPaidId === session.id ? "Updating..." : toBool(session.is_paid) ? "PAID" : "UNPAID"}
+                            {togglingPaidId === session.id
+                              ? "Updating..."
+                              : toBool(session.is_paid)
+                              ? "PAID"
+                              : "UNPAID"}
                           </button>
                         </td>
 
@@ -1439,7 +1523,11 @@ const Admin_customer_reservation: React.FC = () => {
                               </button>
                             )}
 
-                            <button className="receipt-btn" onClick={() => setSelectedSession(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => setSelectedSession(session)}
+                              type="button"
+                            >
                               View Receipt
                             </button>
 
@@ -1471,7 +1559,10 @@ const Admin_customer_reservation: React.FC = () => {
           )}
 
           {cancelTarget && (
-            <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
+            <div
+              className="receipt-overlay"
+              onClick={() => (cancellingBusy ? null : setCancelTarget(null))}
+            >
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">CANCEL RESERVATION</h3>
                 <p className="receipt-subtitle">
@@ -1509,7 +1600,12 @@ const Admin_customer_reservation: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancellingBusy} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setCancelTarget(null)}
+                    disabled={cancellingBusy}
+                    type="button"
+                  >
                     Back
                   </button>
 
@@ -1549,10 +1645,20 @@ const Admin_customer_reservation: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDpTarget(null)} disabled={savingDp} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setDpTarget(null)}
+                    disabled={savingDp}
+                    type="button"
+                  >
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDownPayment()} disabled={savingDp} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void saveDownPayment()}
+                    disabled={savingDp}
+                    type="button"
+                  >
                     {savingDp ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1572,7 +1678,10 @@ const Admin_customer_reservation: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Discount Type</span>
-                  <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
+                  <select
+                    value={discountKind}
+                    onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}
+                  >
                     <option value="none">None</option>
                     <option value="percent">Percent (%)</option>
                     <option value="amount">Peso (₱)</option>
@@ -1611,9 +1720,16 @@ const Admin_customer_reservation: React.FC = () => {
                 {(() => {
                   const base = getBaseSystemCost(discountTarget);
                   const val = toMoney(discountInput);
-                  const appliedVal = discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+                  const appliedVal =
+                    discountKind === "percent"
+                      ? clamp(Math.max(0, val), 0, 100)
+                      : Math.max(0, val);
 
-                  const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
+                  const { discountedCost, discountAmount } = applyDiscount(
+                    base,
+                    discountKind,
+                    appliedVal
+                  );
                   const dp = getDownPayment(discountTarget);
                   const due = wholePeso(Math.max(0, discountedCost - dp));
 
@@ -1664,10 +1780,20 @@ const Admin_customer_reservation: React.FC = () => {
                 })()}
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDiscountTarget(null)} disabled={savingDiscount} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setDiscountTarget(null)}
+                    disabled={savingDiscount}
+                    type="button"
+                  >
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void saveDiscount()}
+                    disabled={savingDiscount}
+                    type="button"
+                  >
                     {savingDiscount ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1744,10 +1870,20 @@ const Admin_customer_reservation: React.FC = () => {
                       </div>
 
                       <div className="modal-actions">
-                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} disabled={savingPayment} type="button">
+                        <button
+                          className="receipt-btn"
+                          onClick={() => setPaymentTarget(null)}
+                          disabled={savingPayment}
+                          type="button"
+                        >
                           Cancel
                         </button>
-                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment} type="button">
+                        <button
+                          className="receipt-btn"
+                          onClick={() => void savePayment()}
+                          disabled={savingPayment}
+                          type="button"
+                        >
                           {savingPayment ? "Saving..." : "Save"}
                         </button>
                       </div>
@@ -1769,8 +1905,22 @@ const Admin_customer_reservation: React.FC = () => {
                 <hr />
 
                 <div className="receipt-row">
+                  <span>Reserved On</span>
+                  <span>
+                    {selectedSession.created_at
+                      ? new Date(selectedSession.created_at).toLocaleString("en-PH")
+                      : "N/A"}
+                  </span>
+                </div>
+
+                <div className="receipt-row">
                   <span>Reservation Date</span>
                   <span>{selectedSession.reservation_date ?? "N/A"}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Coverage End</span>
+                  <span>{formatDateDisplay(getCoverageEndDate(selectedSession.reservation_date, selectedSession.hour_avail))}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -1884,7 +2034,9 @@ const Admin_customer_reservation: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Status</span>
-                        <span className="receipt-status">{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">
+                          {toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}
+                        </span>
                       </div>
 
                       <div className="receipt-total">
