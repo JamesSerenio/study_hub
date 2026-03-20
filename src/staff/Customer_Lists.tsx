@@ -1,36 +1,3 @@
-// src/pages/Customer_Lists.tsx
-// ✅ Shows ONLY NON-RESERVATION records (reservation = "no")
-// ✅ Seat column REMOVED from Customer List table (but still shown on receipt; remove if you want)
-// ✅ Discount UI reverted to previous "breakdown" layout
-// ✅ Auto PAID/UNPAID on SAVE PAYMENT (paid >= due)
-// ✅ Manual PAID/UNPAID toggle still works
-// ✅ Payment is based on TIME CONSUMED (System Cost after discount) — ❌ DOES NOT deduct Down Payment
-// ✅ Down Payment column between Discount and Payment
-// ✅ Down Payment is EDITABLE (modal) and saved to DB: customer_sessions.down_payment
-// ✅ Receipt: removed "Edit DP" button
-// ✅ Receipt auto-updates balance/change after DP edit (because row + selectedSession are updated)
-// ✅ Phone # column beside Full Name
-// ✅ View to Customer toggle now supports CROSS-DEVICE via Supabase table: customer_view_state (SINGLE ROW id=1)
-// ✅ Search bar (Full Name only)
-// ✅ NEW: Cancel now requires DESCRIPTION and moves record to customer_sessions_cancelled (NO RPC, ID-BASED)
-// ✅ strict TS (NO "any")
-// ✅ FIXED: PAYMENT inputs no longer LIMIT/force total = due (Cash & GCash free input)
-// ✅ NEW: REFRESH button placed BESIDE DATE FILTER (same className so same color)
-// ✅ UPDATE:
-// - REMOVE View Customer button from Action column
-// - Put View Customer / Stop View button INSIDE View Receipt modal (bottom, above Close)
-// ✅ NEW FIX:
-// - ALL MONEY VALUES are WHOLE NUMBERS ONLY
-// - If value has decimal, ALWAYS ROUND UP
-//   Example: 10.01 => 11, 10.99 => 11
-// ✅ REMOVED FROM UI:
-// - customer_field
-// - id_number
-// - Field column
-// - Specific ID column
-// ✅ NEW:
-// - SORT BY TIME IN ASCENDING (earliest first, e.g. 8:00 AM before 9:00 AM)
-
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
 import { supabase } from "../utils/supabaseClient";
@@ -80,6 +47,60 @@ interface CustomerSession {
   booking_code?: string | null;
 }
 
+type AddonOrderItemRow = {
+  id: string;
+  item_name: string;
+  price: number | string;
+  quantity: number | string;
+  subtotal?: number | string | null;
+};
+
+type AddonOrderRow = {
+  id: string;
+  booking_code: string;
+  full_name: string;
+  seat_number: string;
+  total_amount: number | string;
+  addon_order_items?: AddonOrderItemRow[] | null;
+};
+
+type ConsignmentOrderItemRow = {
+  id: string;
+  item_name: string;
+  price: number | string;
+  quantity: number | string;
+  subtotal?: number | string | null;
+};
+
+type ConsignmentOrderRow = {
+  id: string;
+  booking_code: string;
+  full_name: string;
+  seat_number: string;
+  total_amount: number | string;
+  consignment_order_items?: ConsignmentOrderItemRow[] | null;
+};
+
+type OrderItemView = {
+  source: "addon" | "consignment";
+  name: string;
+  qty: number;
+  price: number;
+  subtotal: number;
+};
+
+type SessionOrdersMap = Record<
+  string,
+  {
+    addonOrders: AddonOrderRow[];
+    consignmentOrders: ConsignmentOrderRow[];
+    items: OrderItemView[];
+    total: number;
+  }
+>;
+
+const VIEW_ROW_ID = 1;
+
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -100,7 +121,6 @@ const toMoney = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-// ✅ whole peso, always round UP if may decimal
 const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
@@ -153,12 +173,6 @@ const applyDiscount = (
   };
 };
 
-/* =========================
-   CROSS-DEVICE VIEW HELPERS
-========================= */
-
-const VIEW_ROW_ID = 1;
-
 const setCustomerViewState = async (enabled: boolean, sessionId: string | null): Promise<void> => {
   const payload: CustomerViewRow = {
     id: VIEW_ROW_ID,
@@ -168,7 +182,6 @@ const setCustomerViewState = async (enabled: boolean, sessionId: string | null):
   };
 
   const { error } = await supabase.from("customer_view_state").upsert(payload, { onConflict: "id" });
-
   if (error) throw error;
 };
 
@@ -211,11 +224,12 @@ const Customer_Lists: React.FC = () => {
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
-
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
+  const [sessionOrders, setSessionOrders] = useState<SessionOrdersMap>({});
+
   useEffect(() => {
-    void fetchCustomerSessions();
+    void initLoad();
     void readActiveCustomerView();
     const unsub = subscribeCustomerViewRealtime();
 
@@ -228,6 +242,16 @@ const Customer_Lists: React.FC = () => {
     };
   }, []);
 
+  const initLoad = async (): Promise<void> => {
+    setLoading(true);
+    try {
+      const loadedSessions = await fetchCustomerSessions();
+      await fetchOrdersForSessions(loadedSessions);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const filteredSessions = useMemo(() => {
     const q = searchName.trim().toLowerCase();
 
@@ -237,10 +261,10 @@ const Customer_Lists: React.FC = () => {
         if (!sameDate) return false;
 
         if (!q) return true;
-      const name = String(s.full_name ?? "").toLowerCase();
-      const code = String(s.booking_code ?? "").toLowerCase();
+        const name = String(s.full_name ?? "").toLowerCase();
+        const code = String(s.booking_code ?? "").toLowerCase();
 
-      return name.includes(q) || code.includes(q);
+        return name.includes(q) || code.includes(q);
       })
       .sort((a, b) => {
         const aTime = new Date(a.time_started).getTime();
@@ -257,9 +281,7 @@ const Customer_Lists: React.FC = () => {
       });
   }, [sessions, selectedDate, searchName]);
 
-  const fetchCustomerSessions = async (): Promise<void> => {
-    setLoading(true);
-
+  const fetchCustomerSessions = async (): Promise<CustomerSession[]> => {
     const { data, error } = await supabase
       .from("customer_sessions")
       .select("*")
@@ -270,12 +292,136 @@ const Customer_Lists: React.FC = () => {
       console.error(error);
       alert("Error loading customer lists");
       setSessions([]);
-      setLoading(false);
+      return [];
+    }
+
+    const rows = (data as CustomerSession[]) || [];
+    setSessions(rows);
+    return rows;
+  };
+
+  const fetchOrdersForSessions = async (rows: CustomerSession[]): Promise<void> => {
+    const codes = Array.from(
+      new Set(
+        rows
+          .map((s) => String(s.booking_code ?? "").trim().toUpperCase())
+          .filter((x) => x.length > 0)
+      )
+    );
+
+    if (codes.length === 0) {
+      setSessionOrders({});
       return;
     }
 
-    setSessions((data as CustomerSession[]) || []);
-    setLoading(false);
+    const [addonRes, consignmentRes] = await Promise.all([
+      supabase
+        .from("addon_orders")
+        .select(`
+          id,
+          booking_code,
+          full_name,
+          seat_number,
+          total_amount,
+          addon_order_items (
+            id,
+            item_name,
+            price,
+            quantity,
+            subtotal
+          )
+        `)
+        .in("booking_code", codes),
+
+      supabase
+        .from("consignment_orders")
+        .select(`
+          id,
+          booking_code,
+          full_name,
+          seat_number,
+          total_amount,
+          consignment_order_items (
+            id,
+            item_name,
+            price,
+            quantity,
+            subtotal
+          )
+        `)
+        .in("booking_code", codes),
+    ]);
+
+    if (addonRes.error) {
+      console.error("addon_orders fetch error:", addonRes.error);
+    }
+
+    if (consignmentRes.error) {
+      console.error("consignment_orders fetch error:", consignmentRes.error);
+    }
+
+    const addonOrders = ((addonRes.data ?? []) as AddonOrderRow[]).map((o) => ({
+      ...o,
+      booking_code: String(o.booking_code ?? "").trim().toUpperCase(),
+      addon_order_items: Array.isArray(o.addon_order_items) ? o.addon_order_items : [],
+    }));
+
+    const consignmentOrders = ((consignmentRes.data ?? []) as ConsignmentOrderRow[]).map((o) => ({
+      ...o,
+      booking_code: String(o.booking_code ?? "").trim().toUpperCase(),
+      consignment_order_items: Array.isArray(o.consignment_order_items) ? o.consignment_order_items : [],
+    }));
+
+    const nextMap: SessionOrdersMap = {};
+
+    for (const code of codes) {
+      const aOrders = addonOrders.filter((o) => o.booking_code === code);
+      const cOrders = consignmentOrders.filter((o) => o.booking_code === code);
+
+      const items: OrderItemView[] = [];
+
+      for (const o of aOrders) {
+        for (const item of o.addon_order_items ?? []) {
+          const qty = wholePeso(toMoney(item.quantity));
+          const price = wholePeso(toMoney(item.price));
+          const subtotal = wholePeso(toMoney(item.subtotal ?? qty * price));
+          items.push({
+            source: "addon",
+            name: String(item.item_name ?? "").trim() || "-",
+            qty,
+            price,
+            subtotal,
+          });
+        }
+      }
+
+      for (const o of cOrders) {
+        for (const item of o.consignment_order_items ?? []) {
+          const qty = wholePeso(toMoney(item.quantity));
+          const price = wholePeso(toMoney(item.price));
+          const subtotal = wholePeso(toMoney(item.subtotal ?? qty * price));
+          items.push({
+            source: "consignment",
+            name: String(item.item_name ?? "").trim() || "-",
+            qty,
+            price,
+            subtotal,
+          });
+        }
+      }
+
+      const totalAddon = aOrders.reduce((sum, o) => sum + wholePeso(toMoney(o.total_amount)), 0);
+      const totalConsignment = cOrders.reduce((sum, o) => sum + wholePeso(toMoney(o.total_amount)), 0);
+
+      nextMap[code] = {
+        addonOrders: aOrders,
+        consignmentOrders: cOrders,
+        items,
+        total: wholePeso(totalAddon + totalConsignment),
+      };
+    }
+
+    setSessionOrders(nextMap);
   };
 
   const readActiveCustomerView = async (): Promise<void> => {
@@ -299,15 +445,17 @@ const Customer_Lists: React.FC = () => {
           .select("id, session_id, enabled, updated_at")
           .eq("id", VIEW_ROW_ID)
           .maybeSingle();
-        if (!retry.error) setActiveView((retry.data ?? null) as CustomerViewRow | null);
+
+        if (!retry.error) {
+          setActiveView((retry.data ?? null) as CustomerViewRow | null);
+        }
       } catch (e) {
         console.error("ensure view row failed:", e);
       }
       return;
     }
 
-    const row = (data ?? null) as CustomerViewRow | null;
-    setActiveView(row);
+    setActiveView((data ?? null) as CustomerViewRow | null);
   };
 
   const subscribeCustomerViewRealtime = (): (() => void) => {
@@ -326,7 +474,8 @@ const Customer_Lists: React.FC = () => {
   const refreshAll = async (): Promise<void> => {
     try {
       setRefreshing(true);
-      await Promise.all([fetchCustomerSessions(), readActiveCustomerView()]);
+      const loadedSessions = await fetchCustomerSessions();
+      await Promise.all([fetchOrdersForSessions(loadedSessions), readActiveCustomerView()]);
     } finally {
       setRefreshing(false);
     }
@@ -394,16 +543,36 @@ const Customer_Lists: React.FC = () => {
     return wholePeso(applyDiscount(base, di.kind, di.value).discountedCost);
   };
 
-  const getSessionBalanceAfterDP = (s: CustomerSession): number => {
+  const getOrderBundle = (s: CustomerSession) => {
+    const code = String(s.booking_code ?? "").trim().toUpperCase();
+    return sessionOrders[code] ?? {
+      addonOrders: [],
+      consignmentOrders: [],
+      items: [],
+      total: 0,
+    };
+  };
+
+  const getOrdersTotal = (s: CustomerSession): number => {
+    return wholePeso(getOrderBundle(s).total);
+  };
+
+  const getGrandDue = (s: CustomerSession): number => {
     const systemCost = getSessionSystemCost(s);
+    const ordersTotal = getOrdersTotal(s);
+    return wholePeso(systemCost + ordersTotal);
+  };
+
+  const getSessionBalanceAfterDP = (s: CustomerSession): number => {
+    const grandDue = getGrandDue(s);
     const dp = getDownPayment(s);
-    return wholePeso(Math.max(0, systemCost - dp));
+    return wholePeso(Math.max(0, grandDue - dp));
   };
 
   const getSessionChangeAfterDP = (s: CustomerSession): number => {
-    const systemCost = getSessionSystemCost(s);
+    const grandDue = getGrandDue(s);
     const dp = getDownPayment(s);
-    return wholePeso(Math.max(0, dp - systemCost));
+    return wholePeso(Math.max(0, dp - grandDue));
   };
 
   const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
@@ -444,8 +613,9 @@ const Customer_Lists: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
+      const updatedRow = updated as CustomerSession;
+      setSessions((prev) => prev.map((s) => (s.id === session.id ? updatedRow : s)));
+      setSelectedSession((prev) => (prev?.id === session.id ? updatedRow : prev));
     } catch (e) {
       console.error(e);
       alert("Stop Time failed.");
@@ -492,9 +662,11 @@ const Customer_Lists: React.FC = () => {
     const clean = Number.isFinite(raw) ? Math.max(0, raw) : 0;
     const finalValue = discountKind === "percent" ? clamp(clean, 0, 100) : clean;
 
-    const base = getBaseSystemCost(discountTarget);
-    const discounted = applyDiscount(base, discountKind, finalValue).discountedCost;
-    const dueForPayment = wholePeso(Math.max(0, discounted));
+    const dueForPayment = wholePeso(Math.max(0, getGrandDue({
+      ...discountTarget,
+      discount_kind: discountKind,
+      discount_value: finalValue,
+    } as CustomerSession)));
 
     const prevPay = getPaidInfo(discountTarget);
     const totalPaid = wholePeso(prevPay.gcash + prevPay.cash);
@@ -523,8 +695,9 @@ const Customer_Lists: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === discountTarget.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === discountTarget.id ? (updated as CustomerSession) : prev));
+      const updatedRow = updated as CustomerSession;
+      setSessions((prev) => prev.map((s) => (s.id === discountTarget.id ? updatedRow : s)));
+      setSelectedSession((prev) => (prev?.id === discountTarget.id ? updatedRow : prev));
       setDiscountTarget(null);
     } catch (e) {
       console.error(e);
@@ -560,8 +733,9 @@ const Customer_Lists: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === dpTarget.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === dpTarget.id ? (updated as CustomerSession) : prev));
+      const updatedRow = updated as CustomerSession;
+      setSessions((prev) => prev.map((s) => (s.id === dpTarget.id ? updatedRow : s)));
+      setSelectedSession((prev) => (prev?.id === dpTarget.id ? updatedRow : prev));
       setDpTarget(null);
     } catch (e) {
       console.error(e);
@@ -581,7 +755,7 @@ const Customer_Lists: React.FC = () => {
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
+    const due = wholePeso(Math.max(0, getGrandDue(paymentTarget)));
     const g = wholePeso(Math.max(0, toMoney(gcashInput)));
     const c = wholePeso(Math.max(0, toMoney(cashInput)));
     const totalPaid = wholePeso(g + c);
@@ -608,8 +782,9 @@ const Customer_Lists: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === paymentTarget.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === paymentTarget.id ? (updated as CustomerSession) : prev));
+      const updatedRow = updated as CustomerSession;
+      setSessions((prev) => prev.map((s) => (s.id === paymentTarget.id ? updatedRow : s)));
+      setSelectedSession((prev) => (prev?.id === paymentTarget.id ? updatedRow : prev));
       setPaymentTarget(null);
     } catch (e) {
       console.error(e);
@@ -641,8 +816,9 @@ const Customer_Lists: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((x) => (x.id === s.id ? (updated as CustomerSession) : x)));
-      setSelectedSession((prev) => (prev?.id === s.id ? (updated as CustomerSession) : prev));
+      const updatedRow = updated as CustomerSession;
+      setSessions((prev) => prev.map((x) => (x.id === s.id ? updatedRow : x)));
+      setSelectedSession((prev) => (prev?.id === s.id ? updatedRow : prev));
     } catch (e) {
       console.error(e);
       alert("Toggle paid failed.");
@@ -774,6 +950,15 @@ const Customer_Lists: React.FC = () => {
       setSessions((prev) => prev.filter((x) => x.id !== row.id));
       setSelectedSession((prev) => (prev?.id === row.id ? null : prev));
 
+      const code = String(row.booking_code ?? "").trim().toUpperCase();
+      if (code) {
+        setSessionOrders((prev) => {
+          const next = { ...prev };
+          delete next[code];
+          return next;
+        });
+      }
+
       await readActiveCustomerView();
 
       setCancelTarget(null);
@@ -853,7 +1038,7 @@ const Customer_Lists: React.FC = () => {
                     type="text"
                     value={searchName}
                     onChange={(e) => setSearchName(e.currentTarget.value)}
-                    placeholder="Search by Full Name..."
+                    placeholder="Search by Full Name or Booking Code..."
                   />
                   {searchName.trim() && (
                     <button className="customer-search-clear" onClick={() => setSearchName("")} type="button">
@@ -917,6 +1102,7 @@ const Customer_Lists: React.FC = () => {
                     <th>Time In</th>
                     <th>Time Out</th>
                     <th>Total Hours</th>
+                    <th>Order</th>
                     <th>Total Balance / Change</th>
                     <th>Discount</th>
                     <th>Down Payment</th>
@@ -930,14 +1116,17 @@ const Customer_Lists: React.FC = () => {
                 <tbody>
                   {filteredSessions.map((session) => {
                     const open = isOpenTimeSession(session);
-
                     const disp = getDisplayAmount(session);
 
                     const systemCost = wholePeso(Math.max(0, getSessionSystemCost(session)));
+                    const ordersTotal = wholePeso(Math.max(0, getOrdersTotal(session)));
+                    const grandDue = wholePeso(systemCost + ordersTotal);
+
                     const pi = getPaidInfo(session);
-                    const remainingPay = systemCost - pi.totalPaid;
+                    const remainingPay = grandDue - pi.totalPaid;
 
                     const dp = getDownPayment(session);
+                    const orderBundle = getOrderBundle(session);
 
                     return (
                       <tr key={session.id}>
@@ -951,6 +1140,15 @@ const Customer_Lists: React.FC = () => {
                         <td>{formatTimeText(session.time_started)}</td>
                         <td>{renderTimeOut(session)}</td>
                         <td>{session.total_time}</td>
+
+                        <td>
+                          <div className="cell-stack">
+                            <span className="cell-strong">₱{ordersTotal}</span>
+                            <span style={{ fontSize: 12, opacity: 0.85 }}>
+                              {orderBundle.items.length} item{orderBundle.items.length !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+                        </td>
 
                         <td>
                           <div className="cell-stack">
@@ -989,8 +1187,8 @@ const Customer_Lists: React.FC = () => {
                             <button
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
-                              disabled={systemCost <= 0}
-                              title={systemCost <= 0 ? "No due" : "Set Cash & GCash freely (no limit)"}
+                              disabled={grandDue <= 0}
+                              title={grandDue <= 0 ? "No due" : "Set Cash & GCash freely (no limit)"}
                               type="button"
                             >
                               Payment
@@ -1095,12 +1293,11 @@ const Customer_Lists: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
-
                   <button
                     className="receipt-btn"
                     onClick={() => {
-                      if (selectedSession?.booking_code) {
-                        navigator.clipboard.writeText(selectedSession.booking_code);
+                      if (cancelTarget?.booking_code) {
+                        navigator.clipboard.writeText(cancelTarget.booking_code);
                         alert("Booking code copied!");
                       }
                     }}
@@ -1108,7 +1305,7 @@ const Customer_Lists: React.FC = () => {
                   >
                     Copy Code
                   </button>
-                  
+
                   <button
                     className="receipt-btn"
                     onClick={() => setCancelTarget(null)}
@@ -1217,7 +1414,8 @@ const Customer_Lists: React.FC = () => {
                     discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
 
                   const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-                  const dueForPayment = wholePeso(Math.max(0, discountedCost));
+                  const orderTotal = getOrdersTotal(discountTarget);
+                  const dueForPayment = wholePeso(Math.max(0, discountedCost + orderTotal));
                   const prevPay = getPaidInfo(discountTarget);
 
                   return (
@@ -1240,8 +1438,13 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Final System Cost (Payment Basis)</span>
+                        <span>System Cost (After Discount)</span>
                         <span>₱{wholePeso(discountedCost)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Order Total</span>
+                        <span>₱{wholePeso(orderTotal)}</span>
                       </div>
 
                       <div className="receipt-total">
@@ -1254,11 +1457,6 @@ const Customer_Lists: React.FC = () => {
                         <span>
                           GCash ₱{prevPay.gcash} / Cash ₱{prevPay.cash}
                         </span>
-                      </div>
-
-                      <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
-                        <span>Note</span>
-                        <span>Payment basis is System Cost after discount (DP not deducted)</span>
                       </div>
                     </>
                   );
@@ -1285,7 +1483,9 @@ const Customer_Lists: React.FC = () => {
                 <hr />
 
                 {(() => {
-                  const due = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
+                  const systemDue = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
+                  const ordersDue = wholePeso(Math.max(0, getOrdersTotal(paymentTarget)));
+                  const due = wholePeso(systemDue + ordersDue);
 
                   const g = wholePeso(Math.max(0, toMoney(gcashInput)));
                   const c = wholePeso(Math.max(0, toMoney(cashInput)));
@@ -1297,7 +1497,17 @@ const Customer_Lists: React.FC = () => {
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>Payment Due (System Cost)</span>
+                        <span>System Cost</span>
+                        <span>₱{systemDue}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Order Total</span>
+                        <span>₱{ordersDue}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Payment Due (Grand Total)</span>
                         <span>₱{due}</span>
                       </div>
 
@@ -1446,11 +1656,15 @@ const Customer_Lists: React.FC = () => {
                   const di = getDiscountInfo(selectedSession);
                   const discountCalc = applyDiscount(baseCost, di.kind, di.value);
 
-                  const dueForPayment = wholePeso(Math.max(0, discountCalc.discountedCost));
+                  const systemDue = wholePeso(Math.max(0, discountCalc.discountedCost));
+                  const orderBundle = getOrderBundle(selectedSession);
+                  const ordersTotal = wholePeso(orderBundle.total);
+                  const grandDue = wholePeso(systemDue + ordersTotal);
+
                   const pi = getPaidInfo(selectedSession);
 
-                  const dpBalance = wholePeso(Math.max(0, dueForPayment - dp));
-                  const dpChange = wholePeso(Math.max(0, dp - dueForPayment));
+                  const dpBalance = wholePeso(Math.max(0, grandDue - dp));
+                  const dpChange = wholePeso(Math.max(0, dp - grandDue));
 
                   const dpDisp =
                     dpBalance > 0
@@ -1483,9 +1697,35 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>System Cost (Payment Basis)</span>
-                        <span>₱{wholePeso(dueForPayment)}</span>
+                        <span>System Cost</span>
+                        <span>₱{wholePeso(systemDue)}</span>
                       </div>
+
+                      <div className="receipt-row">
+                        <span>Order Total</span>
+                        <span>₱{ordersTotal}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Grand Total</span>
+                        <span>₱{grandDue}</span>
+                      </div>
+
+                      {orderBundle.items.length > 0 && (
+                        <>
+                          <hr />
+                          <div style={{ fontWeight: 800, marginBottom: 8 }}>ORDER LIST</div>
+
+                          {orderBundle.items.map((item, idx) => (
+                            <div className="receipt-row" key={`${item.source}-${item.name}-${idx}`}>
+                              <span>
+                                {item.name} x{item.qty}
+                              </span>
+                              <span>₱{item.subtotal}</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
 
                       <hr />
 

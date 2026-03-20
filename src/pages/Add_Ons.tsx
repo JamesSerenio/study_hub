@@ -1,19 +1,3 @@
-// src/pages/Add_Ons.tsx
-// ✅ Fixed iOS dark rendering issue
-// ✅ Safer page-level CSS vars for Ionic
-// ✅ White cards / list / inputs / searchbar on iPhone
-// ✅ Approved consignment items only
-// ✅ Pending / Rejected consignment items will NOT show
-// ✅ Removed extra "Choose Food Item" button
-// ✅ Picker auto-opens below after category/size selection
-// ✅ Add More button moved above Submit Order
-// ✅ Same logic and functions retained
-// ✅ STRICT TS, NO any
-// ✅ NEW: Booking code input required
-// ✅ NEW: Validates booking code from customer_sessions
-// ✅ NEW: Shows "This code expired." if booking time already ended
-// ✅ NEW: Only valid active code can order add-ons / other items
-
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonPage,
@@ -127,6 +111,20 @@ type CustomerSessionCodeRow = {
   time_ended: string | null;
 };
 
+type RpcAddOnItem = {
+  add_on_id: string;
+  quantity: number;
+};
+
+type RpcConsignItem = {
+  consignment_id: string;
+  quantity: number;
+};
+
+/* =========================
+   CONSTANTS
+========================= */
+
 const DEFAULT_SEAT_GROUPS: SeatGroup[] = [
   {
     title: "1stF",
@@ -142,8 +140,7 @@ const DEFAULT_SEAT_GROUPS: SeatGroup[] = [
   },
 ];
 
-const SUCCESS_MESSAGE =
-  "Thank you! Kindly proceed to the counter for pickup and payment.";
+const SUCCESS_MESSAGE = "Thank you! Kindly proceed to the counter for pickup and payment.";
 
 /* =========================
    HELPERS
@@ -159,16 +156,13 @@ const toNum = (v: unknown): number => {
 const toInt = (v: unknown): number => Math.max(0, Math.floor(toNum(v)));
 
 const norm = (s: string): string => s.trim().toLowerCase();
+
 const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 
-const isConsignmentCategory = (cat: string): boolean =>
-  norm(cat) === "consignment";
+const isConsignmentCategory = (cat: string): boolean => norm(cat) === "consignment";
 
 const normalizeBookingCode = (value: string): string =>
   value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
-
-type RpcAddOnItem = { add_on_id: string; quantity: number };
-type RpcConsignItem = { consignment_id: string; quantity: number };
 
 /* =========================
    PAGE
@@ -183,8 +177,7 @@ const Add_Ons: React.FC = () => {
   const [toastMsg, setToastMsg] = useState<string>("");
   const [showToast, setShowToast] = useState<boolean>(false);
   const toastColor = useMemo<"success" | "danger">(
-    () =>
-      toastMsg.toLowerCase().includes("success") ? "success" : "danger",
+    () => (toastMsg.toLowerCase().includes("success") ? "success" : "danger"),
     [toastMsg]
   );
 
@@ -203,6 +196,9 @@ const Add_Ons: React.FC = () => {
   const [pickerCategory, setPickerCategory] = useState<string>("");
   const [pickerSize, setPickerSize] = useState<string>("");
   const [pickerSearch, setPickerSearch] = useState<string>("");
+
+  const [bookingChecked, setBookingChecked] = useState<boolean>(false);
+  const [bookingInfo, setBookingInfo] = useState<CustomerSessionCodeRow | null>(null);
 
   const showError = (msg: string): void => {
     setToastMsg(msg);
@@ -225,6 +221,8 @@ const Add_Ons: React.FC = () => {
     setPickerCategory("");
     setPickerSize("");
     setIsPickerOpen(false);
+    setBookingChecked(false);
+    setBookingInfo(null);
   };
 
   const closeSuccess = (): void => setSuccessOpen(false);
@@ -273,10 +271,7 @@ const Add_Ons: React.FC = () => {
           image_url: r.image_url ?? null,
         }));
 
-        const filtered = mappedAll.filter(
-          (a) => !isConsignmentCategory(a.category)
-        );
-
+        const filtered = mappedAll.filter((a) => !isConsignmentCategory(a.category));
         setItems(filtered);
         return;
       }
@@ -302,8 +297,7 @@ const Add_Ons: React.FC = () => {
       }
 
       const mapped: ConsignmentItem[] = (data ?? []).map((r) => {
-        const categoryLabel =
-          String((r.category ?? r.full_name) ?? "").trim() || "Consignment";
+        const categoryLabel = String((r.category ?? r.full_name) ?? "").trim() || "Consignment";
 
         return {
           kind: "consignment",
@@ -341,11 +335,13 @@ const Add_Ons: React.FC = () => {
 
   const selectedSummaryByCategory = useMemo(() => {
     const map = new Map<string, SelectedItem[]>();
+
     for (const item of selectedItems) {
       const cat = item.category || "Uncategorized";
       if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(item);
+      map.get(cat)?.push(item);
     }
+
     return Array.from(map.entries()).map(([category, list]) => ({
       category,
       items: list.slice().sort((a, b) => a.name.localeCompare(b.name)),
@@ -354,7 +350,9 @@ const Add_Ons: React.FC = () => {
 
   const stocksById = useMemo(() => {
     const m = new Map<string, number>();
-    for (const a of items) m.set(a.id, Math.max(0, Math.floor(toNum(a.stocks))));
+    for (const a of items) {
+      m.set(a.id, Math.max(0, Math.floor(toNum(a.stocks))));
+    }
     return m;
   }, [items]);
 
@@ -380,21 +378,12 @@ const Add_Ons: React.FC = () => {
       const item = items.find((a) => a.id === id);
       if (!item) return prev;
 
-      const stocks = Math.max(
-        0,
-        Math.floor(toNum(stocksById.get(id) ?? item.stocks))
-      );
-
-      const currentQty = existing
-        ? Math.max(0, Math.floor(toNum(existing.quantity)))
-        : 0;
+      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(id) ?? item.stocks)));
+      const currentQty = existing ? Math.max(0, Math.floor(toNum(existing.quantity))) : 0;
 
       const chosenTotalSameId = prev
         .filter((s) => s.id === id)
-        .reduce(
-          (sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))),
-          0
-        );
+        .reduce((sum, s) => sum + Math.max(0, Math.floor(toNum(s.quantity))), 0);
 
       const chosenOtherSameId = Math.max(0, chosenTotalSameId - currentQty);
       const maxAllowedForThis = Math.max(0, stocks - chosenOtherSameId);
@@ -512,6 +501,7 @@ const Add_Ons: React.FC = () => {
 
   const getSizesForCategory = (category: string): string[] => {
     if (!category) return [];
+
     const sizes = items
       .filter((a) => a.category === category)
       .map((a) => cleanSize(a.size))
@@ -532,8 +522,7 @@ const Add_Ons: React.FC = () => {
     return uniq;
   };
 
-  const categoryHasSizes = (category: string): boolean =>
-    getSizesForCategory(category).length > 0;
+  const categoryHasSizes = (category: string): boolean => getSizesForCategory(category).length > 0;
 
   const pickerItems = useMemo(() => {
     const cat = pickerCategory;
@@ -584,13 +573,9 @@ const Add_Ons: React.FC = () => {
     setIsPickerOpen(false);
   };
 
-  const validateBookingCode = async (): Promise<{
-    ok: true;
-    session: CustomerSessionCodeRow;
-  } | {
-    ok: false;
-    message: string;
-  }> => {
+  const validateBookingCode = async (): Promise<
+    { ok: true; session: CustomerSessionCodeRow } | { ok: false; message: string }
+  > => {
     const code = normalizeBookingCode(bookingCode);
 
     if (!code || code.length !== 4) {
@@ -623,19 +608,60 @@ const Add_Ons: React.FC = () => {
     return { ok: true, session: data };
   };
 
+  const handleCheckCode = async (): Promise<void> => {
+    const result = await validateBookingCode();
+
+    if (!result.ok) {
+      setBookingChecked(false);
+      setBookingInfo(null);
+      showError(result.message);
+      return;
+    }
+
+    setBookingChecked(true);
+    setBookingInfo(result.session);
+
+    if (!fullName.trim()) {
+      setFullName(result.session.full_name ?? "");
+    }
+
+    if (!seat.trim()) {
+      setSeat(result.session.seat_number ?? "");
+    }
+
+    showSuccessToast("Booking code verified.");
+  };
+
   const handleSubmit = async (): Promise<void> => {
     const name = fullName.trim();
-    if (!name) return showError("Full Name is required.");
-    if (!seat) return showError("Seat Number is required.");
+    const selectedSeat = seat.trim();
+    const normalizedCode = normalizeBookingCode(bookingCode);
+
+    if (!name) {
+      showError("Full Name is required.");
+      return;
+    }
+
+    if (!selectedSeat) {
+      showError("Seat Number is required.");
+      return;
+    }
+
     if (selectedItems.length === 0) {
-      return showError("Please select at least one item.");
+      showError("Please select at least one item.");
+      return;
     }
 
     const codeCheck = await validateBookingCode();
     if (!codeCheck.ok) {
+      setBookingChecked(false);
+      setBookingInfo(null);
       showError(codeCheck.message);
       return;
     }
+
+    setBookingChecked(true);
+    setBookingInfo(codeCheck.session);
 
     const mismatch = selectedItems.some((s) =>
       mode === "add_ons" ? s.kind !== "add_ons" : s.kind !== "consignment"
@@ -657,7 +683,8 @@ const Add_Ons: React.FC = () => {
 
         const { error } = await supabase.rpc("place_addon_order", {
           p_full_name: name,
-          p_seat_number: seat,
+          p_seat_number: selectedSeat,
+          p_booking_code: normalizedCode,
           p_items: payload,
         });
 
@@ -674,7 +701,8 @@ const Add_Ons: React.FC = () => {
 
         const { error } = await supabase.rpc("place_consignment_order", {
           p_full_name: name,
-          p_seat_number: seat,
+          p_seat_number: selectedSeat,
+          p_booking_code: normalizedCode,
           p_items: payload,
         });
 
@@ -688,10 +716,7 @@ const Add_Ons: React.FC = () => {
       await fetchItems();
 
       setSuccessOpen(true);
-      showSuccessToast(
-        `${mode === "add_ons" ? "Add-ons" : "Consignment"} saved successfully!`
-      );
-
+      showSuccessToast(`${mode === "add_ons" ? "Add-ons" : "Consignment"} saved successfully!`);
       resetForm();
     } finally {
       setIsLoading(false);
@@ -997,6 +1022,27 @@ const Add_Ons: React.FC = () => {
             height: 46px;
           }
 
+          .booking-check-wrap {
+            display: flex;
+            gap: 8px;
+            align-items: stretch;
+            margin-bottom: 10px;
+          }
+
+          .booking-check-wrap .ao-form-item {
+            flex: 1;
+            margin-bottom: 0 !important;
+          }
+
+          .booking-hint {
+            background: #ffffff;
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            font-size: 13px;
+          }
+
           @media (max-width: 480px) {
             .ao-wrapper {
               padding: 14px 10px 24px;
@@ -1009,6 +1055,10 @@ const Add_Ons: React.FC = () => {
 
             .addon-row {
               align-items: stretch;
+            }
+
+            .booking-check-wrap {
+              flex-direction: column;
             }
           }
         `}
@@ -1031,9 +1081,7 @@ const Add_Ons: React.FC = () => {
         <div className="ao-wrapper">
           <div className="ao-card">
             <div className="ao-topbar">
-              <IonText className="ao-title">
-                {mode === "add_ons" ? "Order" : "Other Items"}
-              </IonText>
+              <IonText className="ao-title">{mode === "add_ons" ? "Order" : "Other Items"}</IonText>
 
               <IonButton fill="clear" className="ao-close" onClick={resetForm}>
                 <IonIcon icon={closeOutline} />
@@ -1041,9 +1089,7 @@ const Add_Ons: React.FC = () => {
             </div>
 
             <div style={{ marginTop: 6, marginBottom: 10 }}>
-              <IonText style={{ fontWeight: 800, display: "block", marginBottom: 6 }}>
-                Type
-              </IonText>
+              <IonText style={{ fontWeight: 800, display: "block", marginBottom: 6 }}>Type</IonText>
 
               <IonSegment
                 value={mode}
@@ -1074,6 +1120,38 @@ const Add_Ons: React.FC = () => {
             {isLoading ? (
               <div style={{ display: "flex", justifyContent: "center", padding: 12 }}>
                 <IonSpinner />
+              </div>
+            ) : null}
+
+            <div className="booking-check-wrap">
+              <IonItem className="ao-form-item">
+                <IonLabel position="stacked">Booking Code *</IonLabel>
+                <IonInput
+                  value={bookingCode}
+                  maxlength={4}
+                  placeholder="Enter 4-character code"
+                  onIonInput={(e) => {
+                    const raw = asString(e.detail.value);
+                    setBookingCode(normalizeBookingCode(raw));
+                    setBookingChecked(false);
+                    setBookingInfo(null);
+                  }}
+                />
+              </IonItem>
+
+              <IonButton
+                className="ao-primary"
+                style={{ marginTop: 0 }}
+                disabled={isLoading || normalizeBookingCode(bookingCode).length !== 4}
+                onClick={() => void handleCheckCode()}
+              >
+                Check Code
+              </IonButton>
+            </div>
+
+            {bookingInfo && bookingChecked ? (
+              <div className="booking-hint">
+                <strong>Verified:</strong> {bookingInfo.full_name} • Seat {bookingInfo.seat_number}
               </div>
             ) : null}
 
@@ -1108,19 +1186,6 @@ const Add_Ons: React.FC = () => {
               </IonSelect>
             </IonItem>
 
-            <IonItem className="ao-form-item">
-              <IonLabel position="stacked">Booking Code *</IonLabel>
-              <IonInput
-                value={bookingCode}
-                maxlength={4}
-                placeholder="Enter 4-character code"
-                onIonInput={(e) => {
-                  const raw = asString(e.detail.value);
-                  setBookingCode(normalizeBookingCode(raw));
-                }}
-              />
-            </IonItem>
-
             {selectedCategories.map((category, index) => {
               const hasSizes = categoryHasSizes(category);
               const sizeOptions = hasSizes ? getSizesForCategory(category) : [];
@@ -1134,9 +1199,7 @@ const Add_Ons: React.FC = () => {
                       <IonSelect
                         value={category}
                         placeholder="Choose a category"
-                        onIonChange={(e) =>
-                          handleCategoryChange(index, asString(e.detail.value))
-                        }
+                        onIonChange={(e) => handleCategoryChange(index, asString(e.detail.value))}
                       >
                         {categories.map((cat) => (
                           <IonSelectOption key={`${cat}-${index}`} value={cat}>
@@ -1160,15 +1223,10 @@ const Add_Ons: React.FC = () => {
                       <IonSelect
                         value={pickedSize}
                         placeholder="Choose size"
-                        onIonChange={(e) =>
-                          handleSizeChange(index, asString(e.detail.value))
-                        }
+                        onIonChange={(e) => handleSizeChange(index, asString(e.detail.value))}
                       >
                         {sizeOptions.map((sz) => (
-                          <IonSelectOption
-                            key={`${category}-${sz}-${index}`}
-                            value={sz}
-                          >
+                          <IonSelectOption key={`${category}-${sz}-${index}`} value={sz}>
                             {sz}
                           </IonSelectOption>
                         ))}
@@ -1241,13 +1299,10 @@ const Add_Ons: React.FC = () => {
                           <IonLabel>
                             <div style={{ fontWeight: 800 }}>{a.name}</div>
                             {cleanSize(a.size) ? (
-                              <div style={{ opacity: 0.85 }}>
-                                Size: {cleanSize(a.size)}
-                              </div>
+                              <div style={{ opacity: 0.85 }}>Size: {cleanSize(a.size)}</div>
                             ) : null}
                             <div style={{ marginTop: 4 }}>
-                              ₱{toNum(a.price)} • Remaining:{" "}
-                              <strong>{remaining}</strong>
+                              ₱{toNum(a.price)} • Remaining: <strong>{remaining}</strong>
                             </div>
                           </IonLabel>
                         </IonItem>
@@ -1273,15 +1328,8 @@ const Add_Ons: React.FC = () => {
                     </IonListHeader>
 
                     {block.map((selected) => {
-                      const stocks = Math.max(
-                        0,
-                        Math.floor(toNum(stocksById.get(selected.id) ?? 0))
-                      );
-
-                      const remainingIfKeepQty = Math.max(
-                        0,
-                        stocks - selected.quantity
-                      );
+                      const stocks = Math.max(0, Math.floor(toNum(stocksById.get(selected.id) ?? 0)));
+                      const remainingIfKeepQty = Math.max(0, stocks - selected.quantity);
 
                       return (
                         <IonItem key={selected.id} className="addon-item">
@@ -1304,22 +1352,18 @@ const Add_Ons: React.FC = () => {
                             <div style={{ fontWeight: 700 }}>
                               {selected.name}{" "}
                               {cleanSize(selected.size) ? (
-                                <span style={{ opacity: 0.85 }}>
-                                  ({cleanSize(selected.size)})
-                                </span>
+                                <span style={{ opacity: 0.85 }}>({cleanSize(selected.size)})</span>
                               ) : null}
                             </div>
 
                             <div style={{ opacity: 0.85 }}>₱{selected.price}</div>
 
                             <div style={{ marginTop: 4, fontWeight: 700 }}>
-                              Subtotal: ₱
-                              {(selected.price * selected.quantity).toFixed(2)}
+                              Subtotal: ₱{(selected.price * selected.quantity).toFixed(2)}
                             </div>
 
                             <div style={{ marginTop: 6, opacity: 0.9 }}>
-                              Remaining after this qty:{" "}
-                              <strong>{remainingIfKeepQty}</strong>
+                              Remaining after this qty: <strong>{remainingIfKeepQty}</strong>
                             </div>
                           </IonLabel>
 
@@ -1334,19 +1378,14 @@ const Add_Ons: React.FC = () => {
                               onIonChange={(e) => {
                                 const raw = (e.detail.value ?? "").toString();
                                 const v = parseInt(raw, 10);
-                                handleQuantityChange(
-                                  selected.id,
-                                  Number.isNaN(v) ? 0 : v
-                                );
+                                handleQuantityChange(selected.id, Number.isNaN(v) ? 0 : v);
                               }}
                             />
 
                             <IonButton
                               color="danger"
                               onClick={() =>
-                                setSelectedItems((prev) =>
-                                  prev.filter((s) => s.id !== selected.id)
-                                )
+                                setSelectedItems((prev) => prev.filter((s) => s.id !== selected.id))
                               }
                             >
                               Remove
@@ -1409,10 +1448,7 @@ const Add_Ons: React.FC = () => {
         >
           <div className="ao-success-box">
             <div className="ao-success-top">
-              <IonIcon
-                icon={checkmarkCircleOutline}
-                className="ao-success-icon"
-              />
+              <IonIcon icon={checkmarkCircleOutline} className="ao-success-icon" />
               <button
                 type="button"
                 className="ao-success-x"
