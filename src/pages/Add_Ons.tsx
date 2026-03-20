@@ -9,6 +9,10 @@
 // ✅ Add More button moved above Submit Order
 // ✅ Same logic and functions retained
 // ✅ STRICT TS, NO any
+// ✅ NEW: Booking code input required
+// ✅ NEW: Validates booking code from customer_sessions
+// ✅ NEW: Shows "This code expired." if booking time already ended
+// ✅ NEW: Only valid active code can order add-ons / other items
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -114,10 +118,19 @@ interface SelectedItem {
 
 type SeatGroup = { title: string; seats: string[] };
 
+type CustomerSessionCodeRow = {
+  id: string;
+  booking_code: string | null;
+  full_name: string;
+  seat_number: string;
+  time_started: string;
+  time_ended: string | null;
+};
+
 const DEFAULT_SEAT_GROUPS: SeatGroup[] = [
   {
     title: "1stF",
-    seats: ["1", "2", "3", "4", "5", "6", "7a", "7b","8a","8b","9", "10", "11"],
+    seats: ["1", "2", "3", "4", "5", "6", "7a", "7b", "8a", "8b", "9", "10", "11"],
   },
   {
     title: "TATAMI AREA",
@@ -151,6 +164,9 @@ const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 const isConsignmentCategory = (cat: string): boolean =>
   norm(cat) === "consignment";
 
+const normalizeBookingCode = (value: string): string =>
+  value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+
 type RpcAddOnItem = { add_on_id: string; quantity: number };
 type RpcConsignItem = { consignment_id: string; quantity: number };
 
@@ -177,6 +193,7 @@ const Add_Ons: React.FC = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [fullName, setFullName] = useState<string>("");
   const [seat, setSeat] = useState<string>("");
+  const [bookingCode, setBookingCode] = useState<string>("");
 
   const [selectedCategories, setSelectedCategories] = useState<string[]>([""]);
   const [selectedSizes, setSelectedSizes] = useState<string[]>([""]);
@@ -200,6 +217,7 @@ const Add_Ons: React.FC = () => {
   const resetForm = (): void => {
     setFullName("");
     setSeat("");
+    setBookingCode("");
     setSelectedItems([]);
     setSelectedCategories([""]);
     setSelectedSizes([""]);
@@ -566,12 +584,57 @@ const Add_Ons: React.FC = () => {
     setIsPickerOpen(false);
   };
 
+  const validateBookingCode = async (): Promise<{
+    ok: true;
+    session: CustomerSessionCodeRow;
+  } | {
+    ok: false;
+    message: string;
+  }> => {
+    const code = normalizeBookingCode(bookingCode);
+
+    if (!code || code.length !== 4) {
+      return { ok: false, message: "Booking Code is required. Enter the 4-character code." };
+    }
+
+    const { data, error } = await supabase
+      .from("customer_sessions")
+      .select("id, booking_code, full_name, seat_number, time_started, time_ended")
+      .eq("booking_code", code)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<CustomerSessionCodeRow>();
+
+    if (error) {
+      return { ok: false, message: `Code check failed: ${error.message}` };
+    }
+
+    if (!data) {
+      return { ok: false, message: "Invalid booking code." };
+    }
+
+    const nowMs = Date.now();
+    const endMs = data.time_ended ? new Date(data.time_ended).getTime() : Number.NaN;
+
+    if (Number.isFinite(endMs) && nowMs > endMs) {
+      return { ok: false, message: "This code expired." };
+    }
+
+    return { ok: true, session: data };
+  };
+
   const handleSubmit = async (): Promise<void> => {
     const name = fullName.trim();
     if (!name) return showError("Full Name is required.");
     if (!seat) return showError("Seat Number is required.");
     if (selectedItems.length === 0) {
       return showError("Please select at least one item.");
+    }
+
+    const codeCheck = await validateBookingCode();
+    if (!codeCheck.ok) {
+      showError(codeCheck.message);
+      return;
     }
 
     const mismatch = selectedItems.some((s) =>
@@ -1043,6 +1106,19 @@ const Add_Ons: React.FC = () => {
                   </React.Fragment>
                 ))}
               </IonSelect>
+            </IonItem>
+
+            <IonItem className="ao-form-item">
+              <IonLabel position="stacked">Booking Code *</IonLabel>
+              <IonInput
+                value={bookingCode}
+                maxlength={4}
+                placeholder="Enter 4-character code"
+                onIonInput={(e) => {
+                  const raw = asString(e.detail.value);
+                  setBookingCode(normalizeBookingCode(raw));
+                }}
+              />
             </IonItem>
 
             {selectedCategories.map((category, index) => {

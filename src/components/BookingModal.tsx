@@ -19,6 +19,9 @@
 // ✅ NEW: Phone validation MODAL
 // ✅ REMOVED: Customer Field
 // ✅ REMOVED: Specific ID input / id_number
+// ✅ NEW: Generates 4-char booking code (letters + numbers)
+// ✅ NEW: Saves booking_code to DB
+// ✅ NEW: Success modal shows booking code with note for add-ons
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -300,6 +303,33 @@ const ensureAuthUserId = async (): Promise<string> => {
   return data.user.id;
 };
 
+const BOOKING_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+const generateBookingCode = (): string => {
+  let out = "";
+  for (let i = 0; i < 4; i += 1) {
+    const idx = Math.floor(Math.random() * BOOKING_CODE_CHARS.length);
+    out += BOOKING_CODE_CHARS[idx];
+  }
+  return out;
+};
+
+const createUniqueBookingCode = async (): Promise<string> => {
+  for (let i = 0; i < 20; i += 1) {
+    const code = generateBookingCode();
+    const { data, error } = await supabase
+      .from("customer_sessions")
+      .select("id")
+      .eq("booking_code", code)
+      .limit(1);
+
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) return code;
+  }
+
+  throw new Error("Failed to generate unique booking code. Please try again.");
+};
+
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
@@ -329,6 +359,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [phoneAlertOpen, setPhoneAlertOpen] = useState(false);
   const [phoneAlertMsg, setPhoneAlertMsg] = useState("");
+
+  const [codeModalOpen, setCodeModalOpen] = useState(false);
+  const [savedBookingCode, setSavedBookingCode] = useState("");
 
   const commitReservationTime = (raw: string) => {
     const normalized = normalizeReservationTime(raw);
@@ -531,6 +564,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setOccupiedSeats([]);
     setDateTouchTick(0);
     setRefreshSeatsTick((x) => x + 1);
+    setSavedBookingCode("");
+    setCodeModalOpen(false);
   }, [isOpen]);
 
   useEffect(() => {
@@ -627,6 +662,30 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const timeInDisplay = formatPH(new Date(summaryStartIso));
   const timeOutDisplay = openTime ? "OPEN TIME" : formatPH(new Date(summaryEndIso));
 
+  const resetBookingForm = (): void => {
+    setForm({
+      full_name: "",
+      phone_number: "",
+      customer_type: "",
+      has_id: false,
+      seat_number: [],
+      reservation: false,
+      reservation_date: undefined,
+      time_started: new Date().toISOString(),
+    });
+
+    setTimeAvail("00:00");
+    setTimeAvailInput("00:00");
+    setOpenTime(false);
+
+    setTimeStartedInput("00:00 am");
+    setTimeStartedNormalized("00:00 am");
+    timeStartedRef.current = "00:00 am";
+
+    setOccupiedSeats([]);
+    setRefreshSeatsTick((x) => x + 1);
+  };
+
   const handleSubmitBooking = async (): Promise<void> => {
     const trimmedName = form.full_name.trim();
     if (!trimmedName) return alert("Full Name is required.");
@@ -719,6 +778,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     let createdBlockIds: string[] = [];
 
     try {
+      const bookingCode = await createUniqueBookingCode();
+
       if (form.reservation) {
         const created = await createSeatBlocksForReservation(
           form.seat_number,
@@ -744,305 +805,344 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         seat_number: seatToStore,
         reservation: form.reservation ? "yes" : "no",
         reservation_date: form.reservation_date ?? null,
+        booking_code: bookingCode,
       });
 
       if (sessionErr) {
         await rollbackSeatBlocks(createdBlockIds);
         return alert(`Error saving session: ${sessionErr.message}`);
       }
+
+      const wasReservation = form.reservation;
+      setSavedBookingCode(bookingCode);
+      setCodeModalOpen(true);
+      resetBookingForm();
+      onSaved(wasReservation);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       return alert(`Error saving: ${msg}`);
     }
-
-    const wasReservation = form.reservation;
-
-    setForm({
-      full_name: "",
-      phone_number: "",
-      customer_type: "",
-      has_id: false,
-      seat_number: [],
-      reservation: false,
-      reservation_date: undefined,
-      time_started: new Date().toISOString(),
-    });
-
-    setTimeAvail("00:00");
-    setTimeAvailInput("00:00");
-    setOpenTime(false);
-
-    setTimeStartedInput("00:00 am");
-    setTimeStartedNormalized("00:00 am");
-    timeStartedRef.current = "00:00 am";
-
-    setOccupiedSeats([]);
-    setRefreshSeatsTick((x) => x + 1);
-
-    onSaved(wasReservation);
   };
 
   return (
-    <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
-      <IonHeader>
-        <IonToolbar>
-          <IonTitle>Booking</IonTitle>
-          <IonButtons slot="end">
-            <IonButton onClick={onClose}>
-              <IonIcon icon={closeOutline} />
-            </IonButton>
-          </IonButtons>
-        </IonToolbar>
-      </IonHeader>
+    <>
+      <IonModal isOpen={isOpen} onDidDismiss={onClose} className="booking-modal">
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>Booking</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={onClose}>
+                <IonIcon icon={closeOutline} />
+              </IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
 
-      <IonAlert
-        isOpen={phoneAlertOpen}
-        header="Invalid Phone Number"
-        message={phoneAlertMsg}
-        buttons={["OK"]}
-        onDidDismiss={() => setPhoneAlertOpen(false)}
-      />
+        <IonAlert
+          isOpen={phoneAlertOpen}
+          header="Invalid Phone Number"
+          message={phoneAlertMsg}
+          buttons={["OK"]}
+          onDidDismiss={() => setPhoneAlertOpen(false)}
+        />
 
-      <IonContent className="ion-padding">
-        <div className="bookadd-card">
-          <IonItem className="form-item">
-            <IonLabel>Open Time</IonLabel>
-            <IonToggle checked={openTime} onIonChange={(e) => setOpenTime(e.detail.checked)} />
-            <IonLabel slot="end">{openTime ? "Yes" : "No"}</IonLabel>
-          </IonItem>
+        <IonContent className="ion-padding">
+          <div className="bookadd-card">
+            <IonItem className="form-item">
+              <IonLabel>Open Time</IonLabel>
+              <IonToggle checked={openTime} onIonChange={(e) => setOpenTime(e.detail.checked)} />
+              <IonLabel slot="end">{openTime ? "Yes" : "No"}</IonLabel>
+            </IonItem>
 
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Full Name *</IonLabel>
-            <IonInput
-              value={form.full_name}
-              required
-              onIonChange={(e) => setForm({ ...form, full_name: e.detail.value ?? "" })}
-              placeholder="Enter full name"
-            />
-          </IonItem>
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Full Name *</IonLabel>
+              <IonInput
+                value={form.full_name}
+                required
+                onIonChange={(e) => setForm({ ...form, full_name: e.detail.value ?? "" })}
+                placeholder="Enter full name"
+              />
+            </IonItem>
 
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Phone Number *</IonLabel>
-            <IonInput
-              type="tel"
-              inputMode="tel"
-              value={form.phone_number}
-              required
-              onIonChange={(e) => setForm({ ...form, phone_number: e.detail.value ?? "" })}
-              placeholder="e.g., 09XXXXXXXXX or +639XXXXXXXXX"
-            />
-          </IonItem>
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Phone Number *</IonLabel>
+              <IonInput
+                type="tel"
+                inputMode="tel"
+                value={form.phone_number}
+                required
+                onIonChange={(e) => setForm({ ...form, phone_number: e.detail.value ?? "" })}
+                placeholder="e.g., 09XXXXXXXXX or +639XXXXXXXXX"
+              />
+            </IonItem>
 
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Customer Type</IonLabel>
-            <IonSelect
-              value={form.customer_type}
-              onIonChange={(e) => {
-                const v: unknown = e.detail.value;
-                setForm((prev) => ({ ...prev, customer_type: isCustomerType(v) ? v : "" }));
-              }}
-            >
-              <IonSelectOption value="reviewer">Reviewer</IonSelectOption>
-              <IonSelectOption value="student">Student</IonSelectOption>
-              <IonSelectOption value="regular">Regular</IonSelectOption>
-            </IonSelect>
-          </IonItem>
-
-          <IonItem className="form-item">
-            <IonLabel>ID</IonLabel>
-            <IonToggle checked={form.has_id} onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })} />
-            <IonLabel slot="end">{form.has_id ? "With" : "Without"}</IonLabel>
-          </IonItem>
-
-          <IonItem className="form-item">
-            <IonLabel>Reservation</IonLabel>
-            <IonToggle
-              checked={form.reservation}
-              onIonChange={(e) => {
-                const checked = e.detail.checked;
-
-                setForm((p) => ({
-                  ...p,
-                  reservation: checked,
-                  seat_number: [],
-                  reservation_date: checked ? p.reservation_date : undefined,
-                }));
-
-                setOccupiedSeats([]);
-                setDateTouchTick((x) => x + 1);
-                setRefreshSeatsTick((x) => x + 1);
-
-                if (checked) {
-                  commitReservationTime(timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am");
-                }
-              }}
-            />
-            <IonLabel slot="end">{form.reservation ? "Yes" : "No"}</IonLabel>
-          </IonItem>
-
-          {form.reservation && (
-            <>
-              <div
-                className="form-item"
-                style={{
-                  marginTop: 14,
-                  padding: 14,
-                  borderRadius: 16,
-                  background: "var(--ion-color-light, #f8f9fb)",
-                  border: "1px solid rgba(0,0,0,0.08)",
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Customer Type</IonLabel>
+              <IonSelect
+                value={form.customer_type}
+                onIonChange={(e) => {
+                  const v: unknown = e.detail.value;
+                  setForm((prev) => ({ ...prev, customer_type: isCustomerType(v) ? v : "" }));
                 }}
               >
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontWeight: 700, fontSize: 16 }}>Reservation Date</div>
-                  <div style={{ fontSize: 13, opacity: 0.75, marginTop: 4 }}>
-                    {formatReservationDateOnly(form.reservation_date)}
+                <IonSelectOption value="reviewer">Reviewer</IonSelectOption>
+                <IonSelectOption value="student">Student</IonSelectOption>
+                <IonSelectOption value="regular">Regular</IonSelectOption>
+              </IonSelect>
+            </IonItem>
+
+            <IonItem className="form-item">
+              <IonLabel>ID</IonLabel>
+              <IonToggle checked={form.has_id} onIonChange={(e) => setForm({ ...form, has_id: e.detail.checked })} />
+              <IonLabel slot="end">{form.has_id ? "With" : "Without"}</IonLabel>
+            </IonItem>
+
+            <IonItem className="form-item">
+              <IonLabel>Reservation</IonLabel>
+              <IonToggle
+                checked={form.reservation}
+                onIonChange={(e) => {
+                  const checked = e.detail.checked;
+
+                  setForm((p) => ({
+                    ...p,
+                    reservation: checked,
+                    seat_number: [],
+                    reservation_date: checked ? p.reservation_date : undefined,
+                  }));
+
+                  setOccupiedSeats([]);
+                  setDateTouchTick((x) => x + 1);
+                  setRefreshSeatsTick((x) => x + 1);
+
+                  if (checked) {
+                    commitReservationTime(timeStartedRef.current.trim() ? timeStartedRef.current : "00:00 am");
+                  }
+                }}
+              />
+              <IonLabel slot="end">{form.reservation ? "Yes" : "No"}</IonLabel>
+            </IonItem>
+
+            {form.reservation && (
+              <>
+                <div
+                  className="form-item"
+                  style={{
+                    marginTop: 14,
+                    padding: 14,
+                    borderRadius: 16,
+                    background: "var(--ion-color-light, #f8f9fb)",
+                    border: "1px solid rgba(0,0,0,0.08)",
+                  }}
+                >
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>Reservation Date</div>
+                    <div style={{ fontSize: 13, opacity: 0.75, marginTop: 4 }}>
+                      {formatReservationDateOnly(form.reservation_date)}
+                    </div>
                   </div>
+
+                  <IonDatetime
+                    presentation="date"
+                    preferWheel={false}
+                    showDefaultTitle={true}
+                    locale="en-PH"
+                    min={todayLocalYYYYMMDD()}
+                    value={form.reservation_date}
+                    onIonChange={(e) => applyPickedDate(e.detail.value)}
+                  />
                 </div>
 
-                <IonDatetime
-                  presentation="date"
-                  preferWheel={false}
-                  showDefaultTitle={true}
-                  locale="en-PH"
-                  min={todayLocalYYYYMMDD()}
-                  value={form.reservation_date}
-                  onIonChange={(e) => applyPickedDate(e.detail.value)}
-                />
-              </div>
-
-              <IonItem className="form-item">
-                <IonLabel position="stacked">Time Started (Reservation)</IonLabel>
-                <IonInput
-                  value={timeStartedInput}
-                  placeholder='e.g., "2pm" / "2:30pm" / "14:00" / "1400" / "00:00"'
-                  onIonChange={(e) => {
-                    const v = e.detail.value ?? "";
-                    setTimeStartedInput(v);
-                    timeStartedRef.current = v;
-                    setDateTouchTick((x) => x + 1);
-                    setRefreshSeatsTick((x) => x + 1);
-                  }}
-                  onKeyDown={(e: React.KeyboardEvent<HTMLIonInputElement>) => {
-                    if (e.key === "Enter") {
+                <IonItem className="form-item">
+                  <IonLabel position="stacked">Time Started (Reservation)</IonLabel>
+                  <IonInput
+                    value={timeStartedInput}
+                    placeholder='e.g., "2pm" / "2:30pm" / "14:00" / "1400" / "00:00"'
+                    onIonChange={(e) => {
+                      const v = e.detail.value ?? "";
+                      setTimeStartedInput(v);
+                      timeStartedRef.current = v;
+                      setDateTouchTick((x) => x + 1);
+                      setRefreshSeatsTick((x) => x + 1);
+                    }}
+                    onKeyDown={(e: React.KeyboardEvent<HTMLIonInputElement>) => {
+                      if (e.key === "Enter") {
+                        commitReservationTime(timeStartedRef.current);
+                        setDateTouchTick((x) => x + 1);
+                        setRefreshSeatsTick((x) => x + 1);
+                      }
+                    }}
+                    onIonBlur={() => {
                       commitReservationTime(timeStartedRef.current);
                       setDateTouchTick((x) => x + 1);
                       setRefreshSeatsTick((x) => x + 1);
-                    }
-                  }}
-                  onIonBlur={() => {
-                    commitReservationTime(timeStartedRef.current);
-                    setDateTouchTick((x) => x + 1);
-                    setRefreshSeatsTick((x) => x + 1);
-                  }}
-                />
-              </IonItem>
+                    }}
+                  />
+                </IonItem>
 
-              {!!seatPickHint && (
-                <p className="summary-text" style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}>
-                  {seatPickHint}
-                </p>
-              )}
+                {!!seatPickHint && (
+                  <p className="summary-text" style={{ margin: "8px 0", color: "#b00020", fontWeight: 700 }}>
+                    {seatPickHint}
+                  </p>
+                )}
 
-              <div className="form-item seat-wrap" style={{ opacity: isSeatPickReady ? 1 : 0.55 }}>
-                {seatGroups.map((group) => (
-                  <div key={group.title} style={{ width: "100%" }}>
-                    <p className="summary-text" style={{ margin: "10px 0 6px", fontWeight: 700 }}>
-                      {group.title}
-                    </p>
+                <div className="form-item seat-wrap" style={{ opacity: isSeatPickReady ? 1 : 0.55 }}>
+                  {seatGroups.map((group) => (
+                    <div key={group.title} style={{ width: "100%" }}>
+                      <p className="summary-text" style={{ margin: "10px 0 6px", fontWeight: 700 }}>
+                        {group.title}
+                      </p>
 
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                      {group.seats.map((seat) => {
-                        const isOccupied = occupiedSeats.includes(seat);
-                        const isSelected = form.seat_number.includes(seat);
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {group.seats.map((seat) => {
+                          const isOccupied = occupiedSeats.includes(seat);
+                          const isSelected = form.seat_number.includes(seat);
 
-                        if (isOccupied) return null;
+                          if (isOccupied) return null;
 
-                        return (
-                          <IonButton
-                            key={seat}
-                            color={isSelected ? "success" : "medium"}
-                            size="small"
-                            disabled={!isSeatPickReady}
-                            onClick={() =>
-                              setForm((prev) => ({
-                                ...prev,
-                                seat_number: prev.seat_number.includes(seat)
-                                  ? prev.seat_number.filter((s) => s !== seat)
-                                  : [...prev.seat_number, seat],
-                              }))
-                            }
-                          >
-                            {seat}
-                          </IonButton>
-                        );
-                      })}
+                          return (
+                            <IonButton
+                              key={seat}
+                              color={isSelected ? "success" : "medium"}
+                              size="small"
+                              disabled={!isSeatPickReady}
+                              onClick={() =>
+                                setForm((prev) => ({
+                                  ...prev,
+                                  seat_number: prev.seat_number.includes(seat)
+                                    ? prev.seat_number.filter((s) => s !== seat)
+                                    : [...prev.seat_number, seat],
+                                }))
+                              }
+                            >
+                              {seat}
+                            </IonButton>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          <IonItem className="form-item">
-            <IonLabel position="stacked">Time Avail (HH:MM or hours)</IonLabel>
-            <IonInput
-              type="text"
-              inputMode="text"
-              placeholder="Examples: 0:45 / 2 / 2:30 / 100:30 / 230"
-              value={timeAvailInput}
-              disabled={openTime}
-              onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => setTimeAvailInput(e.detail.value ?? "")}
-              onIonBlur={() => {
-                commitTimeAvail(timeAvailInput);
-                setDateTouchTick((x) => x + 1);
-                setRefreshSeatsTick((x) => x + 1);
-              }}
-              onIonChange={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
-                setTimeAvailInput(e.detail.value ?? "");
-                setDateTouchTick((x) => x + 1);
-                setRefreshSeatsTick((x) => x + 1);
-              }}
-              onKeyDown={(e: React.KeyboardEvent<HTMLIonInputElement>) => {
-                if (e.key === "Enter") {
-                  commitTimeAvail(timeAvailInput);
-                  setDateTouchTick((x) => x + 1);
-                  setRefreshSeatsTick((x) => x + 1);
-                }
-              }}
-            />
-          </IonItem>
-
-          <div className="summary-section">
-            <p className="summary-text">
-              <strong>Time Started:</strong>{" "}
-              {form.reservation ? (reservationStartIso ? formatPH(new Date(reservationStartIso)) : "—") : timeInDisplay}
-            </p>
-
-            <p className="summary-text">
-              <strong>Time Out:</strong>{" "}
-              {form.reservation ? (reservationStartIso ? timeOutDisplay : "—") : timeOutDisplay}
-            </p>
-
-            {!openTime && (
-              <>
-                <p className="summary-text">Total Hours: {totalHHMMPreview}</p>
-                <p className="summary-text">Total Amount: ₱{timeAmountPreview.toFixed(2)}</p>
+                  ))}
+                </div>
               </>
             )}
 
-            {form.reservation && (
-              <p className="summary-text">
-                <strong>Seat:</strong>{" "}
-                {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
-              </p>
-            )}
-          </div>
+            <IonItem className="form-item">
+              <IonLabel position="stacked">Time Avail (HH:MM or hours)</IonLabel>
+              <IonInput
+                type="text"
+                inputMode="text"
+                placeholder="Examples: 0:45 / 2 / 2:30 / 100:30 / 230"
+                value={timeAvailInput}
+                disabled={openTime}
+                onIonInput={(e: IonInputCustomEvent<InputInputEventDetail>) => setTimeAvailInput(e.detail.value ?? "")}
+                onIonBlur={() => {
+                  commitTimeAvail(timeAvailInput);
+                  setDateTouchTick((x) => x + 1);
+                  setRefreshSeatsTick((x) => x + 1);
+                }}
+                onIonChange={(e: IonInputCustomEvent<InputChangeEventDetail>) => {
+                  setTimeAvailInput(e.detail.value ?? "");
+                  setDateTouchTick((x) => x + 1);
+                  setRefreshSeatsTick((x) => x + 1);
+                }}
+                onKeyDown={(e: React.KeyboardEvent<HTMLIonInputElement>) => {
+                  if (e.key === "Enter") {
+                    commitTimeAvail(timeAvailInput);
+                    setDateTouchTick((x) => x + 1);
+                    setRefreshSeatsTick((x) => x + 1);
+                  }
+                }}
+              />
+            </IonItem>
 
-          <IonButton expand="block" onClick={() => void handleSubmitBooking()}>
-            Save Record
-          </IonButton>
-        </div>
-      </IonContent>
-    </IonModal>
+            <div className="summary-section">
+              <p className="summary-text">
+                <strong>Time Started:</strong>{" "}
+                {form.reservation ? (reservationStartIso ? formatPH(new Date(reservationStartIso)) : "—") : timeInDisplay}
+              </p>
+
+              <p className="summary-text">
+                <strong>Time Out:</strong>{" "}
+                {form.reservation ? (reservationStartIso ? timeOutDisplay : "—") : timeOutDisplay}
+              </p>
+
+              {!openTime && (
+                <>
+                  <p className="summary-text">Total Hours: {totalHHMMPreview}</p>
+                  <p className="summary-text">Total Amount: ₱{timeAmountPreview.toFixed(2)}</p>
+                </>
+              )}
+
+              {form.reservation && (
+                <p className="summary-text">
+                  <strong>Seat:</strong>{" "}
+                  {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
+                </p>
+              )}
+            </div>
+
+            <IonButton expand="block" onClick={() => void handleSubmitBooking()}>
+              Save Record
+            </IonButton>
+          </div>
+        </IonContent>
+      </IonModal>
+
+      <IonModal
+        isOpen={codeModalOpen}
+        onDidDismiss={() => setCodeModalOpen(false)}
+        className="booking-modal"
+      >
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>Your Booking Code</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={() => setCodeModalOpen(false)}>
+                <IonIcon icon={closeOutline} />
+              </IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
+
+        <IonContent className="ion-padding">
+          <div
+            style={{
+              maxWidth: 420,
+              margin: "0 auto",
+              textAlign: "center",
+              background: "#ffffff",
+              borderRadius: 20,
+              padding: 20,
+              boxShadow: "0 10px 30px rgba(0,0,0,0.10)",
+              border: "1px solid rgba(0,0,0,0.06)",
+            }}
+          >
+            <div style={{ fontSize: 15, opacity: 0.8, marginBottom: 10 }}>
+              Please picture this code for add-ons.
+            </div>
+
+            <div
+              style={{
+                fontSize: 38,
+                fontWeight: 900,
+                letterSpacing: 8,
+                margin: "8px 0 16px",
+                color: "#2f8f3f",
+              }}
+            >
+              {savedBookingCode}
+            </div>
+
+            <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 16 }}>
+              Use this code when ordering add-ons or other items.
+            </div>
+
+            <IonButton expand="block" onClick={() => setCodeModalOpen(false)}>
+              OK
+            </IonButton>
+          </div>
+        </IonContent>
+      </IonModal>
+    </>
   );
 }
