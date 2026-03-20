@@ -5,6 +5,7 @@ import logo from "../assets/study_hub.png";
 
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
+const VIEW_ROW_ID = 1;
 
 type CustomerViewRow = {
   id: number;
@@ -47,12 +48,45 @@ interface CustomerSession {
   booking_code?: string | null;
 }
 
+type CustomerOrderPayment = {
+  id: string;
+  booking_code: string;
+  full_name: string;
+  seat_number: string;
+  order_total: number | string;
+  gcash_amount: number | string;
+  cash_amount: number | string;
+  is_paid: boolean | number | string | null;
+  paid_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type AddonCatalogMini = {
+  id: string;
+  name: string;
+  category: string | null;
+  size: string | null;
+  image_url: string | null;
+};
+
+type ConsignmentCatalogMini = {
+  id: string;
+  item_name: string;
+  category: string | null;
+  size: string | null;
+  image_url: string | null;
+};
+
 type AddonOrderItemRow = {
   id: string;
+  created_at?: string | null;
+  add_on_id: string;
   item_name: string;
   price: number | string;
   quantity: number | string;
   subtotal?: number | string | null;
+  add_ons?: AddonCatalogMini | null;
 };
 
 type AddonOrderRow = {
@@ -66,10 +100,13 @@ type AddonOrderRow = {
 
 type ConsignmentOrderItemRow = {
   id: string;
+  created_at?: string | null;
+  consignment_id: string;
   item_name: string;
   price: number | string;
   quantity: number | string;
   subtotal?: number | string | null;
+  consignment?: ConsignmentCatalogMini | null;
 };
 
 type ConsignmentOrderRow = {
@@ -82,11 +119,18 @@ type ConsignmentOrderRow = {
 };
 
 type OrderItemView = {
+  id: string;
+  parent_order_id: string;
   source: "addon" | "consignment";
+  source_item_id: string;
   name: string;
+  category: string;
+  size: string | null;
   qty: number;
   price: number;
   subtotal: number;
+  image_url: string | null;
+  created_at: string | null;
 };
 
 type SessionOrdersMap = Record<
@@ -99,7 +143,70 @@ type SessionOrdersMap = Record<
   }
 >;
 
-const VIEW_ROW_ID = 1;
+type CancelOrderTarget = {
+  session: CustomerSession;
+  item: OrderItemView;
+};
+
+/* ---------- raw select row types for strict TS ---------- */
+
+type RawAddonCatalogMini = {
+  id?: unknown;
+  name?: unknown;
+  category?: unknown;
+  size?: unknown;
+  image_url?: unknown;
+};
+
+type RawConsignmentCatalogMini = {
+  id?: unknown;
+  item_name?: unknown;
+  category?: unknown;
+  size?: unknown;
+  image_url?: unknown;
+};
+
+type RawAddonOrderItemRow = {
+  id?: unknown;
+  created_at?: unknown;
+  add_on_id?: unknown;
+  item_name?: unknown;
+  price?: unknown;
+  quantity?: unknown;
+  subtotal?: unknown;
+  add_ons?: RawAddonCatalogMini | RawAddonCatalogMini[] | null;
+};
+
+type RawAddonOrderRow = {
+  id?: unknown;
+  booking_code?: unknown;
+  full_name?: unknown;
+  seat_number?: unknown;
+  total_amount?: unknown;
+  addon_order_items?: RawAddonOrderItemRow[] | null;
+};
+
+type RawConsignmentOrderItemRow = {
+  id?: unknown;
+  created_at?: unknown;
+  consignment_id?: unknown;
+  item_name?: unknown;
+  price?: unknown;
+  quantity?: unknown;
+  subtotal?: unknown;
+  consignment?: RawConsignmentCatalogMini | RawConsignmentCatalogMini[] | null;
+};
+
+type RawConsignmentOrderRow = {
+  id?: unknown;
+  booking_code?: unknown;
+  full_name?: unknown;
+  seat_number?: unknown;
+  total_amount?: unknown;
+  consignment_order_items?: RawConsignmentOrderItemRow[] | null;
+};
+
+/* ---------- helpers ---------- */
 
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
@@ -114,14 +221,16 @@ const formatTimeText = (iso: string): string => {
   return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
-const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
+const clamp = (n: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, n));
 
 const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
 
-const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
+const wholePeso = (n: number): number =>
+  Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
   if (typeof v === "boolean") return v;
@@ -131,6 +240,69 @@ const toBool = (v: unknown): boolean => {
     return s === "true" || s === "1" || s === "yes" || s === "paid";
   }
   return false;
+};
+
+const toText = (v: unknown): string => {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+};
+
+const normalizeSingleRelation = <T,>(value: T | T[] | null | undefined): T | null => {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+};
+
+const toAddonCatalogMini = (raw: RawAddonCatalogMini | null | undefined): AddonCatalogMini | null => {
+  if (!raw) return null;
+  return {
+    id: toText(raw.id),
+    name: toText(raw.name),
+    category: toText(raw.category) || null,
+    size: toText(raw.size) || null,
+    image_url: toText(raw.image_url) || null,
+  };
+};
+
+const toConsignmentCatalogMini = (
+  raw: RawConsignmentCatalogMini | null | undefined
+): ConsignmentCatalogMini | null => {
+  if (!raw) return null;
+  return {
+    id: toText(raw.id),
+    item_name: toText(raw.item_name),
+    category: toText(raw.category) || null,
+    size: toText(raw.size) || null,
+    image_url: toText(raw.image_url) || null,
+  };
+};
+
+const toAddonOrderItemRow = (raw: RawAddonOrderItemRow): AddonOrderItemRow => {
+  const catalog = normalizeSingleRelation(raw.add_ons);
+  return {
+    id: toText(raw.id),
+    created_at: toText(raw.created_at) || null,
+    add_on_id: toText(raw.add_on_id),
+    item_name: toText(raw.item_name),
+    price: toMoney(raw.price),
+    quantity: toMoney(raw.quantity),
+    subtotal: raw.subtotal == null ? null : toMoney(raw.subtotal),
+    add_ons: toAddonCatalogMini(catalog),
+  };
+};
+
+const toConsignmentOrderItemRow = (raw: RawConsignmentOrderItemRow): ConsignmentOrderItemRow => {
+  const catalog = normalizeSingleRelation(raw.consignment);
+  return {
+    id: toText(raw.id),
+    created_at: toText(raw.created_at) || null,
+    consignment_id: toText(raw.consignment_id),
+    item_name: toText(raw.item_name),
+    price: toMoney(raw.price),
+    quantity: toMoney(raw.quantity),
+    subtotal: raw.subtotal == null ? null : toMoney(raw.subtotal),
+    consignment: toConsignmentCatalogMini(catalog),
+  };
 };
 
 const getDiscountTextFrom = (kind: DiscountKind, value: number): string => {
@@ -173,7 +345,10 @@ const applyDiscount = (
   };
 };
 
-const setCustomerViewState = async (enabled: boolean, sessionId: string | null): Promise<void> => {
+const setCustomerViewState = async (
+  enabled: boolean,
+  sessionId: string | null
+): Promise<void> => {
   const payload: CustomerViewRow = {
     id: VIEW_ROW_ID,
     enabled,
@@ -181,11 +356,17 @@ const setCustomerViewState = async (enabled: boolean, sessionId: string | null):
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("customer_view_state").upsert(payload, { onConflict: "id" });
+  const { error } = await supabase
+    .from("customer_view_state")
+    .upsert(payload, { onConflict: "id" });
+
   if (error) throw error;
 };
 
-const isCustomerViewOnForSession = (active: CustomerViewRow | null, sessionId: string): boolean => {
+const isCustomerViewOnForSession = (
+  active: CustomerViewRow | null,
+  sessionId: string
+): boolean => {
   if (!active) return false;
   if (!active.enabled) return false;
   return String(active.session_id ?? "") === String(sessionId);
@@ -196,6 +377,7 @@ const Customer_Lists: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
 
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
+  const [selectedOrderSession, setSelectedOrderSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
 
   const [activeView, setActiveView] = useState<CustomerViewRow | null>(null);
@@ -204,6 +386,10 @@ const Customer_Lists: React.FC = () => {
   const [cancelTarget, setCancelTarget] = useState<CustomerSession | null>(null);
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancellingBusy, setCancellingBusy] = useState<boolean>(false);
+
+  const [orderCancelTarget, setOrderCancelTarget] = useState<CancelOrderTarget | null>(null);
+  const [orderCancelNote, setOrderCancelNote] = useState<string>("");
+  const [cancellingOrderItemId, setCancellingOrderItemId] = useState<string | null>(null);
 
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
   const [searchName, setSearchName] = useState<string>("");
@@ -218,15 +404,23 @@ const Customer_Lists: React.FC = () => {
   const [dpInput, setDpInput] = useState<string>("0");
   const [savingDp, setSavingDp] = useState<boolean>(false);
 
+  // SYSTEM PAYMENT
   const [paymentTarget, setPaymentTarget] = useState<CustomerSession | null>(null);
   const [gcashInput, setGcashInput] = useState<string>("0");
   const [cashInput, setCashInput] = useState<string>("0");
   const [savingPayment, setSavingPayment] = useState<boolean>(false);
 
+  // ORDER PAYMENT
+  const [orderPaymentTarget, setOrderPaymentTarget] = useState<CustomerSession | null>(null);
+  const [orderGcashInput, setOrderGcashInput] = useState<string>("0");
+  const [orderCashInput, setOrderCashInput] = useState<string>("0");
+  const [savingOrderPayment, setSavingOrderPayment] = useState<boolean>(false);
+
   const [togglingPaidId, setTogglingPaidId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
   const [sessionOrders, setSessionOrders] = useState<SessionOrdersMap>({});
+  const [orderPayments, setOrderPayments] = useState<Record<string, CustomerOrderPayment>>({});
 
   useEffect(() => {
     void initLoad();
@@ -247,6 +441,8 @@ const Customer_Lists: React.FC = () => {
     try {
       const loadedSessions = await fetchCustomerSessions();
       await fetchOrdersForSessions(loadedSessions);
+      await fetchOrderPayments(loadedSessions);
+      await syncSessionPaidStates(loadedSessions);
     } finally {
       setLoading(false);
     }
@@ -295,7 +491,7 @@ const Customer_Lists: React.FC = () => {
       return [];
     }
 
-    const rows = (data as CustomerSession[]) || [];
+    const rows = ((data ?? []) as CustomerSession[]) || [];
     setSessions(rows);
     return rows;
   };
@@ -325,10 +521,19 @@ const Customer_Lists: React.FC = () => {
           total_amount,
           addon_order_items (
             id,
+            created_at,
+            add_on_id,
             item_name,
             price,
             quantity,
-            subtotal
+            subtotal,
+            add_ons (
+              id,
+              name,
+              category,
+              size,
+              image_url
+            )
           )
         `)
         .in("booking_code", codes),
@@ -343,10 +548,19 @@ const Customer_Lists: React.FC = () => {
           total_amount,
           consignment_order_items (
             id,
+            created_at,
+            consignment_id,
             item_name,
             price,
             quantity,
-            subtotal
+            subtotal,
+            consignment (
+              id,
+              item_name,
+              category,
+              size,
+              image_url
+            )
           )
         `)
         .in("booking_code", codes),
@@ -360,17 +574,29 @@ const Customer_Lists: React.FC = () => {
       console.error("consignment_orders fetch error:", consignmentRes.error);
     }
 
-    const addonOrders = ((addonRes.data ?? []) as AddonOrderRow[]).map((o) => ({
-      ...o,
-      booking_code: String(o.booking_code ?? "").trim().toUpperCase(),
-      addon_order_items: Array.isArray(o.addon_order_items) ? o.addon_order_items : [],
+    const addonOrders: AddonOrderRow[] = ((addonRes.data ?? []) as RawAddonOrderRow[]).map((raw) => ({
+      id: toText(raw.id),
+      booking_code: toText(raw.booking_code).trim().toUpperCase(),
+      full_name: toText(raw.full_name),
+      seat_number: toText(raw.seat_number),
+      total_amount: toMoney(raw.total_amount),
+      addon_order_items: Array.isArray(raw.addon_order_items)
+        ? raw.addon_order_items.map(toAddonOrderItemRow)
+        : [],
     }));
 
-    const consignmentOrders = ((consignmentRes.data ?? []) as ConsignmentOrderRow[]).map((o) => ({
-      ...o,
-      booking_code: String(o.booking_code ?? "").trim().toUpperCase(),
-      consignment_order_items: Array.isArray(o.consignment_order_items) ? o.consignment_order_items : [],
-    }));
+    const consignmentOrders: ConsignmentOrderRow[] = ((consignmentRes.data ?? []) as RawConsignmentOrderRow[]).map(
+      (raw) => ({
+        id: toText(raw.id),
+        booking_code: toText(raw.booking_code).trim().toUpperCase(),
+        full_name: toText(raw.full_name),
+        seat_number: toText(raw.seat_number),
+        total_amount: toMoney(raw.total_amount),
+        consignment_order_items: Array.isArray(raw.consignment_order_items)
+          ? raw.consignment_order_items.map(toConsignmentOrderItemRow)
+          : [],
+      })
+    );
 
     const nextMap: SessionOrdersMap = {};
 
@@ -385,12 +611,20 @@ const Customer_Lists: React.FC = () => {
           const qty = wholePeso(toMoney(item.quantity));
           const price = wholePeso(toMoney(item.price));
           const subtotal = wholePeso(toMoney(item.subtotal ?? qty * price));
+
           items.push({
+            id: item.id,
+            parent_order_id: o.id,
             source: "addon",
-            name: String(item.item_name ?? "").trim() || "-",
+            source_item_id: item.add_on_id,
+            name: String(item.item_name ?? item.add_ons?.name ?? "").trim() || "-",
+            category: String(item.add_ons?.category ?? "").trim() || "Add-On",
+            size: item.add_ons?.size ?? null,
             qty,
             price,
             subtotal,
+            image_url: item.add_ons?.image_url ?? null,
+            created_at: item.created_at ?? null,
           });
         }
       }
@@ -400,12 +634,20 @@ const Customer_Lists: React.FC = () => {
           const qty = wholePeso(toMoney(item.quantity));
           const price = wholePeso(toMoney(item.price));
           const subtotal = wholePeso(toMoney(item.subtotal ?? qty * price));
+
           items.push({
+            id: item.id,
+            parent_order_id: o.id,
             source: "consignment",
-            name: String(item.item_name ?? "").trim() || "-",
+            source_item_id: item.consignment_id,
+            name: String(item.item_name ?? item.consignment?.item_name ?? "").trim() || "-",
+            category: String(item.consignment?.category ?? "").trim() || "Consignment",
+            size: item.consignment?.size ?? null,
             qty,
             price,
             subtotal,
+            image_url: item.consignment?.image_url ?? null,
+            created_at: item.created_at ?? null,
           });
         }
       }
@@ -424,6 +666,42 @@ const Customer_Lists: React.FC = () => {
     setSessionOrders(nextMap);
   };
 
+  const fetchOrderPayments = async (rows: CustomerSession[]): Promise<void> => {
+    const codes = Array.from(
+      new Set(
+        rows
+          .map((s) => String(s.booking_code ?? "").trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+
+    if (codes.length === 0) {
+      setOrderPayments({});
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("customer_order_payments")
+      .select("*")
+      .in("booking_code", codes);
+
+    if (error) {
+      console.error("customer_order_payments fetch error:", error);
+      setOrderPayments({});
+      return;
+    }
+
+    const map: Record<string, CustomerOrderPayment> = {};
+
+    for (const row of (data ?? []) as CustomerOrderPayment[]) {
+      const code = String(row.booking_code ?? "").trim().toUpperCase();
+      if (!code) continue;
+      map[code] = row;
+    }
+
+    setOrderPayments(map);
+  };
+
   const readActiveCustomerView = async (): Promise<void> => {
     const { data, error } = await supabase
       .from("customer_view_state")
@@ -440,6 +718,7 @@ const Customer_Lists: React.FC = () => {
     if (!data) {
       try {
         await setCustomerViewState(false, null);
+
         const retry = await supabase
           .from("customer_view_state")
           .select("id, session_id, enabled, updated_at")
@@ -461,9 +740,13 @@ const Customer_Lists: React.FC = () => {
   const subscribeCustomerViewRealtime = (): (() => void) => {
     const channel = supabase
       .channel("customer_view_state_changes_customer_lists")
-      .on("postgres_changes", { event: "*", schema: "public", table: "customer_view_state" }, () => {
-        void readActiveCustomerView();
-      })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "customer_view_state" },
+        () => {
+          void readActiveCustomerView();
+        }
+      )
       .subscribe();
 
     return () => {
@@ -475,7 +758,12 @@ const Customer_Lists: React.FC = () => {
     try {
       setRefreshing(true);
       const loadedSessions = await fetchCustomerSessions();
-      await Promise.all([fetchOrdersForSessions(loadedSessions), readActiveCustomerView()]);
+      await Promise.all([
+        fetchOrdersForSessions(loadedSessions),
+        fetchOrderPayments(loadedSessions),
+        readActiveCustomerView(),
+      ]);
+      await syncSessionPaidStates(loadedSessions);
     } finally {
       setRefreshing(false);
     }
@@ -486,7 +774,8 @@ const Customer_Lists: React.FC = () => {
     return p || "N/A";
   };
 
-  const getDownPayment = (s: CustomerSession): number => wholePeso(Math.max(0, toMoney(s.down_payment ?? 0)));
+  const getDownPayment = (s: CustomerSession): number =>
+    wholePeso(Math.max(0, toMoney(s.down_payment ?? 0)));
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -525,7 +814,9 @@ const Customer_Lists: React.FC = () => {
     return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
   };
 
-  const getDiscountInfo = (s: CustomerSession): { kind: DiscountKind; value: number; reason: string } => {
+  const getDiscountInfo = (
+    s: CustomerSession
+  ): { kind: DiscountKind; value: number; reason: string } => {
     const kind = (s.discount_kind ?? "none") as DiscountKind;
     const value = toMoney(s.discount_value ?? 0);
     const reason = String(s.discount_reason ?? "").trim();
@@ -545,22 +836,74 @@ const Customer_Lists: React.FC = () => {
 
   const getOrderBundle = (s: CustomerSession) => {
     const code = String(s.booking_code ?? "").trim().toUpperCase();
-    return sessionOrders[code] ?? {
-      addonOrders: [],
-      consignmentOrders: [],
-      items: [],
-      total: 0,
-    };
+    return (
+      sessionOrders[code] ?? {
+        addonOrders: [],
+        consignmentOrders: [],
+        items: [],
+        total: 0,
+      }
+    );
   };
 
   const getOrdersTotal = (s: CustomerSession): number => {
     return wholePeso(getOrderBundle(s).total);
   };
 
+  const hasOrders = (s: CustomerSession): boolean => getOrdersTotal(s) > 0;
+
+  // SYSTEM PAYMENT INFO
+  const getSystemPaymentInfo = (
+    s: CustomerSession
+  ): { gcash: number; cash: number; totalPaid: number } => {
+    const gcash = wholePeso(Math.max(0, toMoney(s.gcash_amount ?? 0)));
+    const cash = wholePeso(Math.max(0, toMoney(s.cash_amount ?? 0)));
+    const totalPaid = wholePeso(gcash + cash);
+    return { gcash, cash, totalPaid };
+  };
+
+  // ORDER PAYMENT INFO
+  const getOrderPaymentRow = (s: CustomerSession): CustomerOrderPayment | null => {
+    const code = String(s.booking_code ?? "").trim().toUpperCase();
+    if (!code) return null;
+    return orderPayments[code] ?? null;
+  };
+
+  const getOrderPaymentInfo = (
+    s: CustomerSession
+  ): { gcash: number; cash: number; totalPaid: number; isPaid: boolean } => {
+    const row = getOrderPaymentRow(s);
+    const gcash = wholePeso(Math.max(0, toMoney(row?.gcash_amount ?? 0)));
+    const cash = wholePeso(Math.max(0, toMoney(row?.cash_amount ?? 0)));
+    const totalPaid = wholePeso(gcash + cash);
+    const isPaid = toBool(row?.is_paid ?? false);
+    return { gcash, cash, totalPaid, isPaid };
+  };
+
+  const getSystemDue = (s: CustomerSession): number => {
+    return wholePeso(Math.max(0, getSessionSystemCost(s)));
+  };
+
+  const getOrderDue = (s: CustomerSession): number => {
+    return wholePeso(Math.max(0, getOrdersTotal(s)));
+  };
+
   const getGrandDue = (s: CustomerSession): number => {
-    const systemCost = getSessionSystemCost(s);
-    const ordersTotal = getOrdersTotal(s);
+    const systemCost = getSystemDue(s);
+    const ordersTotal = getOrderDue(s);
     return wholePeso(systemCost + ordersTotal);
+  };
+
+  const getSystemRemaining = (s: CustomerSession): number => {
+    const due = getSystemDue(s);
+    const paid = getSystemPaymentInfo(s).totalPaid;
+    return wholePeso(Math.max(0, due - paid));
+  };
+
+  const getOrderRemaining = (s: CustomerSession): number => {
+    const due = getOrderDue(s);
+    const paid = getOrderPaymentInfo(s).totalPaid;
+    return wholePeso(Math.max(0, due - paid));
   };
 
   const getSessionBalanceAfterDP = (s: CustomerSession): number => {
@@ -575,17 +918,64 @@ const Customer_Lists: React.FC = () => {
     return wholePeso(Math.max(0, dp - grandDue));
   };
 
-  const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
+  const getDisplayAmount = (
+    s: CustomerSession
+  ): { label: "Total Balance" | "Total Change"; value: number } => {
     const balance = getSessionBalanceAfterDP(s);
     if (balance > 0) return { label: "Total Balance", value: balance };
     return { label: "Total Change", value: getSessionChangeAfterDP(s) };
   };
 
-  const getPaidInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
-    const gcash = wholePeso(Math.max(0, toMoney(s.gcash_amount ?? 0)));
-    const cash = wholePeso(Math.max(0, toMoney(s.cash_amount ?? 0)));
-    const totalPaid = wholePeso(gcash + cash);
-    return { gcash, cash, totalPaid };
+  const getSystemIsPaid = (s: CustomerSession): boolean => {
+    const due = getSystemDue(s);
+    const paid = getSystemPaymentInfo(s).totalPaid;
+    return due <= 0 ? true : paid >= due;
+  };
+
+  const getOrderIsPaid = (s: CustomerSession): boolean => {
+    const due = getOrderDue(s);
+    if (due <= 0) return true;
+    const paid = getOrderPaymentInfo(s).totalPaid;
+    return paid >= due;
+  };
+
+  const getFinalPaidStatus = (s: CustomerSession): boolean => {
+    const systemPaid = getSystemIsPaid(s);
+    const orderPaid = hasOrders(s) ? getOrderIsPaid(s) : true;
+    return systemPaid && orderPaid;
+  };
+
+  const syncSingleSessionPaidState = async (s: CustomerSession): Promise<void> => {
+    const finalPaid = getFinalPaidStatus(s);
+
+    if (toBool(s.is_paid) === finalPaid) return;
+
+    const { data, error } = await supabase
+      .from("customer_sessions")
+      .update({
+        is_paid: finalPaid,
+        paid_at: finalPaid ? new Date().toISOString() : null,
+      })
+      .eq("id", s.id)
+      .select("*")
+      .single();
+
+    if (!error && data) {
+      const updated = data as CustomerSession;
+      setSessions((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      setSelectedSession((prev) => (prev?.id === updated.id ? updated : prev));
+      setSelectedOrderSession((prev) => (prev?.id === updated.id ? updated : prev));
+    }
+  };
+
+  const syncSessionPaidStates = async (rows: CustomerSession[]): Promise<void> => {
+    for (const s of rows) {
+      try {
+        await syncSingleSessionPaidState(s);
+      } catch (e) {
+        console.error("syncSingleSessionPaidState error:", e);
+      }
+    }
   };
 
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
@@ -616,6 +1006,7 @@ const Customer_Lists: React.FC = () => {
       const updatedRow = updated as CustomerSession;
       setSessions((prev) => prev.map((s) => (s.id === session.id ? updatedRow : s)));
       setSelectedSession((prev) => (prev?.id === session.id ? updatedRow : prev));
+      await syncSingleSessionPaidState(updatedRow);
     } catch (e) {
       console.error(e);
       alert("Stop Time failed.");
@@ -662,16 +1053,6 @@ const Customer_Lists: React.FC = () => {
     const clean = Number.isFinite(raw) ? Math.max(0, raw) : 0;
     const finalValue = discountKind === "percent" ? clamp(clean, 0, 100) : clean;
 
-    const dueForPayment = wholePeso(Math.max(0, getGrandDue({
-      ...discountTarget,
-      discount_kind: discountKind,
-      discount_value: finalValue,
-    } as CustomerSession)));
-
-    const prevPay = getPaidInfo(discountTarget);
-    const totalPaid = wholePeso(prevPay.gcash + prevPay.cash);
-    const autoPaid = dueForPayment <= 0 ? true : totalPaid >= dueForPayment;
-
     try {
       setSavingDiscount(true);
 
@@ -681,10 +1062,6 @@ const Customer_Lists: React.FC = () => {
           discount_kind: discountKind,
           discount_value: finalValue,
           discount_reason: discountReason.trim(),
-          gcash_amount: prevPay.gcash,
-          cash_amount: prevPay.cash,
-          is_paid: autoPaid,
-          paid_at: autoPaid ? new Date().toISOString() : null,
         })
         .eq("id", discountTarget.id)
         .select("*")
@@ -699,6 +1076,7 @@ const Customer_Lists: React.FC = () => {
       setSessions((prev) => prev.map((s) => (s.id === discountTarget.id ? updatedRow : s)));
       setSelectedSession((prev) => (prev?.id === discountTarget.id ? updatedRow : prev));
       setDiscountTarget(null);
+      await syncSingleSessionPaidState(updatedRow);
     } catch (e) {
       console.error(e);
       alert("Save discount failed.");
@@ -737,6 +1115,7 @@ const Customer_Lists: React.FC = () => {
       setSessions((prev) => prev.map((s) => (s.id === dpTarget.id ? updatedRow : s)));
       setSelectedSession((prev) => (prev?.id === dpTarget.id ? updatedRow : prev));
       setDpTarget(null);
+      await syncSingleSessionPaidState(updatedRow);
     } catch (e) {
       console.error(e);
       alert("Save down payment failed.");
@@ -745,8 +1124,9 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
+  // SYSTEM PAYMENT MODAL
   const openPaymentModal = (s: CustomerSession): void => {
-    const pi = getPaidInfo(s);
+    const pi = getSystemPaymentInfo(s);
     setPaymentTarget(s);
     setGcashInput(String(pi.gcash));
     setCashInput(String(pi.cash));
@@ -755,23 +1135,26 @@ const Customer_Lists: React.FC = () => {
   const savePayment = async (): Promise<void> => {
     if (!paymentTarget) return;
 
-    const due = wholePeso(Math.max(0, getGrandDue(paymentTarget)));
     const g = wholePeso(Math.max(0, toMoney(gcashInput)));
     const c = wholePeso(Math.max(0, toMoney(cashInput)));
     const totalPaid = wholePeso(g + c);
-
-    const isPaidAuto = due <= 0 ? true : totalPaid >= due;
+    const due = getSystemDue(paymentTarget);
+    const systemPaid = due <= 0 ? true : totalPaid >= due;
 
     try {
       setSavingPayment(true);
+
+      const currentFinal = getFinalPaidStatus(paymentTarget);
+      const orderPaid = hasOrders(paymentTarget) ? getOrderIsPaid(paymentTarget) : true;
+      const nextFinalPaid = systemPaid && orderPaid;
 
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
           gcash_amount: g,
           cash_amount: c,
-          is_paid: isPaidAuto,
-          paid_at: isPaidAuto ? new Date().toISOString() : null,
+          is_paid: nextFinalPaid,
+          paid_at: nextFinalPaid ? new Date().toISOString() : null,
         })
         .eq("id", paymentTarget.id)
         .select("*")
@@ -786,11 +1169,152 @@ const Customer_Lists: React.FC = () => {
       setSessions((prev) => prev.map((s) => (s.id === paymentTarget.id ? updatedRow : s)));
       setSelectedSession((prev) => (prev?.id === paymentTarget.id ? updatedRow : prev));
       setPaymentTarget(null);
+
+      if (currentFinal !== nextFinalPaid) {
+        await syncSingleSessionPaidState(updatedRow);
+      }
     } catch (e) {
       console.error(e);
       alert("Save payment failed.");
     } finally {
       setSavingPayment(false);
+    }
+  };
+
+  // ORDER PAYMENT MODAL
+  const ensureOrderPaymentRow = async (
+    session: CustomerSession
+  ): Promise<CustomerOrderPayment | null> => {
+    const bookingCode = String(session.booking_code ?? "").trim().toUpperCase();
+    if (!bookingCode) {
+      alert("No booking code found for this customer.");
+      return null;
+    }
+
+    const orderTotal = getOrderDue(session);
+
+    const payload = {
+      booking_code: bookingCode,
+      full_name: session.full_name,
+      seat_number: session.seat_number || "N/A",
+      order_total: orderTotal,
+    };
+
+    const { error } = await supabase
+      .from("customer_order_payments")
+      .upsert(payload, { onConflict: "booking_code" });
+
+    if (error) {
+      console.error(error);
+      alert(`Failed to prepare order payment row: ${error.message}`);
+      return null;
+    }
+
+    const { data, error: fetchErr } = await supabase
+      .from("customer_order_payments")
+      .select("*")
+      .eq("booking_code", bookingCode)
+      .maybeSingle();
+
+    if (fetchErr || !data) {
+      alert(`Failed to read order payment row: ${fetchErr?.message ?? "Not found"}`);
+      return null;
+    }
+
+    const row = data as CustomerOrderPayment;
+    setOrderPayments((prev) => ({
+      ...prev,
+      [bookingCode]: row,
+    }));
+
+    return row;
+  };
+
+  const openOrderPaymentModal = async (s: CustomerSession): Promise<void> => {
+    if (!hasOrders(s)) return;
+
+    const row = await ensureOrderPaymentRow(s);
+    if (!row) return;
+
+    setOrderPaymentTarget(s);
+    setOrderGcashInput(String(wholePeso(Math.max(0, toMoney(row.gcash_amount ?? 0)))));
+    setOrderCashInput(String(wholePeso(Math.max(0, toMoney(row.cash_amount ?? 0)))));
+  };
+
+  const saveOrderPayment = async (): Promise<void> => {
+    if (!orderPaymentTarget) return;
+
+    const bookingCode = String(orderPaymentTarget.booking_code ?? "").trim().toUpperCase();
+    if (!bookingCode) {
+      alert("Missing booking code.");
+      return;
+    }
+
+    const due = getOrderDue(orderPaymentTarget);
+    const gcash = wholePeso(Math.max(0, toMoney(orderGcashInput)));
+    const cash = wholePeso(Math.max(0, toMoney(orderCashInput)));
+    const totalPaid = wholePeso(gcash + cash);
+    const orderPaid = due <= 0 ? true : totalPaid >= due;
+
+    try {
+      setSavingOrderPayment(true);
+
+      const { data: paymentRow, error: payErr } = await supabase
+        .from("customer_order_payments")
+        .upsert(
+          {
+            booking_code: bookingCode,
+            full_name: orderPaymentTarget.full_name,
+            seat_number: orderPaymentTarget.seat_number || "N/A",
+            order_total: due,
+            gcash_amount: gcash,
+            cash_amount: cash,
+            is_paid: orderPaid,
+            paid_at: orderPaid ? new Date().toISOString() : null,
+          },
+          { onConflict: "booking_code" }
+        )
+        .select("*")
+        .single();
+
+      if (payErr || !paymentRow) {
+        alert(`Save order payment error: ${payErr?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setOrderPayments((prev) => ({
+        ...prev,
+        [bookingCode]: paymentRow as CustomerOrderPayment,
+      }));
+
+      const systemPaid = getSystemIsPaid(orderPaymentTarget);
+      const nextFinalPaid = systemPaid && orderPaid;
+
+      const { data: updatedSession, error: updErr } = await supabase
+        .from("customer_sessions")
+        .update({
+          is_paid: nextFinalPaid,
+          paid_at: nextFinalPaid ? new Date().toISOString() : null,
+        })
+        .eq("id", orderPaymentTarget.id)
+        .select("*")
+        .single();
+
+      if (updErr || !updatedSession) {
+        alert(`Order payment saved, but session paid sync failed: ${updErr?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      const updatedRow = updatedSession as CustomerSession;
+      setSessions((prev) => prev.map((s) => (s.id === updatedRow.id ? updatedRow : s)));
+      setSelectedSession((prev) => (prev?.id === updatedRow.id ? updatedRow : prev));
+      setSelectedOrderSession((prev) => (prev?.id === updatedRow.id ? updatedRow : prev));
+      setOrderPaymentTarget(null);
+    } catch (e) {
+      console.error(e);
+      alert("Save order payment failed.");
+    } finally {
+      setSavingOrderPayment(false);
     }
   };
 
@@ -801,6 +1325,7 @@ const Customer_Lists: React.FC = () => {
       const currentPaid = toBool(s.is_paid);
       const nextPaid = !currentPaid;
 
+      // manual toggle lang ito; pero ia-apply pa rin natin yung separate logic sa next refresh/save
       const { data: updated, error } = await supabase
         .from("customer_sessions")
         .update({
@@ -830,6 +1355,290 @@ const Customer_Lists: React.FC = () => {
   const openCancelModal = (s: CustomerSession): void => {
     setCancelTarget(s);
     setCancelReason("");
+  };
+
+  const openOrderCancelModal = (session: CustomerSession, item: OrderItemView): void => {
+    setOrderCancelTarget({ session, item });
+    setOrderCancelNote("");
+  };
+
+  const recalcAddonParentAfterDelete = async (parentOrderId: string): Promise<void> => {
+    const { data: remainingItems, error: remErr } = await supabase
+      .from("addon_order_items")
+      .select("subtotal, price, quantity")
+      .eq("addon_order_id", parentOrderId);
+
+    if (remErr) throw remErr;
+
+    const rows = (remainingItems ?? []) as Array<{
+      subtotal?: number | string | null;
+      price?: number | string | null;
+      quantity?: number | string | null;
+    }>;
+
+    if (rows.length === 0) {
+      const { error: delParentErr } = await supabase
+        .from("addon_orders")
+        .delete()
+        .eq("id", parentOrderId);
+
+      if (delParentErr) throw delParentErr;
+      return;
+    }
+
+    const newTotal = wholePeso(
+      rows.reduce((sum, r) => {
+        const subtotal = toMoney(r.subtotal ?? toMoney(r.price) * toMoney(r.quantity));
+        return sum + subtotal;
+      }, 0)
+    );
+
+    const { error: updParentErr } = await supabase
+      .from("addon_orders")
+      .update({ total_amount: newTotal })
+      .eq("id", parentOrderId);
+
+    if (updParentErr) throw updParentErr;
+  };
+
+  const recalcConsignmentParentAfterDelete = async (parentOrderId: string): Promise<void> => {
+    const { data: remainingItems, error: remErr } = await supabase
+      .from("consignment_order_items")
+      .select("subtotal, price, quantity")
+      .eq("consignment_order_id", parentOrderId);
+
+    if (remErr) throw remErr;
+
+    const rows = (remainingItems ?? []) as Array<{
+      subtotal?: number | string | null;
+      price?: number | string | null;
+      quantity?: number | string | null;
+    }>;
+
+    if (rows.length === 0) {
+      const { error: delParentErr } = await supabase
+        .from("consignment_orders")
+        .delete()
+        .eq("id", parentOrderId);
+
+      if (delParentErr) throw delParentErr;
+      return;
+    }
+
+    const newTotal = wholePeso(
+      rows.reduce((sum, r) => {
+        const subtotal = toMoney(r.subtotal ?? toMoney(r.price) * toMoney(r.quantity));
+        return sum + subtotal;
+      }, 0)
+    );
+
+    const { error: updParentErr } = await supabase
+      .from("consignment_orders")
+      .update({ total_amount: newTotal })
+      .eq("id", parentOrderId);
+
+    if (updParentErr) throw updParentErr;
+  };
+
+  const refreshOrderPaymentTotalForSession = async (session: CustomerSession): Promise<void> => {
+    const bookingCode = String(session.booking_code ?? "").trim().toUpperCase();
+    if (!bookingCode) return;
+
+    const newOrderTotal = getOrderDue(session);
+
+    const existing = getOrderPaymentRow(session);
+    if (!existing && newOrderTotal <= 0) return;
+
+    const gcash = wholePeso(Math.max(0, toMoney(existing?.gcash_amount ?? 0)));
+    const cash = wholePeso(Math.max(0, toMoney(existing?.cash_amount ?? 0)));
+    const totalPaid = wholePeso(gcash + cash);
+    const isPaid = newOrderTotal <= 0 ? true : totalPaid >= newOrderTotal;
+
+    const { data, error } = await supabase
+      .from("customer_order_payments")
+      .upsert(
+        {
+          booking_code: bookingCode,
+          full_name: session.full_name,
+          seat_number: session.seat_number || "N/A",
+          order_total: newOrderTotal,
+          gcash_amount: gcash,
+          cash_amount: cash,
+          is_paid: isPaid,
+          paid_at: isPaid ? new Date().toISOString() : null,
+        },
+        { onConflict: "booking_code" }
+      )
+      .select("*")
+      .single();
+
+    if (!error && data) {
+      setOrderPayments((prev) => ({
+        ...prev,
+        [bookingCode]: data as CustomerOrderPayment,
+      }));
+    }
+  };
+
+  const submitOrderItemCancel = async (): Promise<void> => {
+    if (!orderCancelTarget) return;
+
+    const note = orderCancelNote.trim();
+    if (!note) {
+      alert("Cancel note is required.");
+      return;
+    }
+
+    const { session, item } = orderCancelTarget;
+
+    try {
+      setCancellingOrderItemId(item.id);
+
+      if (item.source === "addon") {
+        const systemPaid = getSystemPaymentInfo(session);
+
+        const cancelPayload = {
+          original_id: item.id,
+          created_at: item.created_at,
+          add_on_id: item.source_item_id,
+          quantity: item.qty,
+          price: item.price,
+          full_name: session.full_name,
+          seat_number: session.seat_number,
+          gcash_amount: systemPaid.gcash,
+          cash_amount: systemPaid.cash,
+          is_paid: toBool(session.is_paid),
+          paid_at: session.paid_at ?? null,
+          description: note,
+        };
+
+        const { error: insertErr } = await supabase
+          .from("customer_session_add_ons_cancelled")
+          .insert(cancelPayload);
+
+        if (insertErr) {
+          alert(`Cancel add-on failed: ${insertErr.message}`);
+          return;
+        }
+
+        const { error: deleteErr } = await supabase
+          .from("addon_order_items")
+          .delete()
+          .eq("id", item.id);
+
+        if (deleteErr) {
+          alert(`Cancelled copy saved, but item delete failed: ${deleteErr.message}`);
+          return;
+        }
+
+        const { data: addonRow, error: addonFetchErr } = await supabase
+          .from("add_ons")
+          .select("sold")
+          .eq("id", item.source_item_id)
+          .maybeSingle();
+
+        if (!addonFetchErr && addonRow) {
+          const nextSold = Math.max(
+            0,
+            wholePeso(toMoney((addonRow as { sold?: number | string | null }).sold) - item.qty)
+          );
+          await supabase.from("add_ons").update({ sold: nextSold }).eq("id", item.source_item_id);
+        }
+
+        await recalcAddonParentAfterDelete(item.parent_order_id);
+      } else {
+        const systemPaid = getSystemPaymentInfo(session);
+
+        const consignmentPayload = {
+          original_id: item.id,
+          original_created_at: item.created_at,
+          consignment_id: item.source_item_id,
+          quantity: item.qty,
+          price: item.price,
+          total: item.subtotal,
+          full_name: session.full_name,
+          seat_number: session.seat_number,
+          gcash_amount: systemPaid.gcash,
+          cash_amount: systemPaid.cash,
+          is_paid: toBool(session.is_paid),
+          paid_at: session.paid_at ?? null,
+          was_voided: false,
+          voided_at: null,
+          void_note: null,
+          item_name: item.name,
+          category: item.category,
+          size: item.size,
+          image_url: item.image_url,
+          cancel_note: note,
+          stock_returned: true,
+        };
+
+        const { error: insertErr } = await supabase
+          .from("consignment_cancelled")
+          .insert(consignmentPayload);
+
+        if (insertErr) {
+          alert(`Cancel consignment failed: ${insertErr.message}`);
+          return;
+        }
+
+        const { error: deleteErr } = await supabase
+          .from("consignment_order_items")
+          .delete()
+          .eq("id", item.id);
+
+        if (deleteErr) {
+          alert(`Cancelled copy saved, but item delete failed: ${deleteErr.message}`);
+          return;
+        }
+
+        const { data: conRow, error: conFetchErr } = await supabase
+          .from("consignment")
+          .select("sold")
+          .eq("id", item.source_item_id)
+          .maybeSingle();
+
+        if (!conFetchErr && conRow) {
+          const nextSold = Math.max(
+            0,
+            wholePeso(toMoney((conRow as { sold?: number | string | null }).sold) - item.qty)
+          );
+          await supabase.from("consignment").update({ sold: nextSold }).eq("id", item.source_item_id);
+        }
+
+        await recalcConsignmentParentAfterDelete(item.parent_order_id);
+      }
+
+      const updatedSessions = await fetchCustomerSessions();
+      await fetchOrdersForSessions(updatedSessions);
+      await fetchOrderPayments(updatedSessions);
+
+      const freshSession = updatedSessions.find((s) => s.id === session.id) ?? session;
+      await refreshOrderPaymentTotalForSession(freshSession);
+      await syncSingleSessionPaidState(freshSession);
+
+      setOrderCancelTarget(null);
+      setOrderCancelNote("");
+
+      if (selectedOrderSession) {
+        const freshOrderSession =
+          updatedSessions.find((s) => s.id === selectedOrderSession.id) ?? null;
+        setSelectedOrderSession(freshOrderSession);
+      }
+
+      if (selectedSession) {
+        const freshReceiptSession =
+          updatedSessions.find((s) => s.id === selectedSession.id) ?? null;
+        setSelectedSession(freshReceiptSession);
+      }
+
+      alert("Order item cancelled successfully.");
+    } catch (e) {
+      console.error(e);
+      alert("Order item cancel failed.");
+    } finally {
+      setCancellingOrderItemId(null);
+    }
   };
 
   const submitCancel = async (): Promise<void> => {
@@ -895,7 +1704,8 @@ const Customer_Lists: React.FC = () => {
         paid_at: row.paid_at ?? null,
 
         phone_number: row.phone_number ?? null,
-        down_payment: row.down_payment == null ? null : wholePeso(toMoney(row.down_payment)),
+        down_payment:
+          row.down_payment == null ? null : wholePeso(toMoney(row.down_payment)),
       };
 
       const { error: insertErr } = await supabase
@@ -905,6 +1715,14 @@ const Customer_Lists: React.FC = () => {
       if (insertErr) {
         alert(`Cancel failed: ${insertErr.message}`);
         return;
+      }
+
+      const bookingCode = String(row.booking_code ?? "").trim().toUpperCase();
+      if (bookingCode) {
+        await supabase
+          .from("customer_order_payments")
+          .delete()
+          .eq("booking_code", bookingCode);
       }
 
       const seatText = String(row.seat_number ?? "").trim();
@@ -949,10 +1767,17 @@ const Customer_Lists: React.FC = () => {
 
       setSessions((prev) => prev.filter((x) => x.id !== row.id));
       setSelectedSession((prev) => (prev?.id === row.id ? null : prev));
+      setSelectedOrderSession((prev) => (prev?.id === row.id ? null : prev));
 
       const code = String(row.booking_code ?? "").trim().toUpperCase();
       if (code) {
         setSessionOrders((prev) => {
+          const next = { ...prev };
+          delete next[code];
+          return next;
+        });
+
+        setOrderPayments((prev) => {
           const next = { ...prev };
           delete next[code];
           return next;
@@ -972,7 +1797,9 @@ const Customer_Lists: React.FC = () => {
     }
   };
 
-  const toggleCustomerViewForSession = async (session: CustomerSession): Promise<void> => {
+  const toggleCustomerViewForSession = async (
+    session: CustomerSession
+  ): Promise<void> => {
     const currentlyOn = isCustomerViewOnForSession(activeView, session.id);
 
     try {
@@ -1022,7 +1849,9 @@ const Customer_Lists: React.FC = () => {
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
                 Customer View:{" "}
                 <strong>
-                  {activeView?.enabled ? `ON (${String(activeView.session_id ?? "").slice(0, 8)}...)` : "OFF"}
+                  {activeView?.enabled
+                    ? `ON (${String(activeView.session_id ?? "").slice(0, 8)}...)`
+                    : "OFF"}
                 </strong>
               </div>
             </div>
@@ -1041,7 +1870,11 @@ const Customer_Lists: React.FC = () => {
                     placeholder="Search by Full Name or Booking Code..."
                   />
                   {searchName.trim() && (
-                    <button className="customer-search-clear" onClick={() => setSearchName("")} type="button">
+                    <button
+                      className="customer-search-clear"
+                      onClick={() => setSearchName("")}
+                      type="button"
+                    >
                       Clear
                     </button>
                   )}
@@ -1106,7 +1939,8 @@ const Customer_Lists: React.FC = () => {
                     <th>Total Balance / Change</th>
                     <th>Discount</th>
                     <th>Down Payment</th>
-                    <th>Payment</th>
+                    <th>System Payment</th>
+                    <th>Order Payment</th>
                     <th>Paid?</th>
                     <th>Status</th>
                     <th>Action</th>
@@ -1118,12 +1952,14 @@ const Customer_Lists: React.FC = () => {
                     const open = isOpenTimeSession(session);
                     const disp = getDisplayAmount(session);
 
-                    const systemCost = wholePeso(Math.max(0, getSessionSystemCost(session)));
-                    const ordersTotal = wholePeso(Math.max(0, getOrdersTotal(session)));
-                    const grandDue = wholePeso(systemCost + ordersTotal);
+                    const systemCost = wholePeso(Math.max(0, getSystemDue(session)));
+                    const ordersTotal = wholePeso(Math.max(0, getOrderDue(session)));
 
-                    const pi = getPaidInfo(session);
-                    const remainingPay = grandDue - pi.totalPaid;
+                    const systemPay = getSystemPaymentInfo(session);
+                    const orderPay = getOrderPaymentInfo(session);
+
+                    const systemRemaining = getSystemRemaining(session);
+                    const orderRemaining = getOrderRemaining(session);
 
                     const dp = getDownPayment(session);
                     const orderBundle = getOrderBundle(session);
@@ -1142,11 +1978,19 @@ const Customer_Lists: React.FC = () => {
                         <td>{session.total_time}</td>
 
                         <td>
-                          <div className="cell-stack">
+                          <div className="cell-stack cell-center">
                             <span className="cell-strong">₱{ordersTotal}</span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              {orderBundle.items.length} item{orderBundle.items.length !== 1 ? "s" : ""}
+                              {orderBundle.items.length} item
+                              {orderBundle.items.length !== 1 ? "s" : ""}
                             </span>
+                            <button
+                              className="receipt-btn"
+                              onClick={() => setSelectedOrderSession(session)}
+                              type="button"
+                            >
+                              View Order
+                            </button>
                           </div>
                         </td>
 
@@ -1160,7 +2004,11 @@ const Customer_Lists: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">{getDiscountText(session)}</span>
-                            <button className="receipt-btn" onClick={() => openDiscountModal(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openDiscountModal(session)}
+                              type="button"
+                            >
                               Discount
                             </button>
                           </div>
@@ -1169,7 +2017,11 @@ const Customer_Lists: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">₱{dp}</span>
-                            <button className="receipt-btn" onClick={() => openDpModal(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openDpModal(session)}
+                              type="button"
+                            >
                               Edit DP
                             </button>
                           </div>
@@ -1177,33 +2029,67 @@ const Customer_Lists: React.FC = () => {
 
                         <td>
                           <div className="cell-stack cell-center">
-                            <span className="cell-strong">GCash ₱{pi.gcash} / Cash ₱{pi.cash}</span>
+                            <span className="cell-strong">
+                              GCash ₱{systemPay.gcash} / Cash ₱{systemPay.cash}
+                            </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              {remainingPay >= 0
-                                ? `Remaining ₱${wholePeso(remainingPay)}`
-                                : `Change ₱${wholePeso(Math.abs(remainingPay))}`}
+                              {systemRemaining > 0
+                                ? `Remaining ₱${systemRemaining}`
+                                : "Paid"}
                             </span>
 
                             <button
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
-                              disabled={grandDue <= 0}
-                              title={grandDue <= 0 ? "No due" : "Set Cash & GCash freely (no limit)"}
+                              disabled={systemCost <= 0}
                               type="button"
                             >
-                              Payment
+                              System Payment
                             </button>
                           </div>
                         </td>
 
                         <td>
+                          {hasOrders(session) ? (
+                            <div className="cell-stack cell-center">
+                              <span className="cell-strong">
+                                GCash ₱{orderPay.gcash} / Cash ₱{orderPay.cash}
+                              </span>
+                              <span style={{ fontSize: 12, opacity: 0.85 }}>
+                                {orderRemaining > 0
+                                  ? `Remaining ₱${orderRemaining}`
+                                  : "Paid"}
+                              </span>
+
+                              <button
+                                className="receipt-btn"
+                                onClick={() => void openOrderPaymentModal(session)}
+                                type="button"
+                              >
+                                Order Payment
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="cell-stack cell-center">
+                              <span style={{ opacity: 0.5 }}>No order</span>
+                            </div>
+                          )}
+                        </td>
+
+                        <td>
                           <button
                             className={`receipt-btn pay-badge ${
-                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
+                              toBool(session.is_paid)
+                                ? "pay-badge--paid"
+                                : "pay-badge--unpaid"
                             }`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
-                            title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
+                            title={
+                              toBool(session.is_paid)
+                                ? "Tap to set UNPAID"
+                                : "Tap to set PAID"
+                            }
                             type="button"
                           >
                             {togglingPaidId === session.id
@@ -1229,7 +2115,11 @@ const Customer_Lists: React.FC = () => {
                               </button>
                             )}
 
-                            <button className="receipt-btn" onClick={() => setSelectedSession(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => setSelectedSession(session)}
+                              type="button"
+                            >
                               View Receipt
                             </button>
 
@@ -1257,8 +2147,255 @@ const Customer_Lists: React.FC = () => {
             </div>
           )}
 
+          {selectedOrderSession && (
+            <div
+              className="receipt-overlay"
+              onClick={() => setSelectedOrderSession(null)}
+            >
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">ORDER LIST</h3>
+                <p className="receipt-subtitle">{selectedOrderSession.full_name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Booking Code</span>
+                  <span>{selectedOrderSession.booking_code ?? "—"}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{selectedOrderSession.seat_number}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Order Total</span>
+                  <span>₱{wholePeso(getOrderDue(selectedOrderSession))}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Order Paid</span>
+                  <span>₱{wholePeso(getOrderPaymentInfo(selectedOrderSession).totalPaid)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Order Remaining</span>
+                  <span>₱{wholePeso(getOrderRemaining(selectedOrderSession))}</span>
+                </div>
+
+                <hr />
+
+                {getOrderBundle(selectedOrderSession).items.length === 0 ? (
+                  <div style={{ textAlign: "center", opacity: 0.7, padding: "12px 0" }}>
+                    No order items found.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 12,
+                      maxHeight: 420,
+                      overflowY: "auto",
+                      paddingRight: 4,
+                    }}
+                  >
+                    {getOrderBundle(selectedOrderSession).items.map((item) => (
+                      <div
+                        key={`${item.source}-${item.id}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "72px 1fr",
+                          gap: 12,
+                          alignItems: "start",
+                          padding: 10,
+                          border: "1px solid rgba(0,0,0,0.08)",
+                          borderRadius: 14,
+                          background: "rgba(255,255,255,0.55)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 72,
+                            height: 72,
+                            borderRadius: 12,
+                            overflow: "hidden",
+                            background: "#e9e9e9",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 12,
+                          }}
+                        >
+                          {item.image_url ? (
+                            <img
+                              src={item.image_url}
+                              alt={item.name}
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "cover",
+                              }}
+                            />
+                          ) : (
+                            <span>No Image</span>
+                          )}
+                        </div>
+
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 900, fontSize: 16 }}>{item.name}</div>
+                          <div style={{ opacity: 0.8, fontSize: 13, marginTop: 2 }}>
+                            {item.category}
+                            {String(item.size ?? "").trim() ? ` • ${item.size}` : ""}
+                            {item.source === "consignment"
+                              ? " • Consignment"
+                              : " • Add-On"}
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: 8,
+                              display: "grid",
+                              gap: 3,
+                              fontSize: 13,
+                            }}
+                          >
+                            <div>
+                              Qty: <strong>{item.qty}</strong>
+                            </div>
+                            <div>
+                              Price: <strong>₱{item.price}</strong>
+                            </div>
+                            <div>
+                              Subtotal: <strong>₱{item.subtotal}</strong>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: 10 }}>
+                            <button
+                              className="receipt-btn admin-danger"
+                              onClick={() =>
+                                openOrderCancelModal(selectedOrderSession, item)
+                              }
+                              disabled={cancellingOrderItemId === item.id}
+                              type="button"
+                            >
+                              Cancel Item
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="modal-actions" style={{ marginTop: 16 }}>
+                  <button
+                    className="close-btn"
+                    onClick={() => setSelectedOrderSession(null)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {orderCancelTarget && (
+            <div
+              className="receipt-overlay"
+              onClick={() => (cancellingOrderItemId ? null : setOrderCancelTarget(null))}
+            >
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">CANCEL ORDER ITEM</h3>
+                <p className="receipt-subtitle">{orderCancelTarget.item.name}</p>
+
+                <hr />
+
+                <div className="receipt-row">
+                  <span>Customer</span>
+                  <span>{orderCancelTarget.session.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{orderCancelTarget.session.seat_number}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Type</span>
+                  <span>
+                    {orderCancelTarget.item.source === "addon"
+                      ? "Add-On"
+                      : "Consignment"}
+                  </span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Qty</span>
+                  <span>{orderCancelTarget.item.qty}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Subtotal</span>
+                  <span>₱{orderCancelTarget.item.subtotal}</span>
+                </div>
+
+                <hr />
+
+                <div className="receipt-row" style={{ display: "grid", gap: 8 }}>
+                  <span style={{ fontWeight: 800 }}>Cancel Note (required)</span>
+                  <textarea
+                    className="reason-input"
+                    value={orderCancelNote}
+                    onChange={(e) => setOrderCancelNote(e.currentTarget.value)}
+                    placeholder="e.g. Customer removed ball only / out of stock / wrong item..."
+                    rows={4}
+                    style={{ width: "100%", resize: "vertical" }}
+                    disabled={Boolean(cancellingOrderItemId)}
+                  />
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>
+                    This cancelled item will be archived in{" "}
+                    <strong>
+                      {orderCancelTarget.item.source === "addon"
+                        ? "customer_session_add_ons_cancelled"
+                        : "consignment_cancelled"}
+                    </strong>
+                    .
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setOrderCancelTarget(null)}
+                    disabled={Boolean(cancellingOrderItemId)}
+                    type="button"
+                  >
+                    Back
+                  </button>
+
+                  <button
+                    className="receipt-btn admin-danger"
+                    onClick={() => void submitOrderItemCancel()}
+                    disabled={
+                      Boolean(cancellingOrderItemId) ||
+                      orderCancelNote.trim().length === 0
+                    }
+                    type="button"
+                  >
+                    {cancellingOrderItemId ? "Cancelling..." : "Submit Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {cancelTarget && (
-            <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
+            <div
+              className="receipt-overlay"
+              onClick={() => (cancellingBusy ? null : setCancelTarget(null))}
+            >
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">CANCEL SESSION</h3>
                 <p className="receipt-subtitle">{cancelTarget.full_name}</p>
@@ -1277,7 +2414,9 @@ const Customer_Lists: React.FC = () => {
                 <hr />
 
                 <div className="receipt-row" style={{ display: "grid", gap: 8 }}>
-                  <span style={{ fontWeight: 800 }}>Description / Reason (required)</span>
+                  <span style={{ fontWeight: 800 }}>
+                    Description / Reason (required)
+                  </span>
                   <textarea
                     className="reason-input"
                     value={cancelReason}
@@ -1288,7 +2427,8 @@ const Customer_Lists: React.FC = () => {
                     disabled={cancellingBusy}
                   />
                   <div style={{ fontSize: 12, opacity: 0.85 }}>
-                    ⚠️ Cannot cancel if empty. This record will be moved to <strong>customer_sessions_cancelled</strong>.
+                    ⚠️ Cannot cancel if empty. This record will be moved to{" "}
+                    <strong>customer_sessions_cancelled</strong>.
                   </div>
                 </div>
 
@@ -1319,7 +2459,11 @@ const Customer_Lists: React.FC = () => {
                     className="receipt-btn admin-danger"
                     onClick={() => void submitCancel()}
                     disabled={cancellingBusy || cancelReason.trim().length === 0}
-                    title={cancelReason.trim().length === 0 ? "Reason required" : "Submit cancel"}
+                    title={
+                      cancelReason.trim().length === 0
+                        ? "Reason required"
+                        : "Submit cancel"
+                    }
                     type="button"
                   >
                     {cancellingBusy ? "Cancelling..." : "Submit Cancel"}
@@ -1350,10 +2494,19 @@ const Customer_Lists: React.FC = () => {
                 </div>
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDpTarget(null)} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setDpTarget(null)}
+                    type="button"
+                  >
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDownPayment()} disabled={savingDp} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void saveDownPayment()}
+                    disabled={savingDp}
+                    type="button"
+                  >
                     {savingDp ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1371,7 +2524,12 @@ const Customer_Lists: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Discount Type</span>
-                  <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
+                  <select
+                    value={discountKind}
+                    onChange={(e) =>
+                      setDiscountKind(e.currentTarget.value as DiscountKind)
+                    }
+                  >
                     <option value="none">None</option>
                     <option value="percent">Percent (%)</option>
                     <option value="amount">Peso (₱)</option>
@@ -1382,7 +2540,11 @@ const Customer_Lists: React.FC = () => {
                   <span>Value</span>
                   <div className="inline-input">
                     <span className="inline-input-prefix">
-                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
+                      {discountKind === "percent"
+                        ? "%"
+                        : discountKind === "amount"
+                        ? "₱"
+                        : ""}
                     </span>
                     <input
                       className="small-input"
@@ -1411,12 +2573,20 @@ const Customer_Lists: React.FC = () => {
                   const base = getBaseSystemCost(discountTarget);
                   const val = toMoney(discountInput);
                   const appliedVal =
-                    discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+                    discountKind === "percent"
+                      ? clamp(Math.max(0, val), 0, 100)
+                      : Math.max(0, val);
 
-                  const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
-                  const orderTotal = getOrdersTotal(discountTarget);
-                  const dueForPayment = wholePeso(Math.max(0, discountedCost + orderTotal));
-                  const prevPay = getPaidInfo(discountTarget);
+                  const { discountedCost, discountAmount } = applyDiscount(
+                    base,
+                    discountKind,
+                    appliedVal
+                  );
+                  const orderTotal = getOrderDue(discountTarget);
+                  const dueForPayment = wholePeso(
+                    Math.max(0, discountedCost + orderTotal)
+                  );
+                  const prevPay = getSystemPaymentInfo(discountTarget);
 
                   return (
                     <>
@@ -1448,12 +2618,12 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-total">
-                        <span>NEW PAYMENT DUE</span>
+                        <span>NEW GRAND TOTAL</span>
                         <span>₱{wholePeso(dueForPayment)}</span>
                       </div>
 
                       <div className="receipt-row">
-                        <span>Current Payment</span>
+                        <span>Current System Payment</span>
                         <span>
                           GCash ₱{prevPay.gcash} / Cash ₱{prevPay.cash}
                         </span>
@@ -1463,10 +2633,19 @@ const Customer_Lists: React.FC = () => {
                 })()}
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDiscountTarget(null)} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setDiscountTarget(null)}
+                    type="button"
+                  >
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void saveDiscount()}
+                    disabled={savingDiscount}
+                    type="button"
+                  >
                     {savingDiscount ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1477,15 +2656,13 @@ const Customer_Lists: React.FC = () => {
           {paymentTarget && (
             <div className="receipt-overlay" onClick={() => setPaymentTarget(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <h3 className="receipt-title">PAYMENT</h3>
+                <h3 className="receipt-title">SYSTEM PAYMENT</h3>
                 <p className="receipt-subtitle">{paymentTarget.full_name}</p>
 
                 <hr />
 
                 {(() => {
-                  const systemDue = wholePeso(Math.max(0, getSessionSystemCost(paymentTarget)));
-                  const ordersDue = wholePeso(Math.max(0, getOrdersTotal(paymentTarget)));
-                  const due = wholePeso(systemDue + ordersDue);
+                  const due = wholePeso(Math.max(0, getSystemDue(paymentTarget)));
 
                   const g = wholePeso(Math.max(0, toMoney(gcashInput)));
                   const c = wholePeso(Math.max(0, toMoney(cashInput)));
@@ -1497,17 +2674,7 @@ const Customer_Lists: React.FC = () => {
                   return (
                     <>
                       <div className="receipt-row">
-                        <span>System Cost</span>
-                        <span>₱{systemDue}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Order Total</span>
-                        <span>₱{ordersDue}</span>
-                      </div>
-
-                      <div className="receipt-row">
-                        <span>Payment Due (Grand Total)</span>
+                        <span>System Cost Due</span>
                         <span>₱{due}</span>
                       </div>
 
@@ -1548,16 +2715,119 @@ const Customer_Lists: React.FC = () => {
                       </div>
 
                       <div className="receipt-row">
-                        <span>Auto Status</span>
-                        <span className="receipt-status">{isPaidAuto ? "PAID" : "UNPAID"}</span>
+                        <span>System Status</span>
+                        <span className="receipt-status">
+                          {isPaidAuto ? "PAID" : "UNPAID"}
+                        </span>
                       </div>
 
                       <div className="modal-actions">
-                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} type="button">
+                        <button
+                          className="receipt-btn"
+                          onClick={() => setPaymentTarget(null)}
+                          type="button"
+                        >
                           Cancel
                         </button>
-                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment} type="button">
+                        <button
+                          className="receipt-btn"
+                          onClick={() => void savePayment()}
+                          disabled={savingPayment}
+                          type="button"
+                        >
                           {savingPayment ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {orderPaymentTarget && (
+            <div className="receipt-overlay" onClick={() => setOrderPaymentTarget(null)}>
+              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+                <h3 className="receipt-title">ORDER PAYMENT</h3>
+                <p className="receipt-subtitle">{orderPaymentTarget.full_name}</p>
+
+                <hr />
+
+                {(() => {
+                  const due = wholePeso(Math.max(0, getOrderDue(orderPaymentTarget)));
+
+                  const g = wholePeso(Math.max(0, toMoney(orderGcashInput)));
+                  const c = wholePeso(Math.max(0, toMoney(orderCashInput)));
+                  const totalPaid = wholePeso(g + c);
+
+                  const diff = totalPaid - due;
+                  const isPaidAuto = due <= 0 ? true : totalPaid >= due;
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>Order Due</span>
+                        <span>₱{due}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={orderGcashInput}
+                          onChange={(e) => setOrderGcashInput(e.currentTarget.value)}
+                        />
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <input
+                          className="money-input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={orderCashInput}
+                          onChange={(e) => setOrderCashInput(e.currentTarget.value)}
+                        />
+                      </div>
+
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>₱{totalPaid}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>{diff >= 0 ? "Change" : "Remaining"}</span>
+                        <span>₱{wholePeso(Math.abs(diff))}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Order Status</span>
+                        <span className="receipt-status">
+                          {isPaidAuto ? "PAID" : "UNPAID"}
+                        </span>
+                      </div>
+
+                      <div className="modal-actions">
+                        <button
+                          className="receipt-btn"
+                          onClick={() => setOrderPaymentTarget(null)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="receipt-btn"
+                          onClick={() => void saveOrderPayment()}
+                          disabled={savingOrderPayment}
+                          type="button"
+                        >
+                          {savingOrderPayment ? "Saving..." : "Save"}
                         </button>
                       </div>
                     </>
@@ -1642,7 +2912,9 @@ const Customer_Lists: React.FC = () => {
                       onClick={() => void stopOpenTime(selectedSession)}
                       type="button"
                     >
-                      {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
+                      {stoppingId === selectedSession.id
+                        ? "Stopping..."
+                        : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
                 )}
@@ -1661,7 +2933,8 @@ const Customer_Lists: React.FC = () => {
                   const ordersTotal = wholePeso(orderBundle.total);
                   const grandDue = wholePeso(systemDue + ordersTotal);
 
-                  const pi = getPaidInfo(selectedSession);
+                  const systemPay = getSystemPaymentInfo(selectedSession);
+                  const orderPay = getOrderPaymentInfo(selectedSession);
 
                   const dpBalance = wholePeso(Math.max(0, grandDue - dp));
                   const dpChange = wholePeso(Math.max(0, dp - grandDue));
@@ -1717,7 +2990,10 @@ const Customer_Lists: React.FC = () => {
                           <div style={{ fontWeight: 800, marginBottom: 8 }}>ORDER LIST</div>
 
                           {orderBundle.items.map((item, idx) => (
-                            <div className="receipt-row" key={`${item.source}-${item.name}-${idx}`}>
+                            <div
+                              className="receipt-row"
+                              key={`${item.source}-${item.name}-${idx}`}
+                            >
                               <span>
                                 {item.name} x{item.qty}
                               </span>
@@ -1730,28 +3006,34 @@ const Customer_Lists: React.FC = () => {
                       <hr />
 
                       <div className="receipt-row">
-                        <span>GCash</span>
-                        <span>₱{pi.gcash}</span>
+                        <span>System Payment</span>
+                        <span>GCash ₱{systemPay.gcash} / Cash ₱{systemPay.cash}</span>
                       </div>
 
-                      <div className="receipt-row">
-                        <span>Cash</span>
-                        <span>₱{pi.cash}</span>
-                      </div>
+                      {ordersTotal > 0 && (
+                        <div className="receipt-row">
+                          <span>Order Payment</span>
+                          <span>GCash ₱{orderPay.gcash} / Cash ₱{orderPay.cash}</span>
+                        </div>
+                      )}
 
                       <div className="receipt-row">
-                        <span>Total Paid</span>
-                        <span>₱{pi.totalPaid}</span>
+                        <span>System Remaining</span>
+                        <span>₱{getSystemRemaining(selectedSession)}</span>
                       </div>
 
-                      <div className="receipt-row">
-                        <span>Remaining Balance (After DP)</span>
-                        <span>₱{dpBalance}</span>
-                      </div>
+                      {ordersTotal > 0 && (
+                        <div className="receipt-row">
+                          <span>Order Remaining</span>
+                          <span>₱{getOrderRemaining(selectedSession)}</span>
+                        </div>
+                      )}
 
                       <div className="receipt-row">
                         <span>Status</span>
-                        <span className="receipt-status">{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">
+                          {toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}
+                        </span>
                       </div>
 
                       <div className="receipt-total">
@@ -1769,8 +3051,12 @@ const Customer_Lists: React.FC = () => {
 
                 {(() => {
                   const viewOn = isCustomerViewOnForSession(activeView, selectedSession.id);
+
                   return (
-                    <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <div
+                      className="modal-actions"
+                      style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+                    >
                       <button
                         className="receipt-btn"
                         onClick={() => void toggleCustomerViewForSession(selectedSession)}
@@ -1781,7 +3067,12 @@ const Customer_Lists: React.FC = () => {
                         {viewBusy ? "Updating..." : viewOn ? "Stop View" : "View Customer"}
                       </button>
 
-                      <button className="close-btn" onClick={() => void closeReceipt()} disabled={viewBusy} type="button">
+                      <button
+                        className="close-btn"
+                        onClick={() => void closeReceipt()}
+                        disabled={viewBusy}
+                        type="button"
+                      >
                         Close
                       </button>
                     </div>

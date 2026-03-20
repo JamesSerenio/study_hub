@@ -1415,7 +1415,7 @@ const Add_Ons: React.FC = () => {
               disabled={isLoading}
               onClick={() => void handleSubmit()}
             >
-              {isLoading ? "Saving..." : "Submit Order"}
+              {isLoading ? "Saving..." : "Add To Bill"}
             </IonButton>
 
             <IonButton
