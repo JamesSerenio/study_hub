@@ -1089,60 +1089,45 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       </IonModal>
 
       <IonModal
-        isOpen={codeModalOpen}
-        onDidDismiss={() => setCodeModalOpen(false)}
-        className="booking-modal"
+  isOpen={codeModalOpen}
+  onDidDismiss={() => setCodeModalOpen(false)}
+  className="booking-code-modal"
+>
+  <IonHeader className="booking-code-header">
+    <IonToolbar className="booking-code-toolbar">
+      <IonTitle className="booking-code-title">Booking Code</IonTitle>
+      <IonButtons slot="end">
+        <IonButton className="booking-code-close-btn" onClick={() => setCodeModalOpen(false)}>
+          <IonIcon icon={closeOutline} />
+        </IonButton>
+      </IonButtons>
+    </IonToolbar>
+  </IonHeader>
+
+  <IonContent className="ion-padding booking-code-content">
+    <div className="booking-code-card">
+      <div className="booking-code-subtext">
+        Please picture this code for add-ons.
+      </div>
+
+      <div className="booking-code-value">
+        {savedBookingCode}
+      </div>
+
+      <div className="booking-code-note">
+        Use this code when ordering add-ons or other items.
+      </div>
+
+      <IonButton
+        expand="block"
+        className="booking-code-ok-btn"
+        onClick={() => setCodeModalOpen(false)}
       >
-        <IonHeader>
-          <IonToolbar>
-            <IonTitle>Your Booking Code</IonTitle>
-            <IonButtons slot="end">
-              <IonButton onClick={() => setCodeModalOpen(false)}>
-                <IonIcon icon={closeOutline} />
-              </IonButton>
-            </IonButtons>
-          </IonToolbar>
-        </IonHeader>
-
-        <IonContent className="ion-padding">
-          <div
-            style={{
-              maxWidth: 420,
-              margin: "0 auto",
-              textAlign: "center",
-              background: "#ffffff",
-              borderRadius: 20,
-              padding: 20,
-              boxShadow: "0 10px 30px rgba(0,0,0,0.10)",
-              border: "1px solid rgba(0,0,0,0.06)",
-            }}
-          >
-            <div style={{ fontSize: 15, opacity: 0.8, marginBottom: 10 }}>
-              Please picture this code for add-ons.
-            </div>
-
-            <div
-              style={{
-                fontSize: 38,
-                fontWeight: 900,
-                letterSpacing: 8,
-                margin: "8px 0 16px",
-                color: "#2f8f3f",
-              }}
-            >
-              {savedBookingCode}
-            </div>
-
-            <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 16 }}>
-              Use this code when ordering add-ons or other items.
-            </div>
-
-            <IonButton expand="block" onClick={() => setCodeModalOpen(false)}>
-              OK
-            </IonButton>
-          </div>
-        </IonContent>
-      </IonModal>
+        OK
+      </IonButton>
+    </div>
+  </IonContent>
+</IonModal>
     </>
   );
 }
