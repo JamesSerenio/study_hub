@@ -1,6 +1,7 @@
 // src/pages/Admin_customer_list.tsx
 // ✅ SAME as Customer_Lists (Non-Reservation) — SAME LOGIC + UI + MODALS
 // ✅ Seat column REMOVED from table (still shown on receipt)
+// ✅ Booking Code ADDED in Admin table + receipt + export + cancel payload
 // ✅ Discount (same breakdown UI)
 // ✅ Down Payment EDITABLE (saved to DB: customer_sessions.down_payment)
 // ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
@@ -71,6 +72,7 @@ interface CustomerSession {
   seat_number: string;
 
   promo_booking_id?: string | null;
+  booking_code?: string | null;
 
   down_payment?: number | string | null;
 
@@ -791,6 +793,7 @@ const Admin_customer_list: React.FC = () => {
         seat_number: String(row.seat_number ?? "").trim() || "N/A",
 
         promo_booking_id: row.promo_booking_id ?? null,
+        booking_code: row.booking_code ?? null,
 
         discount_kind: row.discount_kind ?? "none",
         discount_value: Math.max(0, toMoney(row.discount_value ?? 0)),
@@ -805,9 +808,7 @@ const Admin_customer_list: React.FC = () => {
         down_payment: row.down_payment == null ? null : wholePeso(toMoney(row.down_payment)),
       };
 
-      const { error: insertErr } = await supabase
-        .from("customer_sessions_cancelled")
-        .insert(cancelPayload);
+      const { error: insertErr } = await supabase.from("customer_sessions_cancelled").insert(cancelPayload);
 
       if (insertErr) {
         alert(`Cancel failed: ${insertErr.message}`);
@@ -844,10 +845,7 @@ const Admin_customer_list: React.FC = () => {
         await setCustomerViewState(false, null);
       }
 
-      const { error: deleteErr } = await supabase
-        .from("customer_sessions")
-        .delete()
-        .eq("id", row.id);
+      const { error: deleteErr } = await supabase.from("customer_sessions").delete().eq("id", row.id);
 
       if (deleteErr) {
         alert(`Cancelled copy saved, but delete failed: ${deleteErr.message}`);
@@ -966,6 +964,7 @@ const Admin_customer_list: React.FC = () => {
       ws.columns = [
         { header: "Date", key: "date", width: 12 },
         { header: "Full Name", key: "full_name", width: 26 },
+        { header: "Booking Code", key: "booking_code", width: 18 },
         { header: "Phone #", key: "phone_number", width: 16 },
         { header: "Type", key: "customer_type", width: 14 },
         { header: "Has ID", key: "has_id", width: 10 },
@@ -987,7 +986,7 @@ const Admin_customer_list: React.FC = () => {
         { header: "Seat", key: "seat", width: 10 },
       ];
 
-      const lastColLetter = "U";
+      const lastColLetter = "V";
 
       ws.mergeCells(`A1:${lastColLetter}1`);
       ws.getCell("A1").value = "ME TYME LOUNGE — Admin Customer Lists (Non-Reservation)";
@@ -1008,7 +1007,7 @@ const Admin_customer_list: React.FC = () => {
           const ext = logo.toLowerCase().includes(".jpg") || logo.toLowerCase().includes(".jpeg") ? "jpeg" : "png";
           const imgId = wb.addImage({ buffer: ab, extension: ext });
           ws.addImage(imgId, {
-            tl: { col: 16.5, row: 0.25 },
+            tl: { col: 17.5, row: 0.25 },
             ext: { width: 170, height: 64 },
           });
         }
@@ -1058,6 +1057,7 @@ const Admin_customer_list: React.FC = () => {
         const row = ws.addRow({
           date: s.date,
           full_name: s.full_name,
+          booking_code: s.booking_code ?? "—",
           phone_number: phoneText(s),
           customer_type: s.customer_type,
           has_id: s.has_id ? "Yes" : "No",
@@ -1072,7 +1072,7 @@ const Admin_customer_list: React.FC = () => {
           discount_text: getDiscountTextFrom(di.kind, di.value),
           down_payment: dp,
 
-          systemCost,
+          system_cost: systemCost,
           gcash: pi.gcash,
           cash: pi.cash,
           total_paid: pi.totalPaid,
@@ -1270,6 +1270,7 @@ const Admin_customer_list: React.FC = () => {
                   <tr>
                     <th>Date</th>
                     <th>Full Name</th>
+                    <th>Booking Code</th>
                     <th>Phone #</th>
                     <th>Type</th>
                     <th>Has ID</th>
@@ -1301,6 +1302,7 @@ const Admin_customer_list: React.FC = () => {
                       <tr key={session.id}>
                         <td>{session.date}</td>
                         <td>{session.full_name}</td>
+                        <td>{session.booking_code ?? "—"}</td>
                         <td>{phoneText(session)}</td>
                         <td>{session.customer_type}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
@@ -1475,6 +1477,10 @@ const Admin_customer_list: React.FC = () => {
                 <div className="receipt-row">
                   <span>Date</span>
                   <span>{cancelTarget.date}</span>
+                </div>
+                <div className="receipt-row">
+                  <span>Booking Code</span>
+                  <span>{cancelTarget.booking_code ?? "—"}</span>
                 </div>
                 <div className="receipt-row">
                   <span>Seat</span>
@@ -1761,6 +1767,11 @@ const Admin_customer_list: React.FC = () => {
                 <div className="receipt-row">
                   <span>Customer</span>
                   <span>{selectedSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Booking Code</span>
+                  <span>{selectedSession.booking_code ?? "—"}</span>
                 </div>
 
                 <div className="receipt-row">

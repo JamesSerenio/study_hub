@@ -19,9 +19,10 @@
 // ✅ NEW: Phone validation MODAL
 // ✅ REMOVED: Customer Field
 // ✅ REMOVED: Specific ID input / id_number
-// ✅ NEW: Generates 4-char booking code (letters + numbers)
-// ✅ NEW: Saves booking_code to DB
-// ✅ NEW: Success modal shows booking code with note for add-ons
+// ✅ NEW: Generates 4-char booking code ONLY for reservation
+// ✅ NEW: Saves booking_code to DB ONLY for reservation
+// ✅ NEW: Booking code becomes usable ONLY when reservation date/time starts
+// ✅ NOTE: For add-ons / other pages, validate current time against reservation time_started/time_ended
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -281,6 +282,15 @@ const clampToReservationDay = (endIso: string, reservationDate?: string): string
   return endMs > eodMs ? eod : endIso;
 };
 
+const isBookingCodeUsableNow = (startIso: string, endIso: string): boolean => {
+  const now = Date.now();
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  return now >= start && now <= end;
+};
+
 type SeatBlockInsert = {
   seat_number: string;
   start_at: string;
@@ -362,6 +372,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
   const [codeModalOpen, setCodeModalOpen] = useState(false);
   const [savedBookingCode, setSavedBookingCode] = useState("");
+  const [savedCodeUsableFrom, setSavedCodeUsableFrom] = useState("");
+  const [savedCodeUsableUntil, setSavedCodeUsableUntil] = useState("");
+  const [savedCodeActiveNow, setSavedCodeActiveNow] = useState(false);
 
   const commitReservationTime = (raw: string) => {
     const normalized = normalizeReservationTime(raw);
@@ -565,6 +578,9 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setDateTouchTick(0);
     setRefreshSeatsTick((x) => x + 1);
     setSavedBookingCode("");
+    setSavedCodeUsableFrom("");
+    setSavedCodeUsableUntil("");
+    setSavedCodeActiveNow(false);
     setCodeModalOpen(false);
   }, [isOpen]);
 
@@ -778,7 +794,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     let createdBlockIds: string[] = [];
 
     try {
-      const bookingCode = await createUniqueBookingCode();
+      const bookingCode = form.reservation ? await createUniqueBookingCode() : null;
+      const codeIsActiveNow =
+        form.reservation && bookingCode
+          ? isBookingCodeUsableNow(startIsoToStore, timeEndedToStore)
+          : false;
 
       if (form.reservation) {
         const created = await createSeatBlocksForReservation(
@@ -814,8 +834,21 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       }
 
       const wasReservation = form.reservation;
-      setSavedBookingCode(bookingCode);
-      setCodeModalOpen(true);
+
+      if (wasReservation && bookingCode) {
+        setSavedBookingCode(bookingCode);
+        setSavedCodeUsableFrom(startIsoToStore);
+        setSavedCodeUsableUntil(timeEndedToStore);
+        setSavedCodeActiveNow(codeIsActiveNow);
+        setCodeModalOpen(true);
+      } else {
+        setSavedBookingCode("");
+        setSavedCodeUsableFrom("");
+        setSavedCodeUsableUntil("");
+        setSavedCodeActiveNow(false);
+        setCodeModalOpen(false);
+      }
+
       resetBookingForm();
       onSaved(wasReservation);
     } catch (e) {
@@ -1095,7 +1128,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       >
         <IonHeader>
           <IonToolbar>
-            <IonTitle>Your Booking Code</IonTitle>
+            <IonTitle>Reservation Booking Code</IonTitle>
             <IonButtons slot="end">
               <IonButton onClick={() => setCodeModalOpen(false)}>
                 <IonIcon icon={closeOutline} />
@@ -1118,7 +1151,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             }}
           >
             <div style={{ fontSize: 15, opacity: 0.8, marginBottom: 10 }}>
-              Please picture this code for add-ons.
+              Your reservation booking code
             </div>
 
             <div
@@ -1133,8 +1166,39 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               {savedBookingCode}
             </div>
 
-            <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 16 }}>
-              Use this code when ordering add-ons or other items.
+            <div style={{ fontSize: 14, opacity: 0.85, marginBottom: 10 }}>
+              This code is for <strong>reservation only</strong>.
+            </div>
+
+            <div style={{ fontSize: 14, opacity: 0.85, marginBottom: 8 }}>
+              <strong>Usable From:</strong>
+              <br />
+              {savedCodeUsableFrom ? formatPH(new Date(savedCodeUsableFrom)) : "—"}
+            </div>
+
+            <div style={{ fontSize: 14, opacity: 0.85, marginBottom: 16 }}>
+              <strong>Usable Until:</strong>
+              <br />
+              {savedCodeUsableUntil ? formatPH(new Date(savedCodeUsableUntil)) : "—"}
+            </div>
+
+            <div
+              style={{
+                marginBottom: 16,
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: savedCodeActiveNow ? "rgba(47, 143, 63, 0.10)" : "rgba(255, 193, 7, 0.14)",
+                color: savedCodeActiveNow ? "#2f8f3f" : "#8a6500",
+                fontWeight: 700,
+              }}
+            >
+              {savedCodeActiveNow
+                ? "Code is active now and can already be used."
+                : "Code is NOT active yet. It will only work on the exact reserved date/time."}
+            </div>
+
+            <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 16 }}>
+              Please save or picture this code. It will only be valid once the reservation schedule starts.
             </div>
 
             <IonButton expand="block" onClick={() => setCodeModalOpen(false)}>
