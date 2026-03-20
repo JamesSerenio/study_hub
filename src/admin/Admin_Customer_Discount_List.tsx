@@ -12,6 +12,12 @@
 // ✅ Attendance button shows IN/OUT based on latest attendance row (out_at null => IN, else OUT)
 // ✅ FIXED: removed .single() from UPDATE/SELECT paths to avoid "Cannot coerce ... single JSON object"
 // ✅ NEW: Delete + Export supports BY DAY / BY WEEK / BY MONTH
+// ✅ NEW: Added AREA filter (All / Common Area / Conference Room)
+// ✅ NEW: Dynamic duration filter
+//    - Common Area => 1 Day / Week / Half Month / Month
+//    - Conference Room => 1 Hour / 3 Hours / 6 Hours / 8 Hours
+// ✅ NEW: Range filter now uses ACTIVE COVERAGE (start_at..end_at overlap), not created_at only
+// ✅ Example: if booking starts March 2 and lasts 1 week, it appears on March 3..March 8 too
 
 import React, { useEffect, useMemo, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -24,6 +30,10 @@ import { saveAs } from "file-saver";
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
 type DiscountKind = "none" | "percent" | "amount";
+
+type AreaFilter = "all" | PackageArea;
+type CommonDurationFilter = "all" | "1_day" | "week" | "half_month" | "month";
+type ConferenceDurationFilter = "all" | "1_hour" | "3_hours" | "6_hours" | "8_hours";
 
 type PromoBookingAttendanceRow = {
   id: string;
@@ -281,6 +291,33 @@ const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
   };
 };
 
+/* ================= DURATION BUCKET HELPERS ================= */
+
+const getCommonAreaDurationBucket = (r: PromoBookingRow): CommonDurationFilter | "all" => {
+  const optName = String(r.package_options?.option_name ?? "").trim().toLowerCase();
+  const v = Number(r.package_options?.duration_value ?? 0);
+  const u = String(r.package_options?.duration_unit ?? "").trim().toLowerCase();
+
+  if (u === "day" && v === 1) return "1_day";
+  if ((u === "day" && v === 7) || optName.includes("week")) return "week";
+  if ((u === "day" && v === 15) || optName.includes("half month") || optName.includes("half-month")) return "half_month";
+  if ((u === "month" && v === 1) || (u === "day" && (v === 30 || v === 31)) || optName.includes("month")) return "month";
+
+  return "all";
+};
+
+const getConferenceDurationBucket = (r: PromoBookingRow): ConferenceDurationFilter | "all" => {
+  const v = Number(r.package_options?.duration_value ?? 0);
+  const u = String(r.package_options?.duration_unit ?? "").trim().toLowerCase();
+
+  if (u === "hour" && v === 1) return "1_hour";
+  if (u === "hour" && v === 3) return "3_hours";
+  if (u === "hour" && v === 6) return "6_hours";
+  if (u === "hour" && v === 8) return "8_hours";
+
+  return "all";
+};
+
 /* ================= Excel helpers ================= */
 
 const isLikelyUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\//i.test(v.trim());
@@ -313,7 +350,8 @@ type Range = {
 
 const startOfLocalDay = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 
-const addDaysLocal = (d: Date, days: number): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 0, 0, 0, 0);
+const addDaysLocal = (d: Date, days: number): Date =>
+  new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 0, 0, 0, 0);
 
 const startEndIsoLocalDay = (yyyyMmDd: string): { startIso: string; endIso: string } => {
   const [yStr, mStr, dStr] = yyyyMmDd.split("-");
@@ -327,17 +365,16 @@ const startEndIsoLocalDay = (yyyyMmDd: string): { startIso: string; endIso: stri
   return { startIso: startLocal.toISOString(), endIso: endLocal.toISOString() };
 };
 
-// Week = Monday..Sunday (PH typical)
+// Week = Monday..Sunday
 const startOfWeekMondayLocal = (anyDay: Date): Date => {
   const d = startOfLocalDay(anyDay);
   const day = d.getDay(); // 0 Sun ... 6 Sat
-  const diffToMonday = (day + 6) % 7; // Mon->0, Tue->1 ... Sun->6
+  const diffToMonday = (day + 6) % 7;
   return addDaysLocal(d, -diffToMonday);
 };
 
 const rangeFromMode = (mode: RangeMode, dayStr: string, monthStr: string): Range => {
   if (mode === "month") {
-    // monthStr: "YYYY-MM"
     const [yStr, mStr] = monthStr.split("-");
     const y = Number(yStr);
     const m = Number(mStr);
@@ -352,24 +389,31 @@ const rangeFromMode = (mode: RangeMode, dayStr: string, monthStr: string): Range
     const y = Number(yStr);
     const m = Number(mStr);
     const d = Number(dStr);
-    const picked = new Date(y, m - 1, d, 12, 0, 0, 0); // midday to avoid DST edge cases
+    const picked = new Date(y, m - 1, d, 12, 0, 0, 0);
     const startLocal = startOfWeekMondayLocal(picked);
     const endLocal = addDaysLocal(startLocal, 7);
     const label = `${yyyyMmDdLocal(startLocal)} to ${yyyyMmDdLocal(addDaysLocal(endLocal, -1))}`;
     return { startIso: startLocal.toISOString(), endIso: endLocal.toISOString(), label };
   }
 
-  // day
   const r = startEndIsoLocalDay(dayStr);
   return { startIso: r.startIso, endIso: r.endIso, label: dayStr };
 };
 
-const inRange = (iso: string, range: Range): boolean => {
-  const t = new Date(iso).getTime();
-  const s = new Date(range.startIso).getTime();
-  const e = new Date(range.endIso).getTime();
-  if (!Number.isFinite(t) || !Number.isFinite(s) || !Number.isFinite(e)) return false;
-  return t >= s && t < e;
+/**
+ * ✅ overlap filter using booking coverage
+ * if booking overlaps selected range, include it
+ */
+const bookingOverlapsRange = (startIso: string, endIso: string, range: Range): boolean => {
+  const bookingStart = new Date(startIso).getTime();
+  const bookingEnd = new Date(endIso).getTime();
+  const rangeStart = new Date(range.startIso).getTime();
+  const rangeEnd = new Date(range.endIso).getTime();
+
+  if (!Number.isFinite(bookingStart) || !Number.isFinite(bookingEnd)) return false;
+  if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd)) return false;
+
+  return bookingStart < rangeEnd && bookingEnd >= rangeStart;
 };
 
 /* ================= Supabase helpers (NO .single()) ================= */
@@ -418,8 +462,13 @@ const Admin_Customer_Discount_List: React.FC = () => {
     const d = new Date();
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
-    return `${y}-${m}`; // YYYY-MM
+    return `${y}-${m}`;
   });
+
+  // ✅ NEW FILTERS
+  const [areaFilter, setAreaFilter] = useState<AreaFilter>("all");
+  const [commonDurationFilter, setCommonDurationFilter] = useState<CommonDurationFilter>("all");
+  const [conferenceDurationFilter, setConferenceDurationFilter] = useState<ConferenceDurationFilter>("all");
 
   const [deletingRangeLabel, setDeletingRangeLabel] = useState<string | null>(null);
 
@@ -568,15 +617,43 @@ const Admin_Customer_Discount_List: React.FC = () => {
     void fetchPromoBookings();
   }, []);
 
+  useEffect(() => {
+    setCommonDurationFilter("all");
+    setConferenceDurationFilter("all");
+  }, [areaFilter]);
+
   const activeRange = useMemo(() => rangeFromMode(rangeMode, selectedDay, selectedMonth), [rangeMode, selectedDay, selectedMonth]);
 
   const filteredRows = useMemo(() => {
-    return rows.filter((r) => inRange(r.created_at, activeRange));
-  }, [rows, activeRange]);
+    return rows.filter((r) => {
+      // 1) booking should overlap selected range
+      if (!bookingOverlapsRange(r.start_at, r.end_at, activeRange)) return false;
+
+      // 2) area filter
+      if (areaFilter !== "all" && r.area !== areaFilter) return false;
+
+      // 3) duration filter
+      if (areaFilter === "common_area" && commonDurationFilter !== "all") {
+        const bucket = getCommonAreaDurationBucket(r);
+        if (bucket !== commonDurationFilter) return false;
+      }
+
+      if (areaFilter === "conference_room" && conferenceDurationFilter !== "all") {
+        const bucket = getConferenceDurationBucket(r);
+        if (bucket !== conferenceDurationFilter) return false;
+      }
+
+      return true;
+    });
+  }, [rows, activeRange, areaFilter, commonDurationFilter, conferenceDurationFilter]);
 
   const totals = useMemo(() => {
     const nowMs = tick;
-    const total = filteredRows.reduce((sum, r) => sum + toNumber(r.price), 0);
+    const total = filteredRows.reduce((sum, r) => {
+      const base = round2(Math.max(0, toNumber(r.price)));
+      const calc = applyDiscount(base, r.discount_kind, r.discount_value);
+      return sum + calc.discountedCost;
+    }, 0);
 
     let upcoming = 0;
     let ongoing = 0;
@@ -589,7 +666,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
       else finished += 1;
     }
 
-    return { total, upcoming, ongoing, finished };
+    return { total: round2(total), upcoming, ongoing, finished };
   }, [filteredRows, tick]);
 
   const getPaidInfo = (r: PromoBookingRow): { gcash: number; cash: number; totalPaid: number } => {
@@ -606,11 +683,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
   };
 
   /* =========================
-     Export Excel (Day/Week/Month)
+     Export Excel (Day/Week/Month + current filters)
   ========================= */
   const exportToExcel = async (): Promise<void> => {
     if (filteredRows.length === 0) {
-      alert("No records for selected range.");
+      alert("No records for selected filter/range.");
       return;
     }
 
@@ -654,7 +731,8 @@ const Admin_Customer_Discount_List: React.FC = () => {
     ws.getRow(1).height = 26;
 
     ws.mergeCells("A2", "T2");
-    ws.getCell("A2").value = `Range: ${rangeMode.toUpperCase()} • ${activeRange.label}`;
+    ws.getCell("A2").value =
+      `Range: ${rangeMode.toUpperCase()} • ${activeRange.label} | Area: ${areaFilter} | Common Duration: ${commonDurationFilter} | Conference Duration: ${conferenceDurationFilter}`;
     ws.getCell("A2").font = { size: 11 };
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
 
@@ -748,7 +826,10 @@ const Admin_Customer_Discount_List: React.FC = () => {
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
-    const safeLabel = `${rangeMode}_${activeRange.label}`.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 60);
+    const safeLabel = `${rangeMode}_${activeRange.label}_${areaFilter}_${commonDurationFilter}_${conferenceDurationFilter}`
+      .replace(/[^a-zA-Z0-9_-]+/g, "_")
+      .slice(0, 80);
+
     saveAs(blob, `admin_promo_records_${safeLabel}.xlsx`);
   };
 
@@ -903,7 +984,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
       setCancellingId(cancelTarget.id);
       setCancelError("");
 
-      // ✅ FIX: no .single()
       const { data, error } = await supabase
         .from("promo_bookings")
         .select(
@@ -1013,39 +1093,43 @@ const Admin_Customer_Discount_List: React.FC = () => {
     }
   };
 
-  /* ================= Delete by RANGE (Day/Week/Month) ================= */
+  /* ================= Delete by CURRENT FILTERED RANGE ================= */
 
   const deleteByRange = async (): Promise<void> => {
     if (filteredRows.length === 0) {
-      alert("No records to delete for selected range.");
+      alert("No records to delete for selected filter/range.");
       return;
     }
 
     const count = filteredRows.length;
     const label = `${rangeMode.toUpperCase()} • ${activeRange.label}`;
-    const ok = window.confirm(`Delete ALL promo records for:\n${label}\n\nThis will delete ${count} record(s).`);
+    const ok = window.confirm(
+      `Delete ALL currently filtered promo records for:\n${label}\n\nArea: ${areaFilter}\nCommon Duration: ${commonDurationFilter}\nConference Duration: ${conferenceDurationFilter}\n\nThis will delete ${count} record(s).`
+    );
     if (!ok) return;
 
     try {
       setDeletingRangeLabel(label);
 
-      const { error } = await supabase
-        .from("promo_bookings")
-        .delete()
-        .gte("created_at", activeRange.startIso)
-        .lt("created_at", activeRange.endIso);
+      const ids = filteredRows.map((r) => r.id);
+      const chunkSize = 200;
 
-      if (error) {
-        alert(`Delete error: ${error.message}`);
-        return;
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const slice = ids.slice(i, i + chunkSize);
+        const { error } = await supabase.from("promo_bookings").delete().in("id", slice);
+        if (error) {
+          alert(`Delete error: ${error.message}`);
+          return;
+        }
       }
 
-      // remove locally
-      setRows((prev) => prev.filter((r) => !inRange(r.created_at, activeRange)));
-      setSelected((prev) => (prev && inRange(prev.created_at, activeRange) ? null : prev));
-
-      // safest: refetch attendance (or clear)
-      setAttMap({});
+      setRows((prev) => prev.filter((r) => !ids.includes(r.id)));
+      setSelected((prev) => (prev && ids.includes(prev.id) ? null : prev));
+      setAttMap((prev) => {
+        const next = { ...prev };
+        ids.forEach((id) => delete next[id]);
+        return next;
+      });
     } catch {
       alert("Delete failed.");
     } finally {
@@ -1120,7 +1204,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Admin Discount / Promo Records</h2>
               <div className="customer-subtext">
-                Showing records for:{" "}
+                Showing active records for:{" "}
                 <strong>
                   {rangeMode.toUpperCase()} • {activeRange.label}
                 </strong>
@@ -1129,6 +1213,11 @@ const Admin_Customer_Discount_List: React.FC = () => {
               <div className="customer-subtext" style={{ marginTop: 6 }}>
                 Total: <strong>₱{round2(totals.total).toFixed(2)}</strong> • Upcoming: <strong>{totals.upcoming}</strong> • Ongoing:{" "}
                 <strong>{totals.ongoing}</strong> • Finished: <strong>{totals.finished}</strong>
+              </div>
+
+              <div className="customer-subtext" style={{ marginTop: 4, opacity: 0.85 }}>
+                Area: <strong>{areaFilter}</strong> • Common Duration: <strong>{commonDurationFilter}</strong> • Conference Duration:{" "}
+                <strong>{conferenceDurationFilter}</strong>
               </div>
             </div>
 
@@ -1178,6 +1267,53 @@ const Admin_Customer_Discount_List: React.FC = () => {
                     </span>
                   </label>
                 )}
+
+                <label className="date-pill">
+                  <span className="date-pill-label">Area</span>
+                  <select
+                    className="date-pill-input"
+                    value={areaFilter}
+                    onChange={(e) => setAreaFilter(e.currentTarget.value as AreaFilter)}
+                  >
+                    <option value="all">All</option>
+                    <option value="common_area">Common Area</option>
+                    <option value="conference_room">Conference Room</option>
+                  </select>
+                </label>
+
+                {areaFilter === "common_area" && (
+                  <label className="date-pill">
+                    <span className="date-pill-label">Duration</span>
+                    <select
+                      className="date-pill-input"
+                      value={commonDurationFilter}
+                      onChange={(e) => setCommonDurationFilter(e.currentTarget.value as CommonDurationFilter)}
+                    >
+                      <option value="all">All</option>
+                      <option value="1_day">1 Day</option>
+                      <option value="week">Week</option>
+                      <option value="half_month">Half Month</option>
+                      <option value="month">Month</option>
+                    </select>
+                  </label>
+                )}
+
+                {areaFilter === "conference_room" && (
+                  <label className="date-pill">
+                    <span className="date-pill-label">Duration</span>
+                    <select
+                      className="date-pill-input"
+                      value={conferenceDurationFilter}
+                      onChange={(e) => setConferenceDurationFilter(e.currentTarget.value as ConferenceDurationFilter)}
+                    >
+                      <option value="all">All</option>
+                      <option value="1_hour">1 Hour</option>
+                      <option value="3_hours">3 Hours</option>
+                      <option value="6_hours">6 Hours</option>
+                      <option value="8_hours">8 Hours</option>
+                    </select>
+                  </label>
+                )}
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", marginTop: 10 }}>
@@ -1193,7 +1329,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
                   className="receipt-btn"
                   onClick={() => void deleteByRange()}
                   disabled={Boolean(deletingRangeLabel) || filteredRows.length === 0}
-                  title={`Deletes promo_bookings where created_at is within the selected ${rangeMode}.`}
+                  title={`Deletes currently filtered promo_bookings for the selected ${rangeMode}.`}
                 >
                   {deletingRangeLabel ? "Deleting..." : `Delete (${rangeMode.toUpperCase()})`}
                 </button>
@@ -1204,9 +1340,9 @@ const Admin_Customer_Discount_List: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredRows.length === 0 ? (
-            <p className="customer-note">No promo records found for this range</p>
+            <p className="customer-note">No promo records found for this filter/range</p>
           ) : (
-            <div className="customer-table-wrap" key={`${rangeMode}-${activeRange.startIso}`}>
+            <div className="customer-table-wrap" key={`${rangeMode}-${activeRange.startIso}-${areaFilter}-${commonDurationFilter}-${conferenceDurationFilter}`}>
               <table className="customer-table">
                 <thead>
                   <tr>
@@ -1761,6 +1897,45 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                 <hr />
 
+                <div className="receipt-row">
+                  <span>Area</span>
+                  <span>{prettyArea(selected.area)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{seatLabel(selected)}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Package</span>
+                  <span>{selected.packages?.title || "—"}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Option</span>
+                  <span>{selected.package_options?.option_name || "—"}</span>
+                </div>
+
+                {selected.package_options?.duration_value && selected.package_options?.duration_unit ? (
+                  <div className="receipt-row">
+                    <span>Duration</span>
+                    <span>{formatDuration(Number(selected.package_options.duration_value), selected.package_options.duration_unit)}</span>
+                  </div>
+                ) : null}
+
+                <div className="receipt-row">
+                  <span>Start</span>
+                  <span>{new Date(selected.start_at).toLocaleString("en-PH")}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>End</span>
+                  <span>{new Date(selected.end_at).toLocaleString("en-PH")}</span>
+                </div>
+
+                <hr />
+
                 <div style={{ fontWeight: 900, marginBottom: 8 }}>Attendance Logs</div>
 
                 {logsFor(selected.id).length === 0 ? (
@@ -1792,6 +1967,76 @@ const Admin_Customer_Discount_List: React.FC = () => {
                     ))}
                   </div>
                 )}
+
+                <hr />
+
+                {(() => {
+                  const base = round2(Math.max(0, toNumber(selected.price)));
+                  const { discountedCost, discountAmount } = applyDiscount(base, selected.discount_kind, selected.discount_value);
+                  const due = round2(discountedCost);
+
+                  const pi = getPaidInfo(selected);
+                  const remainingSigned = round2(due - pi.totalPaid);
+                  const isChange = remainingSigned < 0;
+                  const remainingAbs = round2(Math.abs(remainingSigned));
+                  const paid = toBool(selected.is_paid);
+
+                  return (
+                    <>
+                      <div className="receipt-row">
+                        <span>System Cost (Before)</span>
+                        <span>₱{base.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Discount</span>
+                        <span>{getDiscountTextFrom(selected.discount_kind, selected.discount_value)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Discount Amount</span>
+                        <span>₱{discountAmount.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Final Cost</span>
+                        <span>₱{due.toFixed(2)}</span>
+                      </div>
+
+                      <hr />
+
+                      <div className="receipt-row">
+                        <span>GCash</span>
+                        <span>₱{pi.gcash.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Cash</span>
+                        <span>₱{pi.cash.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Total Paid</span>
+                        <span>₱{pi.totalPaid.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>{isChange ? "Change" : "Remaining"}</span>
+                        <span>₱{remainingAbs.toFixed(2)}</span>
+                      </div>
+
+                      <div className="receipt-row">
+                        <span>Paid Status</span>
+                        <span className="receipt-status">{paid ? "PAID" : "UNPAID"}</span>
+                      </div>
+
+                      <div className="receipt-total">
+                        <span>TOTAL</span>
+                        <span>₱{due.toFixed(2)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
 
                 <button className="close-btn" onClick={() => setSelected(null)}>
                   Close
