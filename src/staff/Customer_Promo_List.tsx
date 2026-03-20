@@ -16,6 +16,12 @@
 // ✅ NEW: Show Attendance (promo_booking_attendance) per booking
 // ✅ Attendance column shows IN/OUT based on latest attendance row (out_at null => IN, else OUT)
 // ✅ FIXED: removed .single() from UPDATE/SELECT paths to avoid "Cannot coerce ... single JSON object"
+// ✅ NEW: Filter by AREA first (All / Common Area / Conference Room)
+// ✅ NEW: Dynamic duration filter
+//    - Common Area => 1 Day / Week / Half Month / Month
+//    - Conference Room => 1 Hour / 3 Hours / 6 Hours / 8 Hours
+// ✅ NEW: Date filter now checks ACTIVE DATE COVERAGE (selected date must be within start_at..end_at)
+// ✅ Example: if booking started March 2 and duration is 1 week, it will still appear on March 3..March 8
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -25,6 +31,10 @@ import logo from "../assets/study_hub.png";
 type PackageArea = "common_area" | "conference_room";
 type DurationUnit = "hour" | "day" | "month" | "year";
 type DiscountKind = "none" | "percent" | "amount";
+
+type AreaFilter = "all" | PackageArea;
+type CommonDurationFilter = "all" | "1_day" | "week" | "half_month" | "month";
+type ConferenceDurationFilter = "all" | "1_hour" | "3_hours" | "6_hours" | "8_hours";
 
 /* ================= Attendance ================= */
 
@@ -175,18 +185,17 @@ const yyyyMmDdLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-const getCreatedDateLocal = (iso: string): string => {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  return yyyyMmDdLocal(d);
-};
 
 const prettyArea = (a: PackageArea): string => (a === "conference_room" ? "Conference Room" : "Common Area");
 
 const seatLabel = (r: PromoBookingRow): string =>
   r.area === "conference_room" ? "CONFERENCE ROOM" : r.seat_number || "N/A";
 
-const getStatus = (startIso: string, endIso: string, nowMs: number = Date.now()): "UPCOMING" | "ONGOING" | "FINISHED" => {
+const getStatus = (
+  startIso: string,
+  endIso: string,
+  nowMs: number = Date.now()
+): "UPCOMING" | "ONGOING" | "FINISHED" => {
   const s = new Date(startIso).getTime();
   const e = new Date(endIso).getTime();
   if (!Number.isFinite(s) || !Number.isFinite(e)) return "FINISHED";
@@ -268,11 +277,64 @@ const isExpired = (validityEndAtIso: string | null): boolean => {
   return Date.now() > t;
 };
 
+const getLocalDayStartMs = (dateStr: string): number => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  return d.getTime();
+};
+
+const getLocalDayEndMs = (dateStr: string): number => {
+  const d = new Date(`${dateStr}T23:59:59.999`);
+  return d.getTime();
+};
+
+/**
+ * ✅ Important:
+ * selectedDate is considered ACTIVE if that date overlaps any part of the booking range.
+ * So if booking runs Mar 2 -> Mar 8, then:
+ * Mar 2,3,4,5,6,7,8 all return true.
+ */
+const bookingCoversLocalDate = (startIso: string, endIso: string, selectedDate: string): boolean => {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  const dayStartMs = getLocalDayStartMs(selectedDate);
+  const dayEndMs = getLocalDayEndMs(selectedDate);
+
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
+  if (!Number.isFinite(dayStartMs) || !Number.isFinite(dayEndMs)) return false;
+
+  return startMs <= dayEndMs && endMs >= dayStartMs;
+};
+
+const getCommonAreaDurationBucket = (r: PromoBookingRow): CommonDurationFilter | "all" => {
+  const optName = String(r.package_options?.option_name ?? "").trim().toLowerCase();
+  const v = Number(r.package_options?.duration_value ?? 0);
+  const u = String(r.package_options?.duration_unit ?? "").trim().toLowerCase();
+
+  if (u === "day" && v === 1) return "1_day";
+  if ((u === "day" && v === 7) || optName.includes("week")) return "week";
+  if ((u === "day" && v === 15) || optName.includes("half month") || optName.includes("half-month")) return "half_month";
+  if ((u === "month" && v === 1) || (u === "day" && (v === 30 || v === 31)) || optName.includes("month")) return "month";
+
+  return "all";
+};
+
+const getConferenceDurationBucket = (r: PromoBookingRow): ConferenceDurationFilter | "all" => {
+  const v = Number(r.package_options?.duration_value ?? 0);
+  const u = String(r.package_options?.duration_unit ?? "").trim().toLowerCase();
+
+  if (u === "hour" && v === 1) return "1_hour";
+  if (u === "hour" && v === 3) return "3_hours";
+  if (u === "hour" && v === 6) return "6_hours";
+  if (u === "hour" && v === 8) return "8_hours";
+
+  return "all";
+};
+
 const normalizeRow = (row: PromoBookingDBRow): PromoBookingRow => {
   const kind = normalizeDiscountKind(row.discount_kind);
   const value = round2(toNumber(row.discount_value));
 
-  const promo_code = (row.promo_code ?? null) ? String(row.promo_code ?? "").trim() : null;
+  const promo_code = row.promo_code ?? null ? String(row.promo_code ?? "").trim() : null;
   const attempts_left = Math.max(0, Math.floor(toNumber(row.attempts_left ?? 0)));
   const max_attempts = Math.max(0, Math.floor(toNumber(row.max_attempts ?? 0)));
   const validity_end_at = row.validity_end_at ?? null;
@@ -327,11 +389,16 @@ const Customer_Discount_List: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [selected, setSelected] = useState<PromoBookingRow | null>(null);
 
-  // ✅ DATE FILTER (view-only)
+  // ✅ DATE FILTER (ACTIVE DATE, not just created_at)
   const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
 
   // ✅ SEARCH (Full Name)
   const [searchName, setSearchName] = useState<string>("");
+
+  // ✅ AREA + DURATION FILTERS
+  const [areaFilter, setAreaFilter] = useState<AreaFilter>("all");
+  const [commonDurationFilter, setCommonDurationFilter] = useState<CommonDurationFilter>("all");
+  const [conferenceDurationFilter, setConferenceDurationFilter] = useState<ConferenceDurationFilter>("all");
 
   // refresh status/time
   const [tick, setTick] = useState<number>(Date.now());
@@ -592,21 +659,50 @@ const Customer_Discount_List: React.FC = () => {
     }
   };
 
-  // ✅ Filter by date + full_name search
+  // ✅ reset duration filter when area changes
+  useEffect(() => {
+    setCommonDurationFilter("all");
+    setConferenceDurationFilter("all");
+  }, [areaFilter]);
+
+  // ✅ Filter by ACTIVE DATE + full_name + area + duration
   const filteredRows = useMemo(() => {
     void tick;
 
     const q = searchName.trim().toLowerCase();
 
     return rows.filter((r) => {
-      const sameDate = getCreatedDateLocal(r.created_at) === selectedDate;
-      if (!sameDate) return false;
+      // 1) selected date must be within booking coverage
+      const activeOnSelectedDate = bookingCoversLocalDate(r.start_at, r.end_at, selectedDate);
+      if (!activeOnSelectedDate) return false;
 
-      if (!q) return true;
-      const name = String(r.full_name ?? "").toLowerCase();
-      return name.includes(q);
+      // 2) name search
+      if (q) {
+        const name = String(r.full_name ?? "").toLowerCase();
+        if (!name.includes(q)) return false;
+      }
+
+      // 3) area filter
+      if (areaFilter !== "all" && r.area !== areaFilter) return false;
+
+      // 4) duration filter based on selected area
+      if (areaFilter === "common_area") {
+        if (commonDurationFilter !== "all") {
+          const bucket = getCommonAreaDurationBucket(r);
+          if (bucket !== commonDurationFilter) return false;
+        }
+      }
+
+      if (areaFilter === "conference_room") {
+        if (conferenceDurationFilter !== "all") {
+          const bucket = getConferenceDurationBucket(r);
+          if (bucket !== conferenceDurationFilter) return false;
+        }
+      }
+
+      return true;
     });
-  }, [rows, tick, selectedDate, searchName]);
+  }, [rows, tick, selectedDate, searchName, areaFilter, commonDurationFilter, conferenceDurationFilter]);
 
   const getPaidInfo = (r: PromoBookingRow): { gcash: number; cash: number; totalPaid: number } => {
     const gcash = round2(Math.max(0, toNumber(r.gcash_amount)));
@@ -844,7 +940,6 @@ const Customer_Discount_List: React.FC = () => {
         }
       }
 
-      // Fetch full DB row needed for copying (package_id, package_option_id, user_id, status, etc.)
       const { data, error } = await supabase
         .from("promo_bookings")
         .select(
@@ -889,7 +984,6 @@ const Customer_Discount_List: React.FC = () => {
         return;
       }
 
-      // Insert into cancelled table
       const { error: insErr } = await supabase.from("promo_bookings_cancelled").insert({
         original_id: String(fullRow.id),
         description: desc,
@@ -930,14 +1024,12 @@ const Customer_Discount_List: React.FC = () => {
         return;
       }
 
-      // Delete original row
       const { error: delErr } = await supabase.from("promo_bookings").delete().eq("id", cancelTarget.id);
       if (delErr) {
         setCancelError(`Inserted to cancelled, but delete failed: ${delErr.message}. (You may now have duplicate if you retry.)`);
         return;
       }
 
-      // Update UI + attendance map
       setRows((prev) => prev.filter((x) => x.id !== cancelTarget.id));
       setSelected((prev) => (prev?.id === cancelTarget.id ? null : prev));
       setCancelTarget(null);
@@ -975,7 +1067,7 @@ const Customer_Discount_List: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Promo Records</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong>
+                Showing active records for: <strong>{selectedDate}</strong>
               </div>
 
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
@@ -983,7 +1075,7 @@ const Customer_Discount_List: React.FC = () => {
               </div>
             </div>
 
-            <div className="customer-topbar-right">
+            <div className="customer-topbar-right" style={{ display: "grid", gap: 8 }}>
               {/* ✅ SEARCH BAR */}
               <div className="customer-searchbar-inline">
                 <div className="customer-searchbar-inner">
@@ -1005,8 +1097,63 @@ const Customer_Discount_List: React.FC = () => {
                 </div>
               </div>
 
-              {/* DATE + REFRESH */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* AREA + DURATION + DATE + REFRESH */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  justifyContent: "flex-end",
+                }}
+              >
+                <label className="date-pill">
+                  <span className="date-pill-label">Area</span>
+                  <select
+                    className="date-pill-input"
+                    value={areaFilter}
+                    onChange={(e) => setAreaFilter(e.currentTarget.value as AreaFilter)}
+                  >
+                    <option value="all">All</option>
+                    <option value="common_area">Common Area</option>
+                    <option value="conference_room">Conference Room</option>
+                  </select>
+                </label>
+
+                {areaFilter === "common_area" && (
+                  <label className="date-pill">
+                    <span className="date-pill-label">Duration</span>
+                    <select
+                      className="date-pill-input"
+                      value={commonDurationFilter}
+                      onChange={(e) => setCommonDurationFilter(e.currentTarget.value as CommonDurationFilter)}
+                    >
+                      <option value="all">All</option>
+                      <option value="1_day">1 Day</option>
+                      <option value="week">Week</option>
+                      <option value="half_month">Half Month</option>
+                      <option value="month">Month</option>
+                    </select>
+                  </label>
+                )}
+
+                {areaFilter === "conference_room" && (
+                  <label className="date-pill">
+                    <span className="date-pill-label">Duration</span>
+                    <select
+                      className="date-pill-input"
+                      value={conferenceDurationFilter}
+                      onChange={(e) => setConferenceDurationFilter(e.currentTarget.value as ConferenceDurationFilter)}
+                    >
+                      <option value="all">All</option>
+                      <option value="1_hour">1 Hour</option>
+                      <option value="3_hours">3 Hours</option>
+                      <option value="6_hours">6 Hours</option>
+                      <option value="8_hours">8 Hours</option>
+                    </select>
+                  </label>
+                )}
+
                 <label className="date-pill">
                   <span className="date-pill-label">Date</span>
                   <input
@@ -1035,18 +1182,21 @@ const Customer_Discount_List: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredRows.length === 0 ? (
-            <p className="customer-note">No promo records found for this date</p>
+            <p className="customer-note">No promo records found for this filter/date</p>
           ) : (
-            <div className="customer-table-wrap" key={selectedDate}
-                    style={{
-                    maxHeight: "570px",
-                    overflowY: "auto",
-                    overflowX: "auto",
-                  }}>
+            <div
+              className="customer-table-wrap"
+              key={`${selectedDate}-${areaFilter}-${commonDurationFilter}-${conferenceDurationFilter}`}
+              style={{
+                maxHeight: "570px",
+                overflowY: "auto",
+                overflowX: "auto",
+              }}
+            >
               <table className="customer-table">
                 <thead>
                   <tr>
-                    <th>Date</th>
+                    <th>Created</th>
                     <th>Customer Name</th>
                     <th>Phone #</th>
                     <th>Area</th>
