@@ -18,23 +18,21 @@
 // ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
 // ✅ REFRESH button beside DATE FILTER
 // ✅ No "any"
-// ✅ NEW FIX:
-// - ALL MONEY VALUES are WHOLE NUMBERS ONLY
-// - If value has decimal, ALWAYS ROUND UP
-//   Example: 10.01 => 11, 10.99 => 11
+// ✅ ALL MONEY VALUES are WHOLE NUMBERS ONLY
+// ✅ If value has decimal, ALWAYS ROUND UP
 // ✅ REMOVED FROM UI:
 // - customer_field
 // - id_number
 // - Field column
 // - Specific ID column
-// ✅ NEW:
-// - SORT BY TIME IN ASCENDING (earliest first)
-// ✅ NEW FILTERS:
-// - Reserved On = filter by created_at date (kailan nagpa-reserve)
-// - Start / Active Date = filter by overlap using time_started..time_ended
-// ✅ EXAMPLE:
-// - If start is March 2 and duration is 1 week,
-//   record still appears on March 3, 4, 5... while covered by reservation range.
+// ✅ SORT BY TIME IN ASCENDING (earliest first)
+// ✅ NEW FILTER LOGIC:
+// - Search by Full Name
+// - ONE date input only
+// - ONE dropdown to choose date basis:
+//    1) Reserved On  -> created_at
+//    2) Start Date   -> reservation_date
+// ✅ AREA FILTER REMOVED
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -44,15 +42,14 @@ import logo from "../assets/study_hub.png";
 const HOURLY_RATE = 20;
 const FREE_MINUTES = 0;
 
-/* ✅ LOCAL STORAGE KEYS (fallback) */
 const LS_VIEW_ENABLED = "customer_view_enabled";
 const LS_SESSION_ID = "customer_view_session_id";
 
-/* ✅ REALTIME TABLE (single row) */
 const VIEW_STATE_TABLE = "customer_view_state";
 const VIEW_STATE_ID = 1;
 
 type DiscountKind = "none" | "percent" | "amount";
+type DateFilterMode = "reserved_on" | "start_date";
 
 interface CustomerSession {
   id: string;
@@ -119,20 +116,29 @@ const yyyyMmDdLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
+const formatDateDisplay = (dateStr: string | null | undefined): string => {
+  if (!dateStr) return "—";
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return String(dateStr);
+  return d.toLocaleDateString("en-GB");
+};
+
 const formatTimeText = (iso: string): string => {
   const dt = new Date(iso);
   if (!Number.isFinite(dt.getTime())) return "";
   return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
-const clamp = (n: number, min: number, max: number): number => Math.min(max, Math.max(min, n));
+const clamp = (n: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, n));
 
 const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
 
-const wholePeso = (n: number): number => Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
+const wholePeso = (n: number): number =>
+  Math.ceil(Math.max(0, Number.isFinite(n) ? n : 0));
 
 const toBool = (v: unknown): boolean => {
   if (typeof v === "boolean") return v;
@@ -184,8 +190,10 @@ const applyDiscount = (
   };
 };
 
-// kept from your original discount-save behavior
-const recalcPaymentsToDue = (due: number, gcash: number): { gcash: number; cash: number } => {
+const recalcPaymentsToDue = (
+  due: number,
+  gcash: number
+): { gcash: number; cash: number } => {
   const d = wholePeso(Math.max(0, due));
   if (d <= 0) return { gcash: 0, cash: 0 };
 
@@ -207,26 +215,6 @@ const getLocalDateFromIso = (iso: string | null | undefined): string => {
   return yyyyMmDdLocal(d);
 };
 
-const getLocalDayStartMs = (dateStr: string): number => new Date(`${dateStr}T00:00:00`).getTime();
-const getLocalDayEndMs = (dateStr: string): number => new Date(`${dateStr}T23:59:59.999`).getTime();
-
-/**
- * ✅ ACTIVE COVERAGE FILTER
- * If selected date overlaps any part of session from time_started..time_ended,
- * the record is included.
- */
-const sessionCoversLocalDate = (startIso: string, endIso: string, selectedDate: string): boolean => {
-  const startMs = new Date(startIso).getTime();
-  const endMs = new Date(endIso).getTime();
-  const dayStartMs = getLocalDayStartMs(selectedDate);
-  const dayEndMs = getLocalDayEndMs(selectedDate);
-
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
-  if (!Number.isFinite(dayStartMs) || !Number.isFinite(dayEndMs)) return false;
-
-  return startMs <= dayEndMs && endMs >= dayStartMs;
-};
-
 const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -236,10 +224,8 @@ const Customer_Reservations: React.FC = () => {
 
   const [, setViewTick] = useState<number>(0);
 
-  // ✅ NEW: two filters
-  const [reservedOnDate, setReservedOnDate] = useState<string>("");
-  const [activeDate, setActiveDate] = useState<string>(yyyyMmDdLocal(new Date()));
-
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>("start_date");
+  const [filterDate, setFilterDate] = useState<string>(yyyyMmDdLocal(new Date()));
   const [searchName, setSearchName] = useState<string>("");
 
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
@@ -274,10 +260,6 @@ const Customer_Reservations: React.FC = () => {
     void fetchReservationSessions();
   }, []);
 
-  /* =========================
-     REALTIME VIEW STATE
-  ========================= */
-
   const writeLocalFallback = (enabled: boolean, sessionId: string | null): void => {
     localStorage.setItem(LS_VIEW_ENABLED, String(enabled));
     if (enabled && sessionId) localStorage.setItem(LS_SESSION_ID, sessionId);
@@ -285,7 +267,8 @@ const Customer_Reservations: React.FC = () => {
   };
 
   const readLocalFallback = (): { enabled: boolean; sessionId: string } => {
-    const enabled = String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
+    const enabled =
+      String(localStorage.getItem(LS_VIEW_ENABLED) ?? "").toLowerCase() === "true";
     const sid = String(localStorage.getItem(LS_SESSION_ID) ?? "").trim();
     return { enabled, sessionId: sid };
   };
@@ -323,17 +306,21 @@ const Customer_Reservations: React.FC = () => {
 
     const channel = supabase
       .channel("realtime_customer_view_state_reservations")
-      .on("postgres_changes", { event: "*", schema: "public", table: VIEW_STATE_TABLE }, (payload) => {
-        const next = (payload.new ?? null) as ViewStateRow | null;
-        if (!next) return;
-        if (Number(next.id) !== VIEW_STATE_ID) return;
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: VIEW_STATE_TABLE },
+        (payload) => {
+          const next = (payload.new ?? null) as ViewStateRow | null;
+          if (!next) return;
+          if (Number(next.id) !== VIEW_STATE_ID) return;
 
-        const enabled = toBool(next.enabled);
-        const sid = String(next.session_id ?? "").trim();
+          const enabled = toBool(next.enabled);
+          const sid = String(next.session_id ?? "").trim();
 
-        if (!viewHydratedRef.current) viewHydratedRef.current = true;
-        applyViewState(enabled, sid);
-      })
+          if (!viewHydratedRef.current) viewHydratedRef.current = true;
+          applyViewState(enabled, sid);
+        }
+      )
       .subscribe();
 
     const onStorage = (e: StorageEvent): void => {
@@ -343,6 +330,7 @@ const Customer_Reservations: React.FC = () => {
         if (!viewHydratedRef.current) applyViewState(local.enabled, local.sessionId);
       }
     };
+
     window.addEventListener("storage", onStorage);
 
     return () => {
@@ -351,9 +339,13 @@ const Customer_Reservations: React.FC = () => {
     };
   }, []);
 
-  const isCustomerViewOnFor = (sessionId: string): boolean => viewEnabled && viewSessionId === sessionId;
+  const isCustomerViewOnFor = (sessionId: string): boolean =>
+    viewEnabled && viewSessionId === sessionId;
 
-  const setCustomerViewRealtime = async (enabled: boolean, sessionId: string | null): Promise<void> => {
+  const setCustomerViewRealtime = async (
+    enabled: boolean,
+    sessionId: string | null
+  ): Promise<void> => {
     const sid = enabled && sessionId ? sessionId : null;
 
     applyViewState(Boolean(enabled), String(sid ?? ""));
@@ -377,27 +369,21 @@ const Customer_Reservations: React.FC = () => {
     await setCustomerViewRealtime(false, null);
   };
 
-  /* =========================
-     LIST / FILTER
-  ========================= */
-
   const filteredSessions = useMemo(() => {
     const q = searchName.trim().toLowerCase();
 
     return sessions
       .filter((s) => {
-        // 1) Reserved On filter (created_at)
-        if (reservedOnDate) {
-          const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
-          if (createdLocalDate !== reservedOnDate) return false;
+        if (filterDate) {
+          if (dateFilterMode === "reserved_on") {
+            const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
+            if (createdLocalDate !== filterDate) return false;
+          } else {
+            const startDate = String(s.reservation_date ?? "").trim();
+            if (startDate !== filterDate) return false;
+          }
         }
 
-        // 2) Active Start Date filter (coverage from time_started..time_ended)
-        if (activeDate) {
-          if (!sessionCoversLocalDate(s.time_started, s.time_ended, activeDate)) return false;
-        }
-
-        // 3) Search by full name
         if (!q) return true;
         const name = String(s.full_name ?? "").toLowerCase();
         return name.includes(q);
@@ -415,7 +401,7 @@ const Customer_Reservations: React.FC = () => {
 
         return aTime - bTime;
       });
-  }, [sessions, reservedOnDate, activeDate, searchName]);
+  }, [sessions, filterDate, dateFilterMode, searchName]);
 
   const fetchReservationSessions = async (): Promise<void> => {
     setLoading(true);
@@ -447,12 +433,19 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
+  const clearFilters = (): void => {
+    setDateFilterMode("start_date");
+    setFilterDate(yyyyMmDdLocal(new Date()));
+    setSearchName("");
+  };
+
   const phoneText = (s: CustomerSession): string => {
     const p = String(s.phone_number ?? "").trim();
     return p || "N/A";
   };
 
-  const getDownPayment = (s: CustomerSession): number => wholePeso(Math.max(0, toMoney(s.down_payment ?? 0)));
+  const getDownPayment = (s: CustomerSession): number =>
+    wholePeso(Math.max(0, toMoney(s.down_payment ?? 0)));
 
   const isOpenTimeSession = (s: CustomerSession): boolean => {
     if ((s.hour_avail || "").toUpperCase() === "OPEN") return true;
@@ -488,10 +481,14 @@ const Customer_Reservations: React.FC = () => {
   };
 
   const getBaseSystemCost = (s: CustomerSession): number => {
-    return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
+    return isOpenTimeSession(s)
+      ? getLiveTotalCost(s)
+      : wholePeso(toMoney(s.total_amount));
   };
 
-  const getDiscountInfo = (s: CustomerSession): { kind: DiscountKind; value: number; reason: string } => {
+  const getDiscountInfo = (
+    s: CustomerSession
+  ): { kind: DiscountKind; value: number; reason: string } => {
     const kind = (s.discount_kind ?? "none") as DiscountKind;
     const value = toMoney(s.discount_value ?? 0);
     const reason = String(s.discount_reason ?? "").trim();
@@ -521,20 +518,27 @@ const Customer_Reservations: React.FC = () => {
     return wholePeso(Math.max(0, dp - systemCost));
   };
 
-  const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
+  const getDisplayAmount = (
+    s: CustomerSession
+  ): { label: "Total Balance" | "Total Change"; value: number } => {
     const balance = getSessionBalanceAfterDP(s);
     if (balance > 0) return { label: "Total Balance", value: balance };
     return { label: "Total Change", value: getSessionChangeAfterDP(s) };
   };
 
-  const getPaidInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
+  const getPaidInfo = (
+    s: CustomerSession
+  ): { gcash: number; cash: number; totalPaid: number } => {
     const gcash = wholePeso(Math.max(0, toMoney(s.gcash_amount ?? 0)));
     const cash = wholePeso(Math.max(0, toMoney(s.cash_amount ?? 0)));
     const totalPaid = wholePeso(gcash + cash);
     return { gcash, cash, totalPaid };
   };
 
-  const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
+  const releaseSeatBlocksNow = async (
+    session: CustomerSession,
+    nowIso: string
+  ): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
 
@@ -604,8 +608,12 @@ const Customer_Reservations: React.FC = () => {
 
       await releaseSeatBlocksNow(session, nowIso);
 
-      setSessions((prev) => prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === session.id ? (updated as CustomerSession) : prev));
+      setSessions((prev) =>
+        prev.map((s) => (s.id === session.id ? (updated as CustomerSession) : s))
+      );
+      setSelectedSession((prev) =>
+        prev?.id === session.id ? (updated as CustomerSession) : prev
+      );
     } catch (e) {
       console.error(e);
       alert("Stop Time failed.");
@@ -636,10 +644,6 @@ const Customer_Reservations: React.FC = () => {
     const used = getUsedMinutesForReceipt(s);
     return Math.max(0, used - FREE_MINUTES);
   };
-
-  /* =========================
-     CANCEL FLOW
-  ========================= */
 
   const openCancelModal = (s: CustomerSession): void => {
     setCancelTarget(s);
@@ -717,7 +721,8 @@ const Customer_Reservations: React.FC = () => {
         paid_at: row.paid_at ?? null,
 
         phone_number: row.phone_number ?? null,
-        down_payment: row.down_payment == null ? null : wholePeso(toMoney(row.down_payment)),
+        down_payment:
+          row.down_payment == null ? null : wholePeso(toMoney(row.down_payment)),
       };
 
       const { error: insertErr } = await supabase
@@ -756,10 +761,6 @@ const Customer_Reservations: React.FC = () => {
       setCancellingBusy(false);
     }
   };
-
-  /* =========================
-     DISCOUNT
-  ========================= */
 
   const openDiscountModal = (s: CustomerSession): void => {
     const di = getDiscountInfo(s);
@@ -809,8 +810,12 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === discountTarget.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === discountTarget.id ? (updated as CustomerSession) : prev));
+      setSessions((prev) =>
+        prev.map((s) => (s.id === discountTarget.id ? (updated as CustomerSession) : s))
+      );
+      setSelectedSession((prev) =>
+        prev?.id === discountTarget.id ? (updated as CustomerSession) : prev
+      );
       setDiscountTarget(null);
     } catch (e) {
       console.error(e);
@@ -819,10 +824,6 @@ const Customer_Reservations: React.FC = () => {
       setSavingDiscount(false);
     }
   };
-
-  /* =========================
-     DOWN PAYMENT
-  ========================= */
 
   const openDpModal = (s: CustomerSession): void => {
     setDpTarget(s);
@@ -850,8 +851,12 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === dpTarget.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === dpTarget.id ? (updated as CustomerSession) : prev));
+      setSessions((prev) =>
+        prev.map((s) => (s.id === dpTarget.id ? (updated as CustomerSession) : s))
+      );
+      setSelectedSession((prev) =>
+        prev?.id === dpTarget.id ? (updated as CustomerSession) : prev
+      );
       setDpTarget(null);
     } catch (e) {
       console.error(e);
@@ -860,10 +865,6 @@ const Customer_Reservations: React.FC = () => {
       setSavingDp(false);
     }
   };
-
-  /* =========================
-     PAYMENT
-  ========================= */
 
   const openPaymentModal = (s: CustomerSession): void => {
     const pi = getPaidInfo(s);
@@ -913,8 +914,12 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((s) => (s.id === paymentTarget.id ? (updated as CustomerSession) : s)));
-      setSelectedSession((prev) => (prev?.id === paymentTarget.id ? (updated as CustomerSession) : prev));
+      setSessions((prev) =>
+        prev.map((s) => (s.id === paymentTarget.id ? (updated as CustomerSession) : s))
+      );
+      setSelectedSession((prev) =>
+        prev?.id === paymentTarget.id ? (updated as CustomerSession) : prev
+      );
       setPaymentTarget(null);
     } catch (e) {
       console.error(e);
@@ -946,8 +951,12 @@ const Customer_Reservations: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.map((x) => (x.id === s.id ? (updated as CustomerSession) : x)));
-      setSelectedSession((prev) => (prev?.id === s.id ? (updated as CustomerSession) : prev));
+      setSessions((prev) =>
+        prev.map((x) => (x.id === s.id ? (updated as CustomerSession) : x))
+      );
+      setSelectedSession((prev) =>
+        prev?.id === s.id ? (updated as CustomerSession) : prev
+      );
     } catch (e) {
       console.error(e);
       alert("Toggle paid failed.");
@@ -974,16 +983,23 @@ const Customer_Reservations: React.FC = () => {
           <div className="customer-topbar">
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Reservations</h2>
+
               <div className="customer-subtext">
-                Active records for: <strong>{activeDate}</strong>
+                Filter By:{" "}
+                <strong>
+                  {dateFilterMode === "reserved_on" ? "Reserved On" : "Start Date"}
+                </strong>
               </div>
 
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
-                Reserved On: <strong>{reservedOnDate || "All"}</strong>
+                Date: <strong>{filterDate || "All"}</strong>
               </div>
 
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
-                Customer View: <strong>{viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}</strong>
+                Customer View:{" "}
+                <strong>
+                  {viewEnabled ? `ON (${String(viewSessionId).slice(0, 8)}...)` : "OFF"}
+                </strong>
               </div>
             </div>
 
@@ -1001,7 +1017,11 @@ const Customer_Reservations: React.FC = () => {
                     placeholder="Search by Full Name..."
                   />
                   {searchName.trim() && (
-                    <button className="customer-search-clear" onClick={() => setSearchName("")} type="button">
+                    <button
+                      className="customer-search-clear"
+                      onClick={() => setSearchName("")}
+                      type="button"
+                    >
                       Clear
                     </button>
                   )}
@@ -1018,40 +1038,38 @@ const Customer_Reservations: React.FC = () => {
                 }}
               >
                 <label className="date-pill">
-                  <span className="date-pill-label">Reserved On</span>
-                  <input
+                  <span className="date-pill-label">Filter By</span>
+                  <select
                     className="date-pill-input"
-                    type="date"
-                    value={reservedOnDate}
-                    onChange={(e) => setReservedOnDate(String(e.currentTarget.value ?? ""))}
-                  />
-                  <span className="date-pill-icon" aria-hidden="true">
-                    📝
-                  </span>
+                    value={dateFilterMode}
+                    onChange={(e) =>
+                      setDateFilterMode(e.currentTarget.value as DateFilterMode)
+                    }
+                  >
+                    <option value="reserved_on">Reserved On</option>
+                    <option value="start_date">Start Date</option>
+                  </select>
                 </label>
 
                 <label className="date-pill">
-                  <span className="date-pill-label">Start / Active Date</span>
+                  <span className="date-pill-label">Date</span>
                   <input
                     className="date-pill-input"
                     type="date"
-                    value={activeDate}
-                    onChange={(e) => setActiveDate(String(e.currentTarget.value ?? ""))}
+                    value={filterDate}
+                    onChange={(e) => setFilterDate(String(e.currentTarget.value ?? ""))}
                   />
                   <span className="date-pill-icon" aria-hidden="true">
                     📅
                   </span>
                 </label>
 
-                {(reservedOnDate || searchName.trim()) && (
+                {(searchName.trim() || filterDate || dateFilterMode !== "start_date") && (
                   <button
                     className="receipt-btn"
                     type="button"
-                    onClick={() => {
-                      setReservedOnDate("");
-                      setSearchName("");
-                    }}
-                    title="Clear search and reserved date"
+                    onClick={clearFilters}
+                    title="Clear filters"
                   >
                     Clear Filters
                   </button>
@@ -1077,7 +1095,7 @@ const Customer_Reservations: React.FC = () => {
           ) : (
             <div
               className="customer-table-wrap"
-              key={`${reservedOnDate}-${activeDate}`}
+              key={`${dateFilterMode}-${filterDate}`}
               style={{
                 maxHeight: "560px",
                 overflowY: "auto",
@@ -1091,7 +1109,7 @@ const Customer_Reservations: React.FC = () => {
                     <th>Reservation Date</th>
                     <th>Full Name</th>
                     <th>Phone #</th>
-                    <th>Type</th>
+                    <th>Area</th>
                     <th>Has ID</th>
                     <th>Hours</th>
                     <th>Time In</th>
@@ -1119,11 +1137,15 @@ const Customer_Reservations: React.FC = () => {
 
                     return (
                       <tr key={session.id}>
-                        <td>{session.created_at ? new Date(session.created_at).toLocaleString("en-PH") : "—"}</td>
-                        <td>{session.reservation_date ?? getLocalDateFromIso(session.time_started) || "N/A"}</td>
+                        <td>
+                          {session.created_at
+                            ? new Date(session.created_at).toLocaleString("en-PH")
+                            : "—"}
+                        </td>
+                        <td>{formatDateDisplay(session.reservation_date)}</td>
                         <td>{session.full_name}</td>
                         <td>{phoneText(session)}</td>
-                        <td>{session.customer_type}</td>
+                        <td>{session.customer_type || "—"}</td>
                         <td>{session.has_id ? "Yes" : "No"}</td>
                         <td>{session.hour_avail}</td>
                         <td>{formatTimeText(session.time_started)}</td>
@@ -1140,7 +1162,11 @@ const Customer_Reservations: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">{getDiscountText(session)}</span>
-                            <button className="receipt-btn" onClick={() => openDiscountModal(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openDiscountModal(session)}
+                              type="button"
+                            >
                               Discount
                             </button>
                           </div>
@@ -1149,7 +1175,11 @@ const Customer_Reservations: React.FC = () => {
                         <td>
                           <div className="cell-stack cell-center">
                             <span className="cell-strong">₱{dp}</span>
-                            <button className="receipt-btn" onClick={() => openDpModal(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => openDpModal(session)}
+                              type="button"
+                            >
                               Edit DP
                             </button>
                           </div>
@@ -1170,7 +1200,11 @@ const Customer_Reservations: React.FC = () => {
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
                               disabled={systemCost <= 0}
-                              title={systemCost <= 0 ? "No due" : "Set GCash/Cash payment (FREE INPUTS, can exceed due)"}
+                              title={
+                                systemCost <= 0
+                                  ? "No due"
+                                  : "Set GCash/Cash payment (FREE INPUTS, can exceed due)"
+                              }
                               type="button"
                             >
                               Payment
@@ -1181,11 +1215,17 @@ const Customer_Reservations: React.FC = () => {
                         <td>
                           <button
                             className={`receipt-btn pay-badge ${
-                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
+                              toBool(session.is_paid)
+                                ? "pay-badge--paid"
+                                : "pay-badge--unpaid"
                             }`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
-                            title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
+                            title={
+                              toBool(session.is_paid)
+                                ? "Tap to set UNPAID"
+                                : "Tap to set PAID"
+                            }
                             type="button"
                           >
                             {togglingPaidId === session.id
@@ -1212,7 +1252,11 @@ const Customer_Reservations: React.FC = () => {
                               </button>
                             )}
 
-                            <button className="receipt-btn" onClick={() => setSelectedSession(session)} type="button">
+                            <button
+                              className="receipt-btn"
+                              onClick={() => setSelectedSession(session)}
+                              type="button"
+                            >
                               View Receipt
                             </button>
 
@@ -1241,7 +1285,10 @@ const Customer_Reservations: React.FC = () => {
           )}
 
           {cancelTarget && (
-            <div className="receipt-overlay" onClick={() => (cancellingBusy ? null : setCancelTarget(null))}>
+            <div
+              className="receipt-overlay"
+              onClick={() => (cancellingBusy ? null : setCancelTarget(null))}
+            >
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">CANCEL RESERVATION</h3>
                 <p className="receipt-subtitle">{cancelTarget.full_name}</p>
@@ -1250,7 +1297,11 @@ const Customer_Reservations: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Reserved On</span>
-                  <span>{cancelTarget.created_at ? new Date(cancelTarget.created_at).toLocaleString("en-PH") : "N/A"}</span>
+                  <span>
+                    {cancelTarget.created_at
+                      ? new Date(cancelTarget.created_at).toLocaleString("en-PH")
+                      : "N/A"}
+                  </span>
                 </div>
                 <div className="receipt-row">
                   <span>Reservation Date</span>
@@ -1275,12 +1326,18 @@ const Customer_Reservations: React.FC = () => {
                     disabled={cancellingBusy}
                   />
                   <div style={{ fontSize: 12, opacity: 0.85 }}>
-                    ⚠️ This record will be moved to <strong>customer_sessions_cancelled</strong>.
+                    ⚠️ This record will be moved to{" "}
+                    <strong>customer_sessions_cancelled</strong>.
                   </div>
                 </div>
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setCancelTarget(null)} disabled={cancellingBusy} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setCancelTarget(null)}
+                    disabled={cancellingBusy}
+                    type="button"
+                  >
                     Back
                   </button>
 
@@ -1288,7 +1345,9 @@ const Customer_Reservations: React.FC = () => {
                     className="receipt-btn admin-danger"
                     onClick={() => void submitCancel()}
                     disabled={cancellingBusy || cancelReason.trim().length === 0}
-                    title={cancelReason.trim().length === 0 ? "Reason required" : "Submit cancel"}
+                    title={
+                      cancelReason.trim().length === 0 ? "Reason required" : "Submit cancel"
+                    }
                     type="button"
                   >
                     {cancellingBusy ? "Cancelling..." : "Submit Cancel"}
@@ -1322,7 +1381,12 @@ const Customer_Reservations: React.FC = () => {
                   <button className="receipt-btn" onClick={() => setDpTarget(null)} type="button">
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDownPayment()} disabled={savingDp} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void saveDownPayment()}
+                    disabled={savingDp}
+                    type="button"
+                  >
                     {savingDp ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1340,7 +1404,10 @@ const Customer_Reservations: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Discount Type</span>
-                  <select value={discountKind} onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}>
+                  <select
+                    value={discountKind}
+                    onChange={(e) => setDiscountKind(e.currentTarget.value as DiscountKind)}
+                  >
                     <option value="none">None</option>
                     <option value="percent">Percent (%)</option>
                     <option value="amount">Peso (₱)</option>
@@ -1351,7 +1418,11 @@ const Customer_Reservations: React.FC = () => {
                   <span>Value</span>
                   <div className="inline-input">
                     <span className="inline-input-prefix">
-                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
+                      {discountKind === "percent"
+                        ? "%"
+                        : discountKind === "amount"
+                        ? "₱"
+                        : ""}
                     </span>
                     <input
                       className="small-input"
@@ -1380,9 +1451,15 @@ const Customer_Reservations: React.FC = () => {
                   const base = getBaseSystemCost(discountTarget);
                   const val = toMoney(discountInput);
                   const appliedVal =
-                    discountKind === "percent" ? clamp(Math.max(0, val), 0, 100) : Math.max(0, val);
+                    discountKind === "percent"
+                      ? clamp(Math.max(0, val), 0, 100)
+                      : Math.max(0, val);
 
-                  const { discountedCost, discountAmount } = applyDiscount(base, discountKind, appliedVal);
+                  const { discountedCost, discountAmount } = applyDiscount(
+                    base,
+                    discountKind,
+                    appliedVal
+                  );
                   const dueForPayment = wholePeso(Math.max(0, discountedCost));
 
                   const prevPay = getPaidInfo(discountTarget);
@@ -1415,9 +1492,7 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Auto Payment After Save</span>
-                        <span>
-                          GCash ₱{adjPay.gcash} / Cash ₱{adjPay.cash}
-                        </span>
+                        <span>GCash ₱{adjPay.gcash} / Cash ₱{adjPay.cash}</span>
                       </div>
 
                       <div className="receipt-row" style={{ opacity: 0.8, fontSize: 12 }}>
@@ -1429,10 +1504,19 @@ const Customer_Reservations: React.FC = () => {
                 })()}
 
                 <div className="modal-actions">
-                  <button className="receipt-btn" onClick={() => setDiscountTarget(null)} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => setDiscountTarget(null)}
+                    type="button"
+                  >
                     Cancel
                   </button>
-                  <button className="receipt-btn" onClick={() => void saveDiscount()} disabled={savingDiscount} type="button">
+                  <button
+                    className="receipt-btn"
+                    onClick={() => void saveDiscount()}
+                    disabled={savingDiscount}
+                    type="button"
+                  >
                     {savingDiscount ? "Saving..." : "Save"}
                   </button>
                 </div>
@@ -1509,14 +1593,25 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Will be marked</span>
-                        <span className="receipt-status">{due <= 0 ? "PAID" : totalPaid >= due ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">
+                          {due <= 0 ? "PAID" : totalPaid >= due ? "PAID" : "UNPAID"}
+                        </span>
                       </div>
 
                       <div className="modal-actions">
-                        <button className="receipt-btn" onClick={() => setPaymentTarget(null)} type="button">
+                        <button
+                          className="receipt-btn"
+                          onClick={() => setPaymentTarget(null)}
+                          type="button"
+                        >
                           Cancel
                         </button>
-                        <button className="receipt-btn" onClick={() => void savePayment()} disabled={savingPayment} type="button">
+                        <button
+                          className="receipt-btn"
+                          onClick={() => void savePayment()}
+                          disabled={savingPayment}
+                          type="button"
+                        >
                           {savingPayment ? "Saving..." : "Save"}
                         </button>
                       </div>
@@ -1539,7 +1634,11 @@ const Customer_Reservations: React.FC = () => {
 
                 <div className="receipt-row">
                   <span>Reserved On</span>
-                  <span>{selectedSession.created_at ? new Date(selectedSession.created_at).toLocaleString("en-PH") : "N/A"}</span>
+                  <span>
+                    {selectedSession.created_at
+                      ? new Date(selectedSession.created_at).toLocaleString("en-PH")
+                      : "N/A"}
+                  </span>
                 </div>
 
                 <div className="receipt-row">
@@ -1558,7 +1657,7 @@ const Customer_Reservations: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Type</span>
+                  <span>Area</span>
                   <span>{selectedSession.customer_type}</span>
                 </div>
 
@@ -1602,7 +1701,9 @@ const Customer_Reservations: React.FC = () => {
                       onClick={() => void stopOpenTime(selectedSession)}
                       type="button"
                     >
-                      {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
+                      {stoppingId === selectedSession.id
+                        ? "Stopping..."
+                        : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
                 )}
@@ -1681,7 +1782,9 @@ const Customer_Reservations: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Status</span>
-                        <span className="receipt-status">{toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">
+                          {toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}
+                        </span>
                       </div>
 
                       <div className="receipt-total">
@@ -1697,7 +1800,10 @@ const Customer_Reservations: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <div className="modal-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div
+                  className="modal-actions"
+                  style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+                >
                   <button
                     className="receipt-btn"
                     disabled={!selectedSession}
@@ -1713,7 +1819,12 @@ const Customer_Reservations: React.FC = () => {
                       : "View to Customer"}
                   </button>
 
-                  <button className="close-btn" onClick={() => void closeReceipt()} disabled={cancellingBusy} type="button">
+                  <button
+                    className="close-btn"
+                    onClick={() => void closeReceipt()}
+                    disabled={cancellingBusy}
+                    type="button"
+                  >
                     Close
                   </button>
                 </div>
