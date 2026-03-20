@@ -13,7 +13,6 @@
 // ✅ Phone # column beside Full Name
 // ✅ View to Customer is REALTIME using SINGLE ROW customer_view_state (id=1)
 // ✅ Search bar (Full Name only)
-// ✅ Date filter uses reservation_date
 // ✅ Stop Time for OPEN sessions (also releases seat_blocked_times end_at = now)
 // ✅ CANCEL SAME AS Customer_Lists (ID-BASED, NO RPC)
 // ✅ Payment modal FREE INPUTS (NO LIMIT) — Cash & GCash can exceed due
@@ -30,6 +29,12 @@
 // - Specific ID column
 // ✅ NEW:
 // - SORT BY TIME IN ASCENDING (earliest first)
+// ✅ NEW FILTERS:
+// - Reserved On = filter by created_at date (kailan nagpa-reserve)
+// - Start / Active Date = filter by overlap using time_started..time_ended
+// ✅ EXAMPLE:
+// - If start is March 2 and duration is 1 week,
+//   record still appears on March 3, 4, 5... while covered by reservation range.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonContent, IonPage } from "@ionic/react";
@@ -196,6 +201,32 @@ const splitSeats = (seatStr: string): string[] => {
     .filter((s) => s.length > 0 && s.toUpperCase() !== "N/A");
 };
 
+const getLocalDateFromIso = (iso: string | null | undefined): string => {
+  const d = new Date(String(iso ?? ""));
+  if (!Number.isFinite(d.getTime())) return "";
+  return yyyyMmDdLocal(d);
+};
+
+const getLocalDayStartMs = (dateStr: string): number => new Date(`${dateStr}T00:00:00`).getTime();
+const getLocalDayEndMs = (dateStr: string): number => new Date(`${dateStr}T23:59:59.999`).getTime();
+
+/**
+ * ✅ ACTIVE COVERAGE FILTER
+ * If selected date overlaps any part of session from time_started..time_ended,
+ * the record is included.
+ */
+const sessionCoversLocalDate = (startIso: string, endIso: string, selectedDate: string): boolean => {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  const dayStartMs = getLocalDayStartMs(selectedDate);
+  const dayEndMs = getLocalDayEndMs(selectedDate);
+
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
+  if (!Number.isFinite(dayStartMs) || !Number.isFinite(dayEndMs)) return false;
+
+  return startMs <= dayEndMs && endMs >= dayStartMs;
+};
+
 const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -205,7 +236,10 @@ const Customer_Reservations: React.FC = () => {
 
   const [, setViewTick] = useState<number>(0);
 
-  const [selectedDate, setSelectedDate] = useState<string>(yyyyMmDdLocal(new Date()));
+  // ✅ NEW: two filters
+  const [reservedOnDate, setReservedOnDate] = useState<string>("");
+  const [activeDate, setActiveDate] = useState<string>(yyyyMmDdLocal(new Date()));
+
   const [searchName, setSearchName] = useState<string>("");
 
   const [discountTarget, setDiscountTarget] = useState<CustomerSession | null>(null);
@@ -352,9 +386,18 @@ const Customer_Reservations: React.FC = () => {
 
     return sessions
       .filter((s) => {
-        const sameDate = (s.reservation_date ?? "") === selectedDate;
-        if (!sameDate) return false;
+        // 1) Reserved On filter (created_at)
+        if (reservedOnDate) {
+          const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
+          if (createdLocalDate !== reservedOnDate) return false;
+        }
 
+        // 2) Active Start Date filter (coverage from time_started..time_ended)
+        if (activeDate) {
+          if (!sessionCoversLocalDate(s.time_started, s.time_ended, activeDate)) return false;
+        }
+
+        // 3) Search by full name
         if (!q) return true;
         const name = String(s.full_name ?? "").toLowerCase();
         return name.includes(q);
@@ -372,7 +415,7 @@ const Customer_Reservations: React.FC = () => {
 
         return aTime - bTime;
       });
-  }, [sessions, selectedDate, searchName]);
+  }, [sessions, reservedOnDate, activeDate, searchName]);
 
   const fetchReservationSessions = async (): Promise<void> => {
     setLoading(true);
@@ -932,7 +975,11 @@ const Customer_Reservations: React.FC = () => {
             <div className="customer-topbar-left">
               <h2 className="customer-lists-title">Customer Reservations</h2>
               <div className="customer-subtext">
-                Showing records for: <strong>{selectedDate}</strong>
+                Active records for: <strong>{activeDate}</strong>
+              </div>
+
+              <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
+                Reserved On: <strong>{reservedOnDate || "All"}</strong>
               </div>
 
               <div className="customer-subtext" style={{ opacity: 0.85, fontSize: 12 }}>
@@ -961,19 +1008,54 @@ const Customer_Reservations: React.FC = () => {
                 </div>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  justifyContent: "flex-end",
+                }}
+              >
                 <label className="date-pill">
-                  <span className="date-pill-label">Date</span>
+                  <span className="date-pill-label">Reserved On</span>
                   <input
                     className="date-pill-input"
                     type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(String(e.currentTarget.value ?? ""))}
+                    value={reservedOnDate}
+                    onChange={(e) => setReservedOnDate(String(e.currentTarget.value ?? ""))}
+                  />
+                  <span className="date-pill-icon" aria-hidden="true">
+                    📝
+                  </span>
+                </label>
+
+                <label className="date-pill">
+                  <span className="date-pill-label">Start / Active Date</span>
+                  <input
+                    className="date-pill-input"
+                    type="date"
+                    value={activeDate}
+                    onChange={(e) => setActiveDate(String(e.currentTarget.value ?? ""))}
                   />
                   <span className="date-pill-icon" aria-hidden="true">
                     📅
                   </span>
                 </label>
+
+                {(reservedOnDate || searchName.trim()) && (
+                  <button
+                    className="receipt-btn"
+                    type="button"
+                    onClick={() => {
+                      setReservedOnDate("");
+                      setSearchName("");
+                    }}
+                    title="Clear search and reserved date"
+                  >
+                    Clear Filters
+                  </button>
+                )}
 
                 <button
                   className="receipt-btn"
@@ -991,11 +1073,11 @@ const Customer_Reservations: React.FC = () => {
           {loading ? (
             <p className="customer-note">Loading...</p>
           ) : filteredSessions.length === 0 ? (
-            <p className="customer-note">No reservation data found for this date</p>
+            <p className="customer-note">No reservation data found for this filter/date</p>
           ) : (
             <div
               className="customer-table-wrap"
-              key={selectedDate}
+              key={`${reservedOnDate}-${activeDate}`}
               style={{
                 maxHeight: "560px",
                 overflowY: "auto",
@@ -1005,6 +1087,7 @@ const Customer_Reservations: React.FC = () => {
               <table className="customer-table">
                 <thead>
                   <tr>
+                    <th>Reserved On</th>
                     <th>Reservation Date</th>
                     <th>Full Name</th>
                     <th>Phone #</th>
@@ -1036,7 +1119,8 @@ const Customer_Reservations: React.FC = () => {
 
                     return (
                       <tr key={session.id}>
-                        <td>{session.reservation_date}</td>
+                        <td>{session.created_at ? new Date(session.created_at).toLocaleString("en-PH") : "—"}</td>
+                        <td>{session.reservation_date ?? getLocalDateFromIso(session.time_started) || "N/A"}</td>
                         <td>{session.full_name}</td>
                         <td>{phoneText(session)}</td>
                         <td>{session.customer_type}</td>
@@ -1164,6 +1248,10 @@ const Customer_Reservations: React.FC = () => {
 
                 <hr />
 
+                <div className="receipt-row">
+                  <span>Reserved On</span>
+                  <span>{cancelTarget.created_at ? new Date(cancelTarget.created_at).toLocaleString("en-PH") : "N/A"}</span>
+                </div>
                 <div className="receipt-row">
                   <span>Reservation Date</span>
                   <span>{cancelTarget.reservation_date ?? "N/A"}</span>
@@ -1448,6 +1536,11 @@ const Customer_Reservations: React.FC = () => {
                 <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
 
                 <hr />
+
+                <div className="receipt-row">
+                  <span>Reserved On</span>
+                  <span>{selectedSession.created_at ? new Date(selectedSession.created_at).toLocaleString("en-PH") : "N/A"}</span>
+                </div>
 
                 <div className="receipt-row">
                   <span>Reservation Date</span>
