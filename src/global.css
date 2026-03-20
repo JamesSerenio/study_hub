@@ -3488,7 +3488,7 @@ ion-modal.booking-modal {
 /* 🧸 Bear - FRONT (tabon sa seat img / card edge) */
 .seatmap-bear-outside {
   position: absolute;
-  left: clamp(-243px, -22vw, -120px);
+  left: clamp(-265px, -22vw, -120px);
   bottom: clamp(350px, 12vh, 170px);
   width: clamp(110px, 18vw, 300px);
   height: auto;
@@ -3501,7 +3501,7 @@ ion-modal.booking-modal {
 /* 🌿 Grass - right side (behind bear, but visible) */
 .seatmap-grass-outside {
   position: absolute;
-  right: clamp(-200px, -24vw, -130px);
+  right: clamp(-217px, -24vw, -130px);
   top: clamp(-140px, -12vh, 10px);
   width: clamp(300px, 20vw, 330px);
   height: auto;
