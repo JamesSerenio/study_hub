@@ -5,6 +5,7 @@
 // ✅ Customer List PAID system cost is also ADDED into "Total Time"
 // ✅ Customer List PAID order payment is also ADDED into "Add-ons"
 // ✅ UI restored: only Add-ons, Discount, Total Time are shown in "Other Totals"
+// ✅ FIX: removed old totals.total_time base so 20 will stay 20 (not 21)
 // ✅ Sales System / Total Cost reflects updated Add-ons + Total Time + Consignment - Discount
 // ✅ PDF + Excel exports reflect the updated computed totals
 
@@ -955,10 +956,8 @@ const AdminSalesReport: React.FC = () => {
     const addons = round2(addonsPaid + customerListOrderPaid);
     const discount = totals ? toNumber(totals.discount_total) : 0;
 
-    const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
-    const totalTimeAmount = round2(
-      baseTotalTimeAmount + promoPaid + customerListSystemPaid
-    );
+    // ✅ FIX: no old baseTotalTimeAmount here
+    const totalTimeAmount = round2(promoPaid + customerListSystemPaid);
 
     const salesSystemComputed = round2(
       addons + totalTimeAmount + consignment.gross - discount
@@ -1166,10 +1165,8 @@ const AdminSalesReport: React.FC = () => {
     const addons = round2(addonsPaid + customerListOrderPaid);
     const discount = totals ? toNumber(totals.discount_total) : 0;
 
-    const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
-    const totalTimeAmount = round2(
-      baseTotalTimeAmount + promoPaid + customerListSystemPaid
-    );
+    // ✅ FIX: no old baseTotalTimeAmount here
+    const totalTimeAmount = round2(promoPaid + customerListSystemPaid);
 
     const salesSystemComputed = round2(
       addons + totalTimeAmount + consignment.gross - discount
@@ -1297,8 +1294,8 @@ const AdminSalesReport: React.FC = () => {
   const actualSystem =
     cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
 
-  const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
-  const totalTimeAmount = round2(baseTotalTimeAmount + promoPaid + customerListSystemPaid);
+  // ✅ FIX: no old baseTotalTimeAmount here
+  const totalTimeAmount = round2(promoPaid + customerListSystemPaid);
 
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const addonsTotalWithCustomerOrders = round2(addonsPaid + customerListOrderPaid);
