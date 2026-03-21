@@ -4,8 +4,6 @@
 // ✅ Promo payments (promo_bookings) are ADDED into "Total Time" amount
 // ✅ Customer List PAID system cost is also ADDED into "Total Time"
 // ✅ Customer List PAID order payment is also ADDED into "Add-ons"
-// ✅ UI restored: only Add-ons, Discount, Total Time are shown in "Other Totals"
-// ✅ FIX: removed old totals.total_time base so 20 will stay 20 (not 21)
 // ✅ Sales System / Total Cost reflects updated Add-ons + Total Time + Consignment - Discount
 // ✅ PDF + Excel exports reflect the updated computed totals
 
@@ -51,10 +49,11 @@ type DiscountKind = "none" | "percent" | "amount";
 
 interface DailyReportRow {
   id: string;
-  report_date: string;
+  report_date: string; // YYYY-MM-DD
   starting_cash: number | string;
   starting_gcash: number | string;
   bilin_amount: number | string;
+
   is_submitted?: boolean;
   submitted_at?: string | null;
 }
@@ -76,23 +75,33 @@ interface CashLine {
 interface SalesTotalsRow {
   id: string;
   report_date: string;
+
   starting_cash: number | string;
   starting_gcash: number | string;
   bilin_amount: number | string;
+
   coh_total: number | string;
   expenses_amount: number | string;
+
   paid_reservation_cash: number | string;
   paid_reservation_gcash: number | string;
+
   advance_cash: number | string;
   advance_gcash: number | string;
+
   walkin_cash: number | string;
   walkin_gcash: number | string;
+
   total_time: number | string;
+
   addons_total: number | string;
   discount_total: number | string;
+
   cash_sales: number | string;
   gcash_sales: number | string;
+
   system_sale: number | string;
+
   sales_collected: number | string;
   net_collected: number | string;
 }
@@ -109,6 +118,7 @@ type ConsignmentRpcRow = {
   net: number | string | null;
 };
 
+// ✅ for Add-ons payment grouping (avoid double counting)
 type AddOnPaymentRow = {
   created_at: string;
   full_name: string;
@@ -117,6 +127,7 @@ type AddOnPaymentRow = {
   cash_amount: number | string | null;
 };
 
+// ✅ for inventory loss sum
 type AddOnExpenseRow = {
   created_at: string;
   expense_type: string;
@@ -124,6 +135,7 @@ type AddOnExpenseRow = {
   voided: boolean | null;
 };
 
+// ✅ promo booking payments
 type PromoPaymentRow = {
   paid_at: string | null;
   is_paid: boolean | number | string | null;
@@ -131,15 +143,18 @@ type PromoPaymentRow = {
   cash_amount: number | string | null;
 };
 
+// ✅ customer list paid system cost rows
 type PaidCustomerListSessionRow = {
   paid_at: string | null;
   is_paid: boolean | number | string | null;
   reservation: string | null;
+
   total_amount: number | string | null;
   discount_kind?: DiscountKind | null;
   discount_value?: number | string | null;
 };
 
+// ✅ customer list order payment rows
 type PaidCustomerOrderRow = {
   paid_at: string | null;
   is_paid: boolean | number | string | null;
@@ -201,7 +216,7 @@ const peso = (n: number): string =>
   `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /* =========================
-   SAFE EVENT VALUE HELPERS
+   SAFE EVENT VALUE HELPERS (NO any)
 ========================= */
 
 const getDetailValue = (ev: unknown): unknown => {
@@ -243,6 +258,7 @@ const isoToYMD = (iso: string): string => {
   return isYMD(ymd) ? ymd : todayYMD();
 };
 
+// ✅ Manila day range from YYYY-MM-DD (correct for Supabase timestamptz)
 const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } => {
   const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
@@ -294,6 +310,7 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
   let curSeat = "";
   let curStart = 0;
   let curLast = 0;
+
   let maxG = 0;
   let maxC = 0;
 
@@ -322,6 +339,7 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
       curSeat = norm(r.seat_number);
       curStart = t;
       curLast = t;
+
       maxG = g;
       maxC = c;
       continue;
@@ -356,11 +374,21 @@ const AdminSalesReport: React.FC = () => {
     net: 0,
   });
   const [addonsPaid, setAddonsPaid] = useState<number>(0);
+
+  // ✅ promo paid sum (added into Total Time)
   const [promoPaid, setPromoPaid] = useState<number>(0);
+
+  // ✅ customer list paid system cost (added into Total Time)
   const [customerListSystemPaid, setCustomerListSystemPaid] = useState<number>(0);
+
+  // ✅ customer list paid order payment (added into Add-ons)
   const [customerListOrderPaid, setCustomerListOrderPaid] = useState<number>(0);
+
+  // ✅ CASH OUTS split (cashout_date)
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
+
+  // ✅ Inventory Loss amount (from add_on_expenses)
   const [inventoryLossAmount, setInventoryLossAmount] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
@@ -371,6 +399,10 @@ const AdminSalesReport: React.FC = () => {
   }));
 
   const [deleteAlertOpen, setDeleteAlertOpen] = useState(false);
+
+  /* =========================
+     LOAD / ENSURE REPORT
+  ========================= */
 
   const ensureReportRow = async (dateYMD: string): Promise<void> => {
     const upsertRes = await supabase
@@ -490,6 +522,7 @@ const AdminSalesReport: React.FC = () => {
     setTotals(res.data);
   };
 
+  // ✅ CONSIGNMENT (RPC FIX)
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setConsignment({ gross: 0, fee15: 0, net: 0 });
@@ -517,6 +550,12 @@ const AdminSalesReport: React.FC = () => {
     });
   };
 
+  /**
+   * ✅ INVENTORY LOSS (FIXED)
+   * - Sum add_on_expenses.expense_amount for expense_type='inventory_loss'
+   * - Manila day range
+   * - NOT voided
+   */
   const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setInventoryLossAmount(0);
@@ -547,6 +586,9 @@ const AdminSalesReport: React.FC = () => {
     setInventoryLossAmount(round2(sum));
   };
 
+  /**
+   * ✅ ADD-ONS (PAID) — FIXED
+   */
   const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setAddonsPaid(0);
@@ -575,6 +617,9 @@ const AdminSalesReport: React.FC = () => {
     setAddonsPaid(computeAddonsPaidFromPayments(onlyWithAnyPayment));
   };
 
+  /**
+   * ✅ PROMO PAYMENTS (PAID ONLY) — ADDED to "Total Time"
+   */
   const loadPromoPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setPromoPaid(0);
@@ -609,6 +654,9 @@ const AdminSalesReport: React.FC = () => {
     setPromoPaid(round2(sum));
   };
 
+  /**
+   * ✅ CUSTOMER LIST SYSTEM COST (PAID ONLY) — ADDED to "Total Time"
+   */
   const loadCustomerListSystemPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setCustomerListSystemPaid(0);
@@ -652,6 +700,9 @@ const AdminSalesReport: React.FC = () => {
     setCustomerListSystemPaid(round2(total));
   };
 
+  /**
+   * ✅ CUSTOMER LIST ORDER PAYMENT (PAID ONLY) — ADDED to "Add-ons"
+   */
   const loadCustomerListOrderPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setCustomerListOrderPaid(0);
@@ -686,6 +737,9 @@ const AdminSalesReport: React.FC = () => {
     setCustomerListOrderPaid(round2(total));
   };
 
+  /**
+   * ✅ CASH OUTS (ADMIN split CASH/GCASH like STAFF)
+   */
   const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setCashOutsCash(0);
@@ -786,6 +840,10 @@ const AdminSalesReport: React.FC = () => {
     await loadTotals(selectedDate);
   };
 
+  /* =========================
+     ADMIN: SAVE / UPDATE
+  ========================= */
+
   const onSubmitDone = async (): Promise<void> => {
     if (!report) return;
 
@@ -855,6 +913,10 @@ const AdminSalesReport: React.FC = () => {
     setSubmitting(false);
   };
 
+  /* =========================
+     ADMIN: DELETE BY DATE
+  ========================= */
+
   const deleteByDate = async (): Promise<void> => {
     if (!isYMD(selectedDate)) {
       setToast({ open: true, msg: "Invalid date.", color: "danger" });
@@ -911,6 +973,10 @@ const AdminSalesReport: React.FC = () => {
     setSubmitting(false);
   };
 
+  /* =========================
+     EXPORT TO PDF (Print)
+  ========================= */
+
   const exportToPDF = (): void => {
     if (!report || !isYMD(selectedDate)) {
       setToast({ open: true, msg: "Pick a valid date first.", color: "danger" });
@@ -956,8 +1022,10 @@ const AdminSalesReport: React.FC = () => {
     const addons = round2(addonsPaid + customerListOrderPaid);
     const discount = totals ? toNumber(totals.discount_total) : 0;
 
-    // ✅ FIX: no old baseTotalTimeAmount here
-    const totalTimeAmount = round2(promoPaid + customerListSystemPaid);
+    const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
+    const totalTimeAmount = round2(
+      baseTotalTimeAmount + promoPaid + customerListSystemPaid
+    );
 
     const salesSystemComputed = round2(
       addons + totalTimeAmount + consignment.gross - discount
@@ -1084,8 +1152,10 @@ const AdminSalesReport: React.FC = () => {
           <div class="row"><span>Total Time</span><b>${peso(totalTimeAmount)}</b></div>
           <div class="note">Includes Promo Payments: ${peso(promoPaid)}</div>
           <div class="note">Includes Customer List System Cost (Paid): ${peso(customerListSystemPaid)}</div>
+
           <div class="row"><span>Add-ons (Payments)</span><b>${peso(addons)}</b></div>
           <div class="note">Includes Customer List Order Payment (Paid): ${peso(customerListOrderPaid)}</div>
+
           <div class="row"><span>Discounts</span><b>${peso(discount)}</b></div>
           <div class="row"><span>Consignment Sales</span><b>${peso(consignment.gross)}</b></div>
           <div class="row"><span>Consignment 15%</span><b>${peso(consignment.fee15)}</b></div>
@@ -1119,6 +1189,10 @@ const AdminSalesReport: React.FC = () => {
 
     setToast({ open: true, msg: "Opened print view. Save as PDF.", color: "success" });
   };
+
+  /* =========================
+     EXPORT TO EXCEL (.xlsx)
+  ========================= */
 
   const exportToExcel = async (): Promise<void> => {
     if (!report || !isYMD(selectedDate)) {
@@ -1165,8 +1239,10 @@ const AdminSalesReport: React.FC = () => {
     const addons = round2(addonsPaid + customerListOrderPaid);
     const discount = totals ? toNumber(totals.discount_total) : 0;
 
-    // ✅ FIX: no old baseTotalTimeAmount here
-    const totalTimeAmount = round2(promoPaid + customerListSystemPaid);
+    const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
+    const totalTimeAmount = round2(
+      baseTotalTimeAmount + promoPaid + customerListSystemPaid
+    );
 
     const salesSystemComputed = round2(
       addons + totalTimeAmount + consignment.gross - discount
@@ -1206,7 +1282,10 @@ const AdminSalesReport: React.FC = () => {
     ws.addRow([]);
 
     ws.addRow(["Other Totals"]);
-    ws.addRow(["Total Time (includes Promo + Customer List System Cost)", totalTimeAmount]);
+    ws.addRow([
+      "Total Time (includes Promo + Customer List System Cost)",
+      totalTimeAmount,
+    ]);
     ws.addRow(["Promo Payments (Paid)", promoPaid]);
     ws.addRow(["Customer List System Cost (Paid)", customerListSystemPaid]);
     ws.addRow(["Add-ons (includes Customer List Order Payment)", addons]);
@@ -1239,6 +1318,10 @@ const AdminSalesReport: React.FC = () => {
     setToast({ open: true, msg: "Excel exported.", color: "success" });
   };
 
+  /* =========================
+     LOAD when date changes
+  ========================= */
+
   useEffect(() => {
     void loadReport(selectedDate);
     void loadTotals(selectedDate);
@@ -1257,6 +1340,10 @@ const AdminSalesReport: React.FC = () => {
     void loadCashLines(report.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report?.id]);
+
+  /* =========================
+     COMPUTED (UI)
+  ========================= */
 
   const cashTotal = useMemo(() => {
     return lines
@@ -1294,8 +1381,10 @@ const AdminSalesReport: React.FC = () => {
   const actualSystem =
     cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
 
-  // ✅ FIX: no old baseTotalTimeAmount here
-  const totalTimeAmount = round2(promoPaid + customerListSystemPaid);
+  const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
+  const totalTimeAmount = round2(
+    baseTotalTimeAmount + promoPaid + customerListSystemPaid
+  );
 
   const discount = totals ? toNumber(totals.discount_total) : 0;
   const addonsTotalWithCustomerOrders = round2(addonsPaid + customerListOrderPaid);
@@ -1556,7 +1645,7 @@ const AdminSalesReport: React.FC = () => {
                     </div>
 
                     <div className="ssr-system-box">
-                      <div className="ssr-system-label">Sales System</div>
+                      <div className="ssr-system-label">Sales System / Total Cost</div>
                       <div className="ssr-system-value">{peso(salesSystemComputed)}</div>
                     </div>
                   </div>
@@ -1576,6 +1665,14 @@ const AdminSalesReport: React.FC = () => {
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
                       <span className="ssr-sales-box-value">{peso(consignment.gross)}</span>
+                    </div>
+                    <div className="ssr-sales-box">
+                      <span className="ssr-sales-box-label">Consignment 15%</span>
+                      <span className="ssr-sales-box-value">{peso(consignment.fee15)}</span>
+                    </div>
+                    <div className="ssr-sales-box">
+                      <span className="ssr-sales-box-label">Consignment Net</span>
+                      <span className="ssr-sales-box-value">{peso(consignment.net)}</span>
                     </div>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Inventory Loss</span>
@@ -1707,8 +1804,23 @@ const AdminSalesReport: React.FC = () => {
 
                   <div className="ssr-mini">
                     <div className="ssr-mini-row">
-                      <span>Add-ons (Paid)</span>
+                      <span>Add-ons (Payments)</span>
                       <b>{peso(addonsTotalWithCustomerOrders)}</b>
+                    </div>
+
+                    <div className="ssr-mini-row">
+                      <span>Customer List Order Payment (Paid)</span>
+                      <b>{peso(customerListOrderPaid)}</b>
+                    </div>
+
+                    <div className="ssr-mini-row">
+                      <span>Promo Payments (Paid)</span>
+                      <b>{peso(promoPaid)}</b>
+                    </div>
+
+                    <div className="ssr-mini-row">
+                      <span>Customer List System Cost (Paid)</span>
+                      <b>{peso(customerListSystemPaid)}</b>
                     </div>
 
                     <div className="ssr-mini-row">
@@ -1717,8 +1829,13 @@ const AdminSalesReport: React.FC = () => {
                     </div>
 
                     <div className="ssr-mini-row">
-                      <span>Total Time</span>
+                      <span>Total Time (includes Promo + System Cost)</span>
                       <b>{peso(totalTimeAmount)}</b>
+                    </div>
+
+                    <div className="ssr-mini-row">
+                      <span>Total Cost / Sales System</span>
+                      <b>{peso(salesSystemComputed)}</b>
                     </div>
                   </div>
                 </IonCardContent>

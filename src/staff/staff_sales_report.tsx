@@ -3,30 +3,20 @@
 // ✅ Cash Outs TOTAL now split into CASH / GCASH (uses cash_outs.payment_method)
 // ✅ If your table still uses ONLY cashout_date + amount, it will fallback to ALL as CASH
 // ✅ Uses paid_at date window logic elsewhere unchanged
-// ✅ FIX: Add-ons (Paid) is now based on PAYMENT amounts (cash_amount + gcash_amount)
-//         grouped per order (same full_name+seat within 10s) to avoid double counting
-// ✅ FIX (YOUR REQUEST): "Total Time" is now based on TIME CONSUMED amount
-//         Example: 1 hour => ₱20 (HOURLY_RATE=20). Uses Customer_Lists/Reservations logic.
-//         Includes BOTH: non-reservation (date) + reservation (reservation_date).
-//         If OPEN session: uses NOW as time_out.
-// ✅ NEW (YOUR REQUEST): If session is UNPAID, DO NOT COUNT:
-//         - Discount total
-//         - Total Time amount
-//         Applies to BOTH non-reservation + reservation.
-// ✅ CONSIGNMENT NET (SAME AS ADMIN):
-//         - Uses RPC: get_consignment_totals_for_day(p_date)
-//         - RPC handles Manila date inside (paid_at at time zone 'Asia/Manila')
-//         - Returns: gross, fee15, net
-//         - Display boxes: Consignment Sales / Inventory Loss
-// ✅ NEW (YOUR REQUEST): Inventory Loss is now loaded from add_on_expenses
-//         - expense_type='inventory_loss'
-//         - within selected Manila day
-//         - not voided
-//         - sum(expense_amount)
-// ✅ NEW (YOUR REQUEST): Total Time now INCLUDES PROMO (same idea as Admin Sales Report)
-//         - promo_bookings paid within selected Manila day (paid_at preferred)
-//         - adds promo base price into Total Time amount
-//         - adds promo discount into Discount total (PAID ONLY)
+// ✅ FIX: Add-ons (Paid) now includes:
+//         1) customer_session_add_ons payment amounts
+//         2) customer_order_payments payment amounts
+// ✅ FIX: Total Time now includes:
+//         1) WALK-IN system cost from Customer_Lists logic (discount-applied system cost, PAID only, paid_at within selected day)
+//         2) RESERVATION time-consumed amount (base), PAID only
+//         3) PROMO base price, PAID only
+// ✅ Discount total includes:
+//         1) WALK-IN system discount amount
+//         2) RESERVATION discount amount
+//         3) PROMO discount amount
+// ✅ CONSIGNMENT NET (same as admin)
+// ✅ Inventory Loss from add_on_expenses
+// ✅ Other Totals fixed
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -56,7 +46,7 @@ import { calendarOutline, closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
 /* =========================
-   PRICING (same idea as Customer_Lists/Reservations)
+   PRICING
 ========================= */
 
 const HOURLY_RATE = 20;
@@ -68,14 +58,14 @@ const FREE_MINUTES = 0;
 
 type MoneyKind = "cash" | "coin";
 type CashOutMethod = "cash" | "gcash";
+type DiscountKind = "none" | "percent" | "amount";
 
 interface DailyReportRow {
   id: string;
-  report_date: string; // YYYY-MM-DD
+  report_date: string;
   starting_cash: number | string;
   starting_gcash: number | string;
   bilin_amount: number | string;
-
   is_submitted?: boolean;
   submitted_at?: string | null;
 }
@@ -97,33 +87,23 @@ interface CashLine {
 interface SalesTotalsRow {
   id: string;
   report_date: string;
-
   starting_cash: number | string;
   starting_gcash: number | string;
   bilin_amount: number | string;
-
   coh_total: number | string;
   expenses_amount: number | string;
-
   paid_reservation_cash: number | string;
   paid_reservation_gcash: number | string;
-
   advance_cash: number | string;
   advance_gcash: number | string;
-
   walkin_cash: number | string;
   walkin_gcash: number | string;
-
   total_time: number | string;
-
   addons_total: number | string;
   discount_total: number | string;
-
   cash_sales: number | string;
   gcash_sales: number | string;
-
   system_sale: number | string;
-
   sales_collected: number | string;
   net_collected: number | string;
 }
@@ -140,7 +120,6 @@ type ConsignmentRpcRow = {
   net: number | string | null;
 };
 
-// ✅ for Add-ons payment grouping (avoid double counting)
 type AddOnPaymentRow = {
   created_at: string;
   full_name: string;
@@ -149,23 +128,32 @@ type AddOnPaymentRow = {
   cash_amount: number | string | null;
 };
 
-// ✅ for total time + discount (PAID ONLY)
-type SessionForTimeRow = {
-  date: string | null;
-  reservation: string | null;
-  reservation_date: string | null;
+type CustomerOrderPaymentRow = {
+  paid_at: string | null;
+  is_paid: boolean | number | string | null;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
 
+type WalkinSystemPaidRow = {
+  paid_at: string | null;
+  is_paid: boolean | number | string | null;
+  reservation: string | null;
+  total_amount: number | string | null;
+  discount_kind?: DiscountKind | null;
+  discount_value?: number | string | null;
+};
+
+type ReservationForTimeRow = {
+  reservation_date: string | null;
   time_started: string | null;
   time_ended: string | null;
   hour_avail: string | null;
-
   is_paid: boolean | null;
-
-  discount_kind: string | null; // 'none' | 'percent' | 'amount'
+  discount_kind: string | null;
   discount_value: number | string | null;
 };
 
-// ✅ inventory loss rows
 type AddOnExpenseRow = {
   created_at: string;
   expense_type: string;
@@ -173,7 +161,6 @@ type AddOnExpenseRow = {
   voided: boolean | null;
 };
 
-// ✅ promo rows for Total Time + Discount
 type PromoForTimeRow = {
   created_at: string;
   paid_at: string | null;
@@ -199,7 +186,45 @@ const toNumber = (v: string | number | null | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
+const round2 = (n: number): number =>
+  Number((Number.isFinite(n) ? n : 0).toFixed(2));
+
+
+const clamp = (n: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, n));
+
+const applyDiscountToBase = (
+  baseCost: number,
+  kind: DiscountKind,
+  value: number
+): number => {
+  const cost = Math.max(0, round2(baseCost));
+  const v = Math.max(0, round2(value));
+
+  if (kind === "percent") {
+    const pct = clamp(v, 0, 100);
+    return Math.max(0, round2(cost - (cost * pct) / 100));
+  }
+
+  if (kind === "amount") {
+    return Math.max(0, round2(cost - v));
+  }
+
+  return cost;
+};
+
+const computeDiscountAmountFromBaseCost = (
+  baseCost: number,
+  kindRaw: string | null | undefined,
+  valueRaw: number | string | null | undefined
+): number => {
+  const kind = (kindRaw ?? "none").toLowerCase().trim();
+  const v = Math.max(0, toNumber(valueRaw));
+
+  if (kind === "amount") return round2(Math.min(baseCost, v));
+  if (kind === "percent") return round2(baseCost * (Math.min(100, v) / 100));
+  return 0;
+};
 
 const todayYMD = (): string => {
   const d = new Date();
@@ -223,10 +248,13 @@ const addDaysYMD = (ymd: string, days: number): string => {
 };
 
 const peso = (n: number): string =>
-  `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  `₱${n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 
 /* =========================
-   SAFE EVENT VALUE HELPERS (NO any)
+   SAFE EVENT VALUE HELPERS
 ========================= */
 
 const getDetailValue = (ev: unknown): unknown => {
@@ -257,6 +285,16 @@ const valueToNonNegMoney = (v: unknown): number => {
   return n;
 };
 
+const toBool = (v: unknown): boolean => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    return s === "true" || s === "1" || s === "yes" || s === "paid";
+  }
+  return false;
+};
+
 /* =========================
    DATE HELPERS
 ========================= */
@@ -270,8 +308,12 @@ const isoToYMD = (iso: string): string => {
 
 const buildZeroLines = (reportId: string): CashLine[] => {
   const merged: CashLine[] = [];
-  for (const d of CASH_DENOMS) merged.push({ report_id: reportId, money_kind: "cash", denomination: d, qty: 0 });
-  for (const d of COIN_DENOMS) merged.push({ report_id: reportId, money_kind: "coin", denomination: d, qty: 0 });
+  for (const d of CASH_DENOMS) {
+    merged.push({ report_id: reportId, money_kind: "cash", denomination: d, qty: 0 });
+  }
+  for (const d of COIN_DENOMS) {
+    merged.push({ report_id: reportId, money_kind: "coin", denomination: d, qty: 0 });
+  }
   return merged;
 };
 
@@ -280,10 +322,11 @@ const ms = (iso: string): number => {
   return Number.isFinite(t) ? t : 0;
 };
 
-const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+const norm = (s: string | null | undefined): string =>
+  (s ?? "").trim().toLowerCase();
 
 /* =========================
-   ADD-ONS PAYMENT GROUPING (avoid double count)
+   ADD-ONS PAYMENT GROUPING
 ========================= */
 
 const GROUP_WINDOW_MS = 10_000;
@@ -317,7 +360,11 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
     const g = Math.max(0, toNumber(r.gcash_amount));
     const c = Math.max(0, toNumber(r.cash_amount));
 
-    const startNew = !started || name !== curName || seat !== curSeat || Math.abs(t - curLast) > GROUP_WINDOW_MS;
+    const startNew =
+      !started ||
+      name !== curName ||
+      seat !== curSeat ||
+      Math.abs(t - curLast) > GROUP_WINDOW_MS;
 
     if (startNew) {
       if (started) flush();
@@ -337,15 +384,17 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
 
   if (started) flush();
 
-  return total;
+  return round2(total);
 };
 
 /* =========================
-   TOTAL TIME AMOUNT (TIME CONSUMED => ₱)
-   + DISCOUNT TOTAL (PAID ONLY)
+   TOTAL TIME HELPERS
 ========================= */
 
-const isOpenTimeSession = (hourAvail: string | null | undefined, timeEnded: string | null | undefined): boolean => {
+const isOpenTimeSession = (
+  hourAvail: string | null | undefined,
+  timeEnded: string | null | undefined
+): boolean => {
   if ((hourAvail ?? "").toUpperCase() === "OPEN") return true;
   if (!timeEnded) return true;
   const end = new Date(timeEnded);
@@ -367,19 +416,6 @@ const computeCostWithFreeMinutes = (startIso: string, endIso: string): number =>
   return round2(chargeMinutes * perMinute);
 };
 
-const computeDiscountAmountFromBaseCost = (
-  baseCost: number,
-  kindRaw: string | null | undefined,
-  valueRaw: number | string | null | undefined
-): number => {
-  const kind = (kindRaw ?? "none").toLowerCase().trim();
-  const v = Math.max(0, toNumber(valueRaw));
-
-  if (kind === "amount") return round2(Math.min(baseCost, v));
-  if (kind === "percent") return round2(baseCost * (Math.min(100, v) / 100));
-  return 0;
-};
-
 /* =========================
    PAGE
 ========================= */
@@ -394,27 +430,30 @@ const StaffSalesReport: React.FC = () => {
   const [lines, setLines] = useState<CashLine[]>([]);
   const [totals, setTotals] = useState<SalesTotalsRow | null>(null);
 
-  // ✅ CONSIGNMENT (PAID ONLY) — from RPC (same as admin)
-  const [consignment, setConsignment] = useState<ConsignmentState>({ gross: 0, fee15: 0, net: 0 });
+  const [consignment, setConsignment] = useState<ConsignmentState>({
+    gross: 0,
+    fee15: 0,
+    net: 0,
+  });
 
-  // ✅ ADD-ONS (PAYMENTS)
-  const [addonsPaid, setAddonsPaid] = useState<number>(0);
+  const [addonsPaidBase, setAddonsPaidBase] = useState<number>(0);
+  const [customerOrderPaid, setCustomerOrderPaid] = useState<number>(0);
+  const [walkinSystemPaid, setWalkinSystemPaid] = useState<number>(0);
+  const [reservationTimeBase, setReservationTimeBase] = useState<number>(0);
+  const [promoTimeBase, setPromoTimeBase] = useState<number>(0);
 
-  // ✅ CASH OUTS TOTAL (cashout_date) split cash/gcash
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
-  // ✅ Total Time amount (₱) — PAID ONLY (includes PROMO now)
-  const [totalTimeAmount, setTotalTimeAmount] = useState<number>(0);
-
-  // ✅ Discount total — PAID ONLY (includes PROMO now)
   const [discountPaid, setDiscountPaid] = useState<number>(0);
-
-  // ✅ NEW: Inventory Loss (amount) from add_on_expenses (expense_type='inventory_loss')
   const [inventoryLossAmount, setInventoryLossAmount] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
-  const [toast, setToast] = useState<{ open: boolean; msg: string; color?: string }>(() => ({
+  const [toast, setToast] = useState<{
+    open: boolean;
+    msg: string;
+    color?: string;
+  }>(() => ({
     open: false,
     msg: "",
     color: "success",
@@ -433,9 +472,21 @@ const StaffSalesReport: React.FC = () => {
       );
 
     if (upsertRes.error) {
-      // eslint-disable-next-line no-console
       console.error("daily_sales_reports ensure(upsert) error:", upsertRes.error.message);
     }
+  };
+
+  const resetComputed = (): void => {
+    setConsignment({ gross: 0, fee15: 0, net: 0 });
+    setAddonsPaidBase(0);
+    setCustomerOrderPaid(0);
+    setWalkinSystemPaid(0);
+    setReservationTimeBase(0);
+    setPromoTimeBase(0);
+    setCashOutsCash(0);
+    setCashOutsGcash(0);
+    setDiscountPaid(0);
+    setInventoryLossAmount(0);
   };
 
   const loadReport = async (dateYMD: string): Promise<void> => {
@@ -445,13 +496,7 @@ const StaffSalesReport: React.FC = () => {
       setReport(null);
       setLines([]);
       setTotals(null);
-      setConsignment({ gross: 0, fee15: 0, net: 0 });
-      setAddonsPaid(0);
-      setCashOutsCash(0);
-      setCashOutsGcash(0);
-      setTotalTimeAmount(0);
-      setDiscountPaid(0);
-      setInventoryLossAmount(0);
+      resetComputed();
       setLoading(false);
       return;
     }
@@ -465,35 +510,21 @@ const StaffSalesReport: React.FC = () => {
       .single<DailyReportRow>();
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("daily_sales_reports select error:", res.error.message);
       setReport(null);
       setLines([]);
       setTotals(null);
-      setConsignment({ gross: 0, fee15: 0, net: 0 });
-      setAddonsPaid(0);
-      setCashOutsCash(0);
-      setCashOutsGcash(0);
-      setTotalTimeAmount(0);
-      setDiscountPaid(0);
-      setInventoryLossAmount(0);
+      resetComputed();
       setLoading(false);
       return;
     }
 
-    // ✅ if submitted date: staff sees zeros (hidden view)
     if (res.data?.is_submitted) {
       const r = res.data;
       setReport({ ...r, starting_cash: 0, starting_gcash: 0, bilin_amount: 0 });
       setLines(buildZeroLines(r.id));
       setTotals(null);
-      setConsignment({ gross: 0, fee15: 0, net: 0 });
-      setAddonsPaid(0);
-      setCashOutsCash(0);
-      setCashOutsGcash(0);
-      setTotalTimeAmount(0);
-      setDiscountPaid(0);
-      setInventoryLossAmount(0);
+      resetComputed();
       setLoading(false);
       return;
     }
@@ -509,7 +540,6 @@ const StaffSalesReport: React.FC = () => {
       .eq("report_id", reportId);
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("daily_cash_count_lines select error:", res.error.message);
       return;
     }
@@ -518,13 +548,27 @@ const StaffSalesReport: React.FC = () => {
     const merged: CashLine[] = [];
 
     for (const d of CASH_DENOMS) {
-      const found = rows.find((r) => r.money_kind === "cash" && toNumber(r.denomination) === d);
-      merged.push({ report_id: reportId, money_kind: "cash", denomination: d, qty: found?.qty ?? 0 });
+      const found = rows.find(
+        (r) => r.money_kind === "cash" && toNumber(r.denomination) === d
+      );
+      merged.push({
+        report_id: reportId,
+        money_kind: "cash",
+        denomination: d,
+        qty: found?.qty ?? 0,
+      });
     }
 
     for (const d of COIN_DENOMS) {
-      const found = rows.find((r) => r.money_kind === "coin" && toNumber(r.denomination) === d);
-      merged.push({ report_id: reportId, money_kind: "coin", denomination: d, qty: found?.qty ?? 0 });
+      const found = rows.find(
+        (r) => r.money_kind === "coin" && toNumber(r.denomination) === d
+      );
+      merged.push({
+        report_id: reportId,
+        money_kind: "coin",
+        denomination: d,
+        qty: found?.qty ?? 0,
+      });
     }
 
     setLines(merged);
@@ -543,7 +587,6 @@ const StaffSalesReport: React.FC = () => {
       .single<SalesTotalsRow>();
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("v_daily_sales_report_totals error:", res.error.message);
       setTotals(null);
       return;
@@ -552,19 +595,17 @@ const StaffSalesReport: React.FC = () => {
     setTotals(res.data);
   };
 
-  /**
-   * ✅ CONSIGNMENT NET (SAME AS ADMIN)
-   */
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
     }
 
-    const res = await supabase.rpc("get_consignment_totals_for_day", { p_date: dateYMD });
+    const res = await supabase.rpc("get_consignment_totals_for_day", {
+      p_date: dateYMD,
+    });
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("get_consignment_totals_for_day error:", res.error.message);
       setConsignment({ gross: 0, fee15: 0, net: 0 });
       return;
@@ -583,14 +624,12 @@ const StaffSalesReport: React.FC = () => {
     });
   };
 
-  // ✅ FIXED: Add-ons (Paid) based on PAYMENT, not total
-  const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
+  const loadAddonsPaidBase = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
-      setAddonsPaid(0);
+      setAddonsPaidBase(0);
       return;
     }
 
-    // Manila day range (timestamptz safe)
     const start = new Date(`${dateYMD}T00:00:00+08:00`);
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
@@ -601,33 +640,205 @@ const StaffSalesReport: React.FC = () => {
       .lt("created_at", end.toISOString());
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("addonsPaid(payment) query error:", res.error.message);
-      setAddonsPaid(0);
+      setAddonsPaidBase(0);
       return;
     }
 
     const rows = (res.data ?? []) as AddOnPaymentRow[];
-    const onlyWithPayment = rows.filter((r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0);
+    const onlyWithPayment = rows.filter(
+      (r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0
+    );
 
-    const totalPayments = computeAddonsPaidFromPayments(onlyWithPayment);
-    setAddonsPaid(totalPayments);
+    setAddonsPaidBase(computeAddonsPaidFromPayments(onlyWithPayment));
   };
 
-  /**
-   * ✅ NEW: Inventory Loss amount for the day
-   * - reads add_on_expenses within Manila day
-   * - expense_type = 'inventory_loss'
-   * - not voided
-   * - sum(expense_amount)
-   */
+  const loadCustomerOrderPaid = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setCustomerOrderPaid(0);
+      return;
+    }
+
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+    const res = await supabase
+      .from("customer_order_payments")
+      .select("paid_at, is_paid, gcash_amount, cash_amount")
+      .gte("paid_at", start.toISOString())
+      .lt("paid_at", end.toISOString());
+
+    if (res.error) {
+      console.error("customer_order_payments query error:", res.error.message);
+      setCustomerOrderPaid(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as CustomerOrderPaymentRow[];
+
+    const total = rows
+      .filter((r) => toBool(r.is_paid) && !!r.paid_at)
+      .reduce(
+        (sum, r) =>
+          sum +
+          Math.max(0, toNumber(r.gcash_amount)) +
+          Math.max(0, toNumber(r.cash_amount)),
+        0
+      );
+
+    setCustomerOrderPaid(round2(total));
+  };
+
+  const loadWalkinSystemPaidAndDiscount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setWalkinSystemPaid(0);
+      return;
+    }
+
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+    const res = await supabase
+      .from("customer_sessions")
+      .select("paid_at, is_paid, reservation, total_amount, discount_kind, discount_value")
+      .eq("reservation", "no")
+      .gte("paid_at", start.toISOString())
+      .lt("paid_at", end.toISOString());
+
+    if (res.error) {
+      console.error("walkin system paid query error:", res.error.message);
+      setWalkinSystemPaid(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as WalkinSystemPaidRow[];
+
+    let systemSum = 0;
+    let discountSum = 0;
+
+    for (const r of rows) {
+      if (!toBool(r.is_paid) || !r.paid_at) continue;
+
+      const base = Math.max(0, toNumber(r.total_amount));
+      const kind = (r.discount_kind ?? "none") as DiscountKind;
+      const value = Math.max(0, toNumber(r.discount_value));
+
+      const discountAmt = computeDiscountAmountFromBaseCost(base, kind, value);
+      const finalSystemCost = applyDiscountToBase(base, kind, value);
+
+      systemSum += finalSystemCost;
+      discountSum += discountAmt;
+    }
+
+    setWalkinSystemPaid(round2(systemSum));
+    setDiscountPaid((prev) => round2(prev + discountSum));
+  };
+
+  const loadReservationTimeAndDiscount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setReservationTimeBase(0);
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const res = await supabase
+      .from("customer_sessions")
+      .select("reservation_date, time_started, time_ended, hour_avail, is_paid, discount_kind, discount_value")
+      .eq("reservation", "yes")
+      .eq("reservation_date", dateYMD)
+      .eq("is_paid", true);
+
+    if (res.error) {
+      console.error("reservation time query error:", res.error.message);
+      setReservationTimeBase(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as ReservationForTimeRow[];
+
+    let timeSum = 0;
+    let discountSum = 0;
+
+    for (const s of rows) {
+      if (!s.is_paid) continue;
+
+      const startIso = String(s.time_started ?? "").trim();
+      if (!startIso) continue;
+
+      const open = isOpenTimeSession(s.hour_avail, s.time_ended);
+      const endIso = open ? nowIso : String(s.time_ended ?? "").trim();
+      if (!endIso) continue;
+
+      const baseCost = computeCostWithFreeMinutes(startIso, endIso);
+      timeSum += baseCost;
+
+      const dAmt = computeDiscountAmountFromBaseCost(
+        baseCost,
+        s.discount_kind,
+        s.discount_value
+      );
+      discountSum += dAmt;
+    }
+
+    setReservationTimeBase(round2(timeSum));
+    setDiscountPaid((prev) => round2(prev + discountSum));
+  };
+
+  const loadPromoTimeAndDiscount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setPromoTimeBase(0);
+      return;
+    }
+
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+    const promoRes = await supabase
+      .from("promo_bookings")
+      .select("created_at, paid_at, is_paid, start_at, end_at, price, discount_kind, discount_value")
+      .eq("is_paid", true)
+      .or(
+        `paid_at.gte.${start.toISOString()},paid_at.lt.${end.toISOString()},and(paid_at.is.null,created_at.gte.${start.toISOString()},created_at.lt.${end.toISOString()})`
+      );
+
+    if (promoRes.error) {
+      console.error("promo time/discount query error:", promoRes.error.message);
+      setPromoTimeBase(0);
+      return;
+    }
+
+    const promoRows = (promoRes.data ?? []) as PromoForTimeRow[];
+
+    let promoSum = 0;
+    let discountSum = 0;
+
+    for (const p of promoRows) {
+      if (!p.is_paid) continue;
+
+      const base = round2(Math.max(0, toNumber(p.price)));
+      if (base <= 0) continue;
+
+      promoSum += base;
+
+      const dAmt = computeDiscountAmountFromBaseCost(
+        base,
+        p.discount_kind,
+        p.discount_value
+      );
+      discountSum += dAmt;
+    }
+
+    setPromoTimeBase(round2(promoSum));
+    setDiscountPaid((prev) => round2(prev + discountSum));
+  };
+
   const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setInventoryLossAmount(0);
       return;
     }
 
-    // Manila day range (timestamptz safe)
     const start = new Date(`${dateYMD}T00:00:00+08:00`);
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
@@ -639,7 +850,6 @@ const StaffSalesReport: React.FC = () => {
       .lt("created_at", end.toISOString());
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("inventory loss query error:", res.error.message);
       setInventoryLossAmount(0);
       return;
@@ -653,11 +863,6 @@ const StaffSalesReport: React.FC = () => {
     setInventoryLossAmount(round2(sum));
   };
 
-  /**
-   * ✅ CASH OUTS (FIX)
-   * - Prefer: cash_outs.payment_method ('cash' | 'gcash')
-   * - If column doesn't exist, fallback to old schema
-   */
   const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setCashOutsCash(0);
@@ -665,158 +870,60 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    // Try with payment_method first
-    const res = await supabase.from("cash_outs").select("amount, cashout_date, payment_method").eq("cashout_date", dateYMD);
+    const res = await supabase
+      .from("cash_outs")
+      .select("amount, cashout_date, payment_method")
+      .eq("cashout_date", dateYMD);
 
     if (res.error) {
-      // If payment_method column doesn't exist, fallback to old schema
-      const fallback = await supabase.from("cash_outs").select("amount, cashout_date").eq("cashout_date", dateYMD);
+      const fallback = await supabase
+        .from("cash_outs")
+        .select("amount, cashout_date")
+        .eq("cashout_date", dateYMD);
 
       if (fallback.error) {
-        // eslint-disable-next-line no-console
         console.error("cash_outs query error:", fallback.error.message);
         setCashOutsCash(0);
         setCashOutsGcash(0);
         return;
       }
 
-      const rows = (fallback.data ?? []) as Array<{ amount: number | string | null }>;
+      const rows = (fallback.data ?? []) as Array<{
+        amount: number | string | null;
+      }>;
       const total = rows.reduce((sum, r) => sum + toNumber(r.amount), 0);
-      setCashOutsCash(total);
+      setCashOutsCash(round2(total));
       setCashOutsGcash(0);
       return;
     }
 
-    const rows = (res.data ?? []) as Array<{ amount: number | string | null; payment_method?: CashOutMethod | null }>;
-    const cash = rows.filter((r) => (r.payment_method ?? "cash") === "cash").reduce((sum, r) => sum + toNumber(r.amount), 0);
-    const gcash = rows.filter((r) => (r.payment_method ?? "cash") === "gcash").reduce((sum, r) => sum + toNumber(r.amount), 0);
+    const rows = (res.data ?? []) as Array<{
+      amount: number | string | null;
+      payment_method?: CashOutMethod | null;
+    }>;
 
-    setCashOutsCash(cash);
-    setCashOutsGcash(gcash);
-  };
+    const cash = rows
+      .filter((r) => (r.payment_method ?? "cash") === "cash")
+      .reduce((sum, r) => sum + toNumber(r.amount), 0);
 
-  /**
-   * ✅ TOTAL TIME AMOUNT + DISCOUNT (PAID ONLY)
-   * ✅ NOW INCLUDES PROMO (PAID ONLY)
-   */
-  const loadTimeAndDiscountPaid = async (dateYMD: string): Promise<void> => {
-    if (!isYMD(dateYMD)) {
-      setTotalTimeAmount(0);
-      setDiscountPaid(0);
-      return;
-    }
+    const gcash = rows
+      .filter((r) => (r.payment_method ?? "cash") === "gcash")
+      .reduce((sum, r) => sum + toNumber(r.amount), 0);
 
-    const nowIso = new Date().toISOString();
-
-    // Manila day range (timestamptz safe)
-    const start = new Date(`${dateYMD}T00:00:00+08:00`);
-    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-
-    const selectCols =
-      "date,reservation,reservation_date,time_started,time_ended,hour_avail,is_paid,discount_kind,discount_value";
-
-    // 1) Walk-in (PAID only)
-    const walkinRes = await supabase
-      .from("customer_sessions")
-      .select(selectCols)
-      .eq("reservation", "no")
-      .eq("date", dateYMD)
-      .eq("is_paid", true);
-
-    if (walkinRes.error) {
-      // eslint-disable-next-line no-console
-      console.error("time/discount walkin query error:", walkinRes.error.message);
-      setTotalTimeAmount(0);
-      setDiscountPaid(0);
-      return;
-    }
-
-    // 2) Reservation (PAID only)
-    const reservRes = await supabase
-      .from("customer_sessions")
-      .select(selectCols)
-      .eq("reservation", "yes")
-      .eq("reservation_date", dateYMD)
-      .eq("is_paid", true);
-
-    if (reservRes.error) {
-      // eslint-disable-next-line no-console
-      console.error("time/discount reservation query error:", reservRes.error.message);
-      setTotalTimeAmount(0);
-      setDiscountPaid(0);
-      return;
-    }
-
-    const allSessions: SessionForTimeRow[] = ([] as SessionForTimeRow[]).concat(
-      (walkinRes.data ?? []) as SessionForTimeRow[],
-      (reservRes.data ?? []) as SessionForTimeRow[]
-    );
-
-    // 3) PROMO BOOKINGS (PAID only)
-    // Prefer paid_at within Manila day; fallback also include created_at within day (in case paid_at missing)
-    const promoRes = await supabase
-      .from("promo_bookings")
-      .select("created_at, paid_at, is_paid, start_at, end_at, price, discount_kind, discount_value")
-      .eq("is_paid", true)
-      .or(
-        `paid_at.gte.${start.toISOString()},paid_at.lt.${end.toISOString()},and(paid_at.is.null,created_at.gte.${start.toISOString()},created_at.lt.${end.toISOString()})`
-      );
-
-    if (promoRes.error) {
-      // eslint-disable-next-line no-console
-      console.error("promo time/discount query error:", promoRes.error.message);
-      setTotalTimeAmount(0);
-      setDiscountPaid(0);
-      return;
-    }
-
-    const promoRows = (promoRes.data ?? []) as PromoForTimeRow[];
-
-    let timeSum = 0;
-    let discountSum = 0;
-
-    // Sessions: compute time cost based on time consumed
-    for (const s of allSessions) {
-      if (!s.is_paid) continue;
-
-      const startIso = String(s.time_started ?? "").trim();
-      if (!startIso) continue;
-
-      const open = isOpenTimeSession(s.hour_avail, s.time_ended);
-      const endIso = open ? nowIso : String(s.time_ended ?? "").trim();
-      if (!endIso) continue;
-
-      const timeCost = computeCostWithFreeMinutes(startIso, endIso);
-      timeSum += timeCost;
-
-      const dAmt = computeDiscountAmountFromBaseCost(timeCost, s.discount_kind, s.discount_value);
-      discountSum += dAmt;
-    }
-
-    // Promo: include promo base price as "Total Time" contribution, and promo discount as discount total
-    for (const p of promoRows) {
-      if (!p.is_paid) continue;
-
-      const base = round2(Math.max(0, toNumber(p.price)));
-      if (base <= 0) continue;
-
-      timeSum += base;
-
-      const dAmt = computeDiscountAmountFromBaseCost(base, p.discount_kind, p.discount_value);
-      discountSum += dAmt;
-    }
-
-    setTotalTimeAmount(round2(timeSum));
-    setDiscountPaid(round2(discountSum));
+    setCashOutsCash(round2(cash));
+    setCashOutsGcash(round2(gcash));
   };
 
   const upsertQty = async (line: CashLine, qty: number): Promise<void> => {
     if (submitting) return;
 
-    // ✅ submitted date: local-only edit
     if (report?.is_submitted) {
       setLines((prev) =>
-        prev.map((x) => (x.money_kind === line.money_kind && x.denomination === line.denomination ? { ...x, qty } : x))
+        prev.map((x) =>
+          x.money_kind === line.money_kind && x.denomination === line.denomination
+            ? { ...x, qty }
+            : x
+        )
       );
       return;
     }
@@ -829,13 +936,16 @@ const StaffSalesReport: React.FC = () => {
       );
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("daily_cash_count_lines upsert error:", res.error.message);
       return;
     }
 
     setLines((prev) =>
-      prev.map((x) => (x.money_kind === line.money_kind && x.denomination === line.denomination ? { ...x, qty } : x))
+      prev.map((x) =>
+        x.money_kind === line.money_kind && x.denomination === line.denomination
+          ? { ...x, qty }
+          : x
+      )
     );
     await loadTotals(selectedDate);
   };
@@ -848,16 +958,17 @@ const StaffSalesReport: React.FC = () => {
 
     const safe = Math.max(0, valueNum);
 
-    // ✅ submitted date: local-only edit
     if (report.is_submitted) {
       setReport((prev) => (prev ? { ...prev, [field]: safe } : prev));
       return;
     }
 
-    const res = await supabase.from("daily_sales_reports").update({ [field]: safe }).eq("id", report.id);
+    const res = await supabase
+      .from("daily_sales_reports")
+      .update({ [field]: safe })
+      .eq("id", report.id);
 
     if (res.error) {
-      // eslint-disable-next-line no-console
       console.error("daily_sales_reports update error:", res.error.message);
       return;
     }
@@ -875,13 +986,7 @@ const StaffSalesReport: React.FC = () => {
     setReport(null);
     setLines([]);
     setTotals(null);
-    setConsignment({ gross: 0, fee15: 0, net: 0 });
-    setAddonsPaid(0);
-    setCashOutsCash(0);
-    setCashOutsGcash(0);
-    setTotalTimeAmount(0);
-    setDiscountPaid(0);
-    setInventoryLossAmount(0);
+    resetComputed();
     setSelectedDate(next);
   };
 
@@ -889,7 +994,10 @@ const StaffSalesReport: React.FC = () => {
     if (!report) return "No report loaded.";
 
     if (report.is_submitted) {
-      const del = await supabase.from("daily_cash_count_lines").delete().eq("report_id", report.id);
+      const del = await supabase
+        .from("daily_cash_count_lines")
+        .delete()
+        .eq("report_id", report.id);
       if (del.error) return del.error.message;
     }
 
@@ -949,16 +1057,13 @@ const StaffSalesReport: React.FC = () => {
       return;
     }
 
-    // ✅ after submit hide/zero
-    setConsignment({ gross: 0, fee15: 0, net: 0 });
-    setAddonsPaid(0);
-    setCashOutsCash(0);
-    setCashOutsGcash(0);
-    setTotalTimeAmount(0);
-    setDiscountPaid(0);
-    setInventoryLossAmount(0);
+    resetComputed();
 
-    setToast({ open: true, msg: `DONE saved for ${selectedDate}. Moving to next day…`, color: "success" });
+    setToast({
+      open: true,
+      msg: `DONE saved for ${selectedDate}. Moving to next day…`,
+      color: "success",
+    });
 
     setSubmitting(false);
     goNextDay();
@@ -973,13 +1078,7 @@ const StaffSalesReport: React.FC = () => {
       await loadReport(selectedDate);
 
       if (!isYMD(selectedDate)) {
-        setConsignment({ gross: 0, fee15: 0, net: 0 });
-        setAddonsPaid(0);
-        setCashOutsCash(0);
-        setCashOutsGcash(0);
-        setTotalTimeAmount(0);
-        setDiscountPaid(0);
-        setInventoryLossAmount(0);
+        resetComputed();
         return;
       }
 
@@ -992,18 +1091,17 @@ const StaffSalesReport: React.FC = () => {
       const isSubmitted = Boolean(check.data?.is_submitted);
 
       if (isSubmitted) {
-        setConsignment({ gross: 0, fee15: 0, net: 0 });
-        setAddonsPaid(0);
-        setCashOutsCash(0);
-        setCashOutsGcash(0);
-        setTotalTimeAmount(0);
-        setDiscountPaid(0);
-        setInventoryLossAmount(0);
+        resetComputed();
       } else {
+        setDiscountPaid(0);
+
         void loadConsignment(selectedDate);
-        void loadAddonsPaid(selectedDate);
+        void loadAddonsPaidBase(selectedDate);
+        void loadCustomerOrderPaid(selectedDate);
+        void loadWalkinSystemPaidAndDiscount(selectedDate);
+        void loadReservationTimeAndDiscount(selectedDate);
+        void loadPromoTimeAndDiscount(selectedDate);
         void loadCashOutsTotal(selectedDate);
-        void loadTimeAndDiscountPaid(selectedDate); // ✅ includes PROMO now
         void loadInventoryLossAmount(selectedDate);
       }
     })();
@@ -1029,21 +1127,23 @@ const StaffSalesReport: React.FC = () => {
   ========================= */
 
   const cashTotal = useMemo(() => {
-    return lines.filter((l) => l.money_kind === "cash").reduce((sum, l) => sum + l.denomination * l.qty, 0);
+    return lines
+      .filter((l) => l.money_kind === "cash")
+      .reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
   const coinTotal = useMemo(() => {
-    return lines.filter((l) => l.money_kind === "coin").reduce((sum, l) => sum + l.denomination * l.qty, 0);
+    return lines
+      .filter((l) => l.money_kind === "coin")
+      .reduce((sum, l) => sum + l.denomination * l.qty, 0);
   }, [lines]);
 
   const cashSales = totals ? toNumber(totals.cash_sales) : 0;
   const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
-  // ✅ COH: cash from cash count, gcash from gcashSales
   const cohCash = cashTotal + coinTotal;
   const cohGcash = gcashSales;
 
-  // ✅ SHOW VALUES (UI)
   const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
   const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
 
@@ -1056,27 +1156,20 @@ const StaffSalesReport: React.FC = () => {
   const startingCash = report ? toNumber(report.starting_cash) : 0;
   const startingGcash = report ? toNumber(report.starting_gcash) : 0;
 
-  const addons = addonsPaid;
-  const discount = discountPaid;
+  const addonsPaid = round2(addonsPaidBase + customerOrderPaid);
+  const totalTimeAmount = round2(walkinSystemPaid + reservationTimeBase + promoTimeBase);
 
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 
-  /**
-   * ✅ Actual System (your existing)
-   */
-  const salesSystem = cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
+  const salesSystem = round2(
+    cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash)
+  );
 
-  /**
-   * ✅ Sales System (computed)
-   * add-ons + total time (PAID ONLY) + consignment NET - discount (PAID ONLY)
-   * (total time includes PROMO now)
-   */
-  const salesSystemComputed = addons + totalTimeAmount + consignment.net - discount;
+  const salesSystemComputed = round2(
+    addonsPaid + totalTimeAmount + consignment.net - discountPaid
+  );
 
-  /**
-   * ✅ Sales Collected:
-   */
-  const salesCollectedDisplay = salesSystem - bilin;
+  const salesCollectedDisplay = round2(salesSystem - bilin);
 
   if (loading) {
     return (
@@ -1105,10 +1198,16 @@ const StaffSalesReport: React.FC = () => {
           onDidDismiss={() => setToast((p) => ({ ...p, open: false }))}
         />
 
-        {/* DATE + SUBMIT */}
         <IonCard className="ssr-card">
           <IonCardContent className="ssr-card-body">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
               <div style={{ flex: 1 }}>
                 <IonItem lines="none" className="ssr-date-item">
                   <IonLabel position="stacked">Report Date (YYYY-MM-DD)</IonLabel>
@@ -1130,28 +1229,43 @@ const StaffSalesReport: React.FC = () => {
                       }}
                     />
 
-                    <IonButton className="ssr-cal-btn" fill="clear" disabled={submitting} onClick={() => setDatePickerOpen(true)}>
+                    <IonButton
+                      className="ssr-cal-btn"
+                      fill="clear"
+                      disabled={submitting}
+                      onClick={() => setDatePickerOpen(true)}
+                    >
                       <IonIcon icon={calendarOutline} />
                     </IonButton>
                   </div>
                 </IonItem>
 
                 <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
-                  Status: <b>{report?.is_submitted ? "SUBMITTED (hidden view, overwrite on submit)" : "DRAFT"}</b>
+                  Status:{" "}
+                  <b>
+                    {report?.is_submitted
+                      ? "SUBMITTED (hidden view, overwrite on submit)"
+                      : "DRAFT"}
+                  </b>
                   {report?.submitted_at ? (
-                    <span style={{ marginLeft: 8 }}>(last submit: {new Date(report.submitted_at).toLocaleString()})</span>
+                    <span style={{ marginLeft: 8 }}>
+                      (last submit: {new Date(report.submitted_at).toLocaleString()})
+                    </span>
                   ) : null}
                 </div>
               </div>
 
-              <IonButton strong disabled={submitting || !report} onClick={() => void onSubmitDone()}>
+              <IonButton
+                strong
+                disabled={submitting || !report}
+                onClick={() => void onSubmitDone()}
+              >
                 {submitting ? "Saving..." : submitLabel}
               </IonButton>
             </div>
           </IonCardContent>
         </IonCard>
 
-        {/* Calendar Modal */}
         <IonModal isOpen={datePickerOpen} onDidDismiss={() => setDatePickerOpen(false)}>
           <IonHeader>
             <IonToolbar>
@@ -1180,7 +1294,6 @@ const StaffSalesReport: React.FC = () => {
 
         <IonGrid className="ssr-grid">
           <IonRow>
-            {/* LEFT */}
             <IonCol size="12" sizeMd="6">
               <IonCard className="ssr-card">
                 <IonCardContent className="ssr-card-body">
@@ -1195,54 +1308,61 @@ const StaffSalesReport: React.FC = () => {
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Starting Balance</div>
 
-                  <div className="ssr-left-cell">
-                    <IonItem lines="none" className="ssr-input-item ssr-input-item--toplabel">
-                      <IonLabel position="stacked" className="ssr-top-input-label">
-                        Cash
-                      </IonLabel>
-                      <IonInput
-                        className="ssr-input"
-                        type="number"
-                        inputmode="decimal"
-                        disabled={submitting}
-                        value={report ? String(toNumber(report.starting_cash)) : "0"}
-                        onIonChange={(ev) => updateReportField("starting_cash", valueToNonNegMoney(getDetailValue(ev)))}
-                      />
-                    </IonItem>
+                    <div className="ssr-left-cell">
+                      <IonItem lines="none" className="ssr-input-item ssr-input-item--toplabel">
+                        <IonLabel position="stacked" className="ssr-top-input-label">
+                          Cash
+                        </IonLabel>
+                        <IonInput
+                          className="ssr-input"
+                          type="number"
+                          inputmode="decimal"
+                          disabled={submitting}
+                          value={report ? String(toNumber(report.starting_cash)) : "0"}
+                          onIonChange={(ev) =>
+                            void updateReportField(
+                              "starting_cash",
+                              valueToNonNegMoney(getDetailValue(ev))
+                            )
+                          }
+                        />
+                      </IonItem>
+                    </div>
+
+                    <div className="ssr-left-cell">
+                      <IonItem lines="none" className="ssr-input-item ssr-input-item--toplabel">
+                        <IonLabel position="stacked" className="ssr-top-input-label">
+                          GCash
+                        </IonLabel>
+                        <IonInput
+                          className="ssr-input"
+                          type="number"
+                          inputmode="decimal"
+                          disabled={submitting}
+                          value={report ? String(toNumber(report.starting_gcash)) : "0"}
+                          onIonChange={(ev) =>
+                            void updateReportField(
+                              "starting_gcash",
+                              valueToNonNegMoney(getDetailValue(ev))
+                            )
+                          }
+                        />
+                      </IonItem>
+                    </div>
                   </div>
 
-                  <div className="ssr-left-cell">
-                    <IonItem lines="none" className="ssr-input-item ssr-input-item--toplabel">
-                      <IonLabel position="stacked" className="ssr-top-input-label">
-                        GCash
-                      </IonLabel>
-                      <IonInput
-                        className="ssr-input"
-                        type="number"
-                        inputmode="decimal"
-                        disabled={submitting}
-                        value={report ? String(toNumber(report.starting_gcash)) : "0"}
-                        onIonChange={(ev) => updateReportField("starting_gcash", valueToNonNegMoney(getDetailValue(ev)))}
-                      />
-                    </IonItem>
-                  </div>
-                  </div>
-
-                  {/* COH */}
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">COH / Total of the Day</div>
                     <div className="ssr-left-value ssr-left-value--cash">{peso(cohCash)}</div>
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(cohGcash)}</div>
                   </div>
 
-                  {/* ✅ CASH OUTS SPLIT */}
                   <div className="ssr-left-row">
                     <div className="ssr-left-label">Cash Outs</div>
                     <div className="ssr-left-value ssr-left-value--cash">{peso(cashOutsCash)}</div>
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(cashOutsGcash)}</div>
                   </div>
 
-                  {/* Paid reservations */}
                   <div className="ssr-left-row ssr-left-row--tint">
                     <div className="ssr-left-label">Paid reservations for this date</div>
                     <div className="ssr-left-value ssr-left-value--cash">{peso(paidResCash)}</div>
@@ -1261,7 +1381,6 @@ const StaffSalesReport: React.FC = () => {
                     <div className="ssr-left-value ssr-left-value--gcash">{peso(dpGcash)}</div>
                   </div>
 
-                  {/* Actual + Computed */}
                   <div className="ssr-system-grid">
                     <div className="ssr-system-box">
                       <div className="ssr-system-label">Actual System</div>
@@ -1285,7 +1404,6 @@ const StaffSalesReport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* ✅ SAME AS ADMIN: show consignment + inventory loss */}
                   <div className="ssr-sales-boxes" style={{ marginTop: 10 }}>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Consignment Sales</span>
@@ -1301,7 +1419,6 @@ const StaffSalesReport: React.FC = () => {
               </IonCard>
             </IonCol>
 
-            {/* RIGHT */}
             <IonCol size="12" sizeMd="6">
               <IonCard className="ssr-card">
                 <IonCardContent className="ssr-card-body">
@@ -1333,7 +1450,9 @@ const StaffSalesReport: React.FC = () => {
                                 inputmode="numeric"
                                 disabled={submitting}
                                 value={String(line.qty)}
-                                onIonChange={(ev) => upsertQty(line, valueToNonNegInt(getDetailValue(ev)))}
+                                onIonChange={(ev) =>
+                                  void upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
+                                }
                               />
                             </div>
                             <div className="ssr-ca">{peso(amount)}</div>
@@ -1368,7 +1487,9 @@ const StaffSalesReport: React.FC = () => {
                                 inputmode="numeric"
                                 disabled={submitting}
                                 value={String(line.qty)}
-                                onIonChange={(ev) => upsertQty(line, valueToNonNegInt(getDetailValue(ev)))}
+                                onIonChange={(ev) =>
+                                  void upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
+                                }
                               />
                             </div>
                             <div className="ssr-ca">{peso(amount)}</div>
@@ -1396,7 +1517,12 @@ const StaffSalesReport: React.FC = () => {
                         inputmode="decimal"
                         disabled={submitting}
                         value={report ? String(toNumber(report.bilin_amount)) : "0"}
-                        onIonChange={(ev) => updateReportField("bilin_amount", valueToNonNegMoney(getDetailValue(ev)))}
+                        onIonChange={(ev) =>
+                          void updateReportField(
+                            "bilin_amount",
+                            valueToNonNegMoney(getDetailValue(ev))
+                          )
+                        }
                       />
                     </div>
 

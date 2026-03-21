@@ -27,6 +27,7 @@ import Customer_Lists from "./Customer_Lists";
 import Customer_Reservations from "./Customer_Reservations";
 import Customer_Calendar from "./Customer_Calendar";
 import Product_Item_Lists from "./Product_Item_lists";
+import Customer_Add_ons from "./Customer_Add_ons";
 import Customer_Discount_List from "./Customer_Promo_List";
 import Staff_Sales_Report from "./staff_sales_report";
 import Customer_Cancelled from "./Customer_Cancelled";
@@ -41,6 +42,7 @@ import listIcon from "../assets/list.png";
 import reserveIcon from "../assets/reserve.png";
 import calendarIcon from "../assets/calendar.png";
 import foodIcon from "../assets/food.png";
+import onsIcon from "../assets/hamburger.png";
 import discountIcon from "../assets/discount.png";
 import salesIcon from "../assets/sales.png";
 import flowerImg from "../assets/flower.png";
@@ -538,6 +540,7 @@ const Staff_menu: React.FC = () => {
       { name: "Customer Lists", key: "customer_lists", icon: listIcon },
       { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
       { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
+      { name: "Customer Add-Ons", key: "customer_add_ons", icon: onsIcon },
       { name: "Customer Cancelled", key: "customer_cancelled", icon: cancelledIcon },
       { name: "Memberships", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
@@ -572,6 +575,8 @@ const Staff_menu: React.FC = () => {
         return <Customer_Reservations />;
       case "customer_calendar":
         return <Customer_Calendar />;
+      case "customer_add_ons":
+        return <Customer_Add_ons />;
       case "customer_cancelled":
         return <Customer_Cancelled />;
       case "customer_promo_list":
