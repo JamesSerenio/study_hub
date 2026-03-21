@@ -1212,49 +1212,54 @@ const Admin_customer_list: React.FC = () => {
     setCashInput(String(pi.cash));
   };
 
-  const savePayment = async (): Promise<void> => {
-    if (!paymentTarget) return;
+    const savePayment = async (): Promise<void> => {
+      if (!paymentTarget) return;
 
-    const g = wholePeso(Math.max(0, toMoney(gcashInput)));
-    const c = wholePeso(Math.max(0, toMoney(cashInput)));
-    const totalPaid = wholePeso(g + c);
-    const due = getSystemDue(paymentTarget);
-    const systemPaid = due <= 0 ? true : totalPaid >= due;
+      const g = wholePeso(Math.max(0, toMoney(gcashInput)));
+      const c = wholePeso(Math.max(0, toMoney(cashInput)));
+      const totalPaid = wholePeso(g + c);
+      const due = getSystemDue(paymentTarget);
+      const systemPaid = due <= 0 ? true : totalPaid >= due;
 
-    try {
-      setSavingPayment(true);
+      try {
+        setSavingPayment(true);
 
-      const orderPaid = hasOrders(paymentTarget) ? getOrderIsPaid(paymentTarget) : true;
-      const nextFinalPaid = systemPaid && orderPaid;
+        const orderPaid = hasOrders(paymentTarget) ? getOrderIsPaid(paymentTarget) : true;
+        const nextFinalPaid = systemPaid && orderPaid;
 
-      const { data: updated, error } = await supabase
-        .from("customer_sessions")
-        .update({
-          gcash_amount: g,
-          cash_amount: c,
-          is_paid: nextFinalPaid,
-          paid_at: nextFinalPaid ? new Date().toISOString() : null,
-        })
-        .eq("id", paymentTarget.id)
-        .select("*")
-        .single();
+        const paidAtValue = nextFinalPaid
+          ? paymentTarget.paid_at ?? new Date().toISOString()
+          : null;
 
-      if (error || !updated) {
-        alert(`Save payment error: ${error?.message ?? "Unknown error"}`);
-        return;
+        const { data: updated, error } = await supabase
+          .from("customer_sessions")
+          .update({
+            gcash_amount: g,
+            cash_amount: c,
+            is_paid: nextFinalPaid,
+            paid_at: paidAtValue,
+          })
+          .eq("id", paymentTarget.id)
+          .select("*")
+          .single();
+
+        if (error || !updated) {
+          alert(`Save payment error: ${error?.message ?? "Unknown error"}`);
+          return;
+        }
+
+        const updatedRow = updated as CustomerSession;
+        setSessions((prev) => prev.map((s) => (s.id === paymentTarget.id ? updatedRow : s)));
+        setSelectedSession((prev) => (prev?.id === paymentTarget.id ? updatedRow : prev));
+        setSelectedOrderSession((prev) => (prev?.id === paymentTarget.id ? updatedRow : prev));
+        setPaymentTarget(null);
+      } catch (e) {
+        console.error(e);
+        alert("Save payment failed.");
+      } finally {
+        setSavingPayment(false);
       }
-
-      const updatedRow = updated as CustomerSession;
-      setSessions((prev) => prev.map((s) => (s.id === paymentTarget.id ? updatedRow : s)));
-      setSelectedSession((prev) => (prev?.id === paymentTarget.id ? updatedRow : prev));
-      setPaymentTarget(null);
-    } catch (e) {
-      console.error(e);
-      alert("Save payment failed.");
-    } finally {
-      setSavingPayment(false);
-    }
-  };
+    };
 
   const ensureOrderPaymentRow = async (
     session: CustomerSession
@@ -1315,117 +1320,127 @@ const Admin_customer_list: React.FC = () => {
     setOrderCashInput(String(wholePeso(Math.max(0, toMoney(row.cash_amount ?? 0)))));
   };
 
-  const saveOrderPayment = async (): Promise<void> => {
-    if (!orderPaymentTarget) return;
+      const saveOrderPayment = async (): Promise<void> => {
+        if (!orderPaymentTarget) return;
 
-    const bookingCode = String(orderPaymentTarget.booking_code ?? "").trim().toUpperCase();
-    if (!bookingCode) {
-      alert("Missing booking code.");
-      return;
-    }
+        const bookingCode = String(orderPaymentTarget.booking_code ?? "").trim().toUpperCase();
+        if (!bookingCode) {
+          alert("Missing booking code.");
+          return;
+        }
 
-    const due = getOrderDue(orderPaymentTarget);
-    const gcash = wholePeso(Math.max(0, toMoney(orderGcashInput)));
-    const cash = wholePeso(Math.max(0, toMoney(orderCashInput)));
-    const totalPaid = wholePeso(gcash + cash);
-    const orderPaid = due <= 0 ? true : totalPaid >= due;
+        const due = getOrderDue(orderPaymentTarget);
+        const gcash = wholePeso(Math.max(0, toMoney(orderGcashInput)));
+        const cash = wholePeso(Math.max(0, toMoney(orderCashInput)));
+        const totalPaid = wholePeso(gcash + cash);
+        const orderPaid = due <= 0 ? true : totalPaid >= due;
 
-    try {
-      setSavingOrderPayment(true);
+        try {
+          setSavingOrderPayment(true);
 
-      const { data: paymentRow, error: payErr } = await supabase
-        .from("customer_order_payments")
-        .upsert(
-          {
-            booking_code: bookingCode,
-            full_name: orderPaymentTarget.full_name,
-            seat_number: orderPaymentTarget.seat_number || "N/A",
-            order_total: due,
-            gcash_amount: gcash,
-            cash_amount: cash,
-            is_paid: orderPaid,
-            paid_at: orderPaid ? new Date().toISOString() : null,
-          },
-          { onConflict: "booking_code" }
-        )
-        .select("*")
-        .single();
+          const existingOrderRow = getOrderPaymentRow(orderPaymentTarget);
+          const orderPaidAtValue = orderPaid
+            ? existingOrderRow?.paid_at ?? new Date().toISOString()
+            : null;
 
-      if (payErr || !paymentRow) {
-        alert(`Save order payment error: ${payErr?.message ?? "Unknown error"}`);
-        return;
+          const { data: paymentRow, error: payErr } = await supabase
+            .from("customer_order_payments")
+            .upsert(
+              {
+                booking_code: bookingCode,
+                full_name: orderPaymentTarget.full_name,
+                seat_number: orderPaymentTarget.seat_number || "N/A",
+                order_total: due,
+                gcash_amount: gcash,
+                cash_amount: cash,
+                is_paid: orderPaid,
+                paid_at: orderPaidAtValue,
+              },
+              { onConflict: "booking_code" }
+            )
+            .select("*")
+            .single();
+
+          if (payErr || !paymentRow) {
+            alert(`Save order payment error: ${payErr?.message ?? "Unknown error"}`);
+            return;
+          }
+
+          setOrderPayments((prev) => ({
+            ...prev,
+            [bookingCode]: paymentRow as CustomerOrderPayment,
+          }));
+
+          const systemPaid = getSystemIsPaid(orderPaymentTarget);
+          const nextFinalPaid = systemPaid && orderPaid;
+
+          const sessionPaidAtValue = nextFinalPaid
+            ? orderPaymentTarget.paid_at ?? new Date().toISOString()
+            : null;
+
+          const { data: updatedSession, error: updErr } = await supabase
+            .from("customer_sessions")
+            .update({
+              is_paid: nextFinalPaid,
+              paid_at: sessionPaidAtValue,
+            })
+            .eq("id", orderPaymentTarget.id)
+            .select("*")
+            .single();
+
+          if (updErr || !updatedSession) {
+            alert(
+              `Order payment saved, but session paid sync failed: ${updErr?.message ?? "Unknown error"}`
+            );
+            return;
+          }
+
+          const updatedRow = updatedSession as CustomerSession;
+          setSessions((prev) => prev.map((s) => (s.id === updatedRow.id ? updatedRow : s)));
+          setSelectedSession((prev) => (prev?.id === updatedRow.id ? updatedRow : prev));
+          setSelectedOrderSession((prev) => (prev?.id === updatedRow.id ? updatedRow : prev));
+          setOrderPaymentTarget(null);
+        } catch (e) {
+          console.error(e);
+          alert("Save order payment failed.");
+        } finally {
+          setSavingOrderPayment(false);
+        }
+      };
+
+    const togglePaid = async (s: CustomerSession): Promise<void> => {
+      try {
+        setTogglingPaidId(s.id);
+
+        const currentPaid = toBool(s.is_paid);
+        const nextPaid = !currentPaid;
+
+        const { data: updated, error } = await supabase
+          .from("customer_sessions")
+          .update({
+            is_paid: nextPaid,
+            paid_at: nextPaid ? s.paid_at ?? new Date().toISOString() : null,
+          })
+          .eq("id", s.id)
+          .select("*")
+          .single();
+
+        if (error || !updated) {
+          alert(`Toggle paid error: ${error?.message ?? "Unknown error"}`);
+          return;
+        }
+
+        const updatedRow = updated as CustomerSession;
+        setSessions((prev) => prev.map((x) => (x.id === s.id ? updatedRow : x)));
+        setSelectedSession((prev) => (prev?.id === s.id ? updatedRow : prev));
+        setSelectedOrderSession((prev) => (prev?.id === s.id ? updatedRow : prev));
+      } catch (e) {
+        console.error(e);
+        alert("Toggle paid failed.");
+      } finally {
+        setTogglingPaidId(null);
       }
-
-      setOrderPayments((prev) => ({
-        ...prev,
-        [bookingCode]: paymentRow as CustomerOrderPayment,
-      }));
-
-      const systemPaid = getSystemIsPaid(orderPaymentTarget);
-      const nextFinalPaid = systemPaid && orderPaid;
-
-      const { data: updatedSession, error: updErr } = await supabase
-        .from("customer_sessions")
-        .update({
-          is_paid: nextFinalPaid,
-          paid_at: nextFinalPaid ? new Date().toISOString() : null,
-        })
-        .eq("id", orderPaymentTarget.id)
-        .select("*")
-        .single();
-
-      if (updErr || !updatedSession) {
-        alert(
-          `Order payment saved, but session paid sync failed: ${updErr?.message ?? "Unknown error"}`
-        );
-        return;
-      }
-
-      const updatedRow = updatedSession as CustomerSession;
-      setSessions((prev) => prev.map((s) => (s.id === updatedRow.id ? updatedRow : s)));
-      setSelectedSession((prev) => (prev?.id === updatedRow.id ? updatedRow : prev));
-      setSelectedOrderSession((prev) => (prev?.id === updatedRow.id ? updatedRow : prev));
-      setOrderPaymentTarget(null);
-    } catch (e) {
-      console.error(e);
-      alert("Save order payment failed.");
-    } finally {
-      setSavingOrderPayment(false);
-    }
-  };
-
-  const togglePaid = async (s: CustomerSession): Promise<void> => {
-    try {
-      setTogglingPaidId(s.id);
-
-      const currentPaid = toBool(s.is_paid);
-      const nextPaid = !currentPaid;
-
-      const { data: updated, error } = await supabase
-        .from("customer_sessions")
-        .update({
-          is_paid: nextPaid,
-          paid_at: nextPaid ? new Date().toISOString() : null,
-        })
-        .eq("id", s.id)
-        .select("*")
-        .single();
-
-      if (error || !updated) {
-        alert(`Toggle paid error: ${error?.message ?? "Unknown error"}`);
-        return;
-      }
-
-      const updatedRow = updated as CustomerSession;
-      setSessions((prev) => prev.map((x) => (x.id === s.id ? updatedRow : x)));
-      setSelectedSession((prev) => (prev?.id === s.id ? updatedRow : prev));
-    } catch (e) {
-      console.error(e);
-      alert("Toggle paid failed.");
-    } finally {
-      setTogglingPaidId(null);
-    }
-  };
+    };
 
   /* =========================
      ORDER CANCEL HELPERS
