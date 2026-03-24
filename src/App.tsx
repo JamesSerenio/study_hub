@@ -1,8 +1,15 @@
-// src/App.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { IonApp, IonRouterOutlet, setupIonicReact } from "@ionic/react";
+import {
+  IonApp,
+  IonRouterOutlet,
+  setupIonicReact,
+  IonModal,
+  IonButton,
+  IonIcon,
+} from "@ionic/react";
 import { IonReactRouter } from "@ionic/react-router";
 import { Route, Redirect } from "react-router-dom";
+import { checkmarkCircleOutline } from "ionicons/icons";
 
 /* Pages */
 import Login from "./pages/Login";
@@ -55,7 +62,7 @@ const seatText = (seat: string | string[] | null | undefined): string => {
 };
 
 /* =========================
-   DB TYPES (MATCH YOUR DB)
+   DB TYPES
 ========================= */
 
 type ProfileRow = {
@@ -67,11 +74,8 @@ type CustomerSessionRow = {
   created_at: string | null;
   full_name: string;
   seat_number: string | string[] | null;
-
-  // ✅ your real column
   time_ended: string | null;
-
-  reservation: string; // "yes" | "no"
+  reservation: string;
   promo_booking_id: string | null;
 };
 
@@ -89,7 +93,7 @@ type PromoBookingRow = {
 type AlertKind = "walkin" | "reservation" | "promo";
 
 type AlertItem = {
-  key: string; // unique: kind-id-minute
+  key: string;
   kind: AlertKind;
   id: string;
   full_name: string;
@@ -98,30 +102,99 @@ type AlertItem = {
   end_iso: string;
 };
 
+type AddOnVerifiedEventDetail = {
+  full_name: string;
+  seat_number: string;
+  booking_code: string;
+  order_text: string;
+  mode: "add_ons" | "consignment";
+};
 
 const getRoleLocal = (): string =>
   (localStorage.getItem("role") || "").toLowerCase();
 
+const AddOnCodeAlertModal: React.FC<{
+  isOpen: boolean;
+  detail: AddOnVerifiedEventDetail | null;
+  onClose: () => void;
+}> = ({ isOpen, detail, onClose }) => {
+  return (
+    <IonModal isOpen={isOpen} backdropDismiss={true} onDidDismiss={onClose} className="addon-verified-modal">
+      <div
+        style={{
+          padding: 18,
+          background: "#ffffff",
+          borderRadius: 20,
+          margin: "auto",
+          width: "min(92vw, 360px)",
+          boxShadow: "0 18px 40px rgba(0,0,0,0.18)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 22, fontWeight: 900, display: "flex", alignItems: "center", gap: 8 }}>
+            <IonIcon icon={checkmarkCircleOutline} style={{ color: "#39a84b", fontSize: 28 }} />
+            Code Verified
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              border: 0,
+              background: "transparent",
+              fontSize: 20,
+              cursor: "pointer",
+              color: "#111111",
+            }}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ lineHeight: 1.7, color: "#222222", fontSize: 15 }}>
+          <div><strong>Name:</strong> {detail?.full_name || "-"}</div>
+          <div><strong>Seat:</strong> {detail?.seat_number || "-"}</div>
+          <div><strong>Type:</strong> {detail?.mode === "add_ons" ? "Order" : "Other Items"}</div>
+          <div><strong>Booking Code:</strong> {detail?.booking_code || "-"}</div>
+          <div><strong>Order:</strong> {detail?.order_text || "-"}</div>
+        </div>
+
+        <IonButton
+          expand="block"
+          onClick={onClose}
+          style={{
+            marginTop: 14,
+            "--background": "#39a84b",
+            "--background-hover": "#2f8f3f",
+            "--background-activated": "#2f8f3f",
+            "--color": "#ffffff",
+            "--border-radius": "14px",
+            fontWeight: 800,
+          }}
+        >
+          OK
+        </IonButton>
+      </div>
+    </IonModal>
+  );
+};
+
 const App: React.FC = () => {
-  // ✅ multi-alert list
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [showAlert, setShowAlert] = useState<boolean>(false);
 
-  // ✅ role state (starts from local, then verified by Supabase)
   const [role, setRole] = useState<string>(getRoleLocal());
   const isStaff = useMemo(() => role === "staff", [role]);
 
-  // prevent duplicates: "<kind>-<id>-<minute>"
+  const [showAddOnVerified, setShowAddOnVerified] = useState<boolean>(false);
+  const [addOnVerifiedDetail, setAddOnVerifiedDetail] = useState<AddOnVerifiedEventDetail | null>(null);
+
   const triggeredRef = useRef<Set<string>>(new Set());
 
-  // keep latest rows in memory
   const sessionsRef = useRef<Map<string, CustomerSessionRow>>(new Map());
   const promosRef = useRef<Map<string, PromoBookingRow>>(new Map());
 
-  /* =========================
-     ✅ ALWAYS SYNC ROLE FROM SUPABASE
-     (important sa Vercel)
-  ========================= */
   const syncRoleFromSupabase = async (): Promise<void> => {
     const { data: sess } = await supabase.auth.getSession();
     const user = sess.session?.user;
@@ -158,6 +231,7 @@ const App: React.FC = () => {
     const onStorage = (e: StorageEvent): void => {
       if (e.key === "role") setRole(getRoleLocal());
     };
+
     window.addEventListener("storage", onStorage);
 
     return () => {
@@ -166,24 +240,39 @@ const App: React.FC = () => {
     };
   }, []);
 
-  /* =========================
-     ALERT LOGIC (MULTI)
-  ========================= */
+  useEffect(() => {
+    const onAddonVerified = (event: Event): void => {
+      const customEvent = event as CustomEvent<AddOnVerifiedEventDetail>;
+      if (!customEvent.detail) return;
+
+      setAddOnVerifiedDetail(customEvent.detail);
+      setShowAddOnVerified(true);
+    };
+
+    window.addEventListener("addon-code-verified", onAddonVerified as EventListener);
+
+    return () => {
+      window.removeEventListener("addon-code-verified", onAddonVerified as EventListener);
+    };
+  }, []);
 
   const addAlert = (a: AlertItem): void => {
     setAlerts((prev) => {
       if (prev.some((x) => x.key === a.key)) return prev;
-
-      // ✅ sort: pinakamalapit na time on top (1min first)
       const next = [...prev, a].sort((x, y) => x.minutes_left - y.minutes_left);
       return next;
     });
 
-    // ✅ open modal
     setShowAlert(true);
   };
 
-  const fireAlert = (kind: AlertKind, id: string, full_name: string, seat_number: string, end_iso: string): void => {
+  const fireAlert = (
+    kind: AlertKind,
+    id: string,
+    full_name: string,
+    seat_number: string,
+    end_iso: string
+  ): void => {
     const mLeft = minutesLeftCeil(end_iso);
     if (!ALERT_MINUTES.includes(mLeft)) return;
 
@@ -205,7 +294,6 @@ const App: React.FC = () => {
   const tickCheckAll = (): void => {
     const now = Date.now();
 
-    // customer_sessions
     Array.from(sessionsRef.current.values()).forEach((s) => {
       const endIso = s.time_ended;
       if (!endIso) return;
@@ -226,7 +314,6 @@ const App: React.FC = () => {
       fireAlert(kind, s.id, s.full_name, seatText(s.seat_number), endIso);
     });
 
-    // promo_bookings (extra safety)
     Array.from(promosRef.current.values()).forEach((p) => {
       const endMs = new Date(p.end_at).getTime();
       if (!Number.isFinite(endMs) || endMs <= now) {
@@ -237,10 +324,6 @@ const App: React.FC = () => {
       const seat = p.area === "conference_room" ? "CONFERENCE ROOM" : (p.seat_number ?? "-");
       fireAlert("promo", p.id, p.full_name, seat, p.end_at);
     });
-
-    // ✅ if no alerts left, close modal
-    // (but keep open if there are still alerts)
-    // note: we DO NOT auto-close here because user may be reading.
   };
 
   const loadActiveCustomerSessions = async (): Promise<void> => {
@@ -280,9 +363,6 @@ const App: React.FC = () => {
     promosRef.current = map;
   };
 
-  /* =========================
-     STAFF-ONLY SUBSCRIPTIONS
-  ========================= */
   useEffect(() => {
     if (!isStaff) {
       setShowAlert(false);
@@ -295,7 +375,6 @@ const App: React.FC = () => {
 
     let alive = true;
 
-    // initial load + immediate check
     (async () => {
       await loadActiveCustomerSessions();
       await loadActivePromos();
@@ -366,7 +445,6 @@ const App: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ tick every 1s so we never miss 5/3/1 (even on Vercel)
     const tick = window.setInterval(() => tickCheckAll(), 1000);
 
     const refresh = (): void => {
@@ -384,21 +462,17 @@ const App: React.FC = () => {
 
     return () => {
       alive = false;
-
       window.clearInterval(tick);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVis);
-
       void supabase.removeChannel(chSessions);
       void supabase.removeChannel(chPromos);
     };
   }, [isStaff]);
 
-  // ✅ stop one alert
   const stopOne = (key: string): void => {
     setAlerts((prev) => {
       const next = prev.filter((x) => x.key !== key);
-      // if empty -> close
       if (next.length === 0) setShowAlert(false);
       return next;
     });
@@ -406,12 +480,18 @@ const App: React.FC = () => {
 
   return (
     <IonApp>
+      <AddOnCodeAlertModal
+        isOpen={showAddOnVerified}
+        detail={addOnVerifiedDetail}
+        onClose={() => setShowAddOnVerified(false)}
+      />
+
       <TimeAlertModal
         isOpen={showAlert}
         role={role}
         alerts={alerts}
         onStopOne={stopOne}
-        onClose={() => setShowAlert(false)} // just close modal UI, alerts list stays (optional)
+        onClose={() => setShowAlert(false)}
       />
 
       <IonReactRouter>
