@@ -1061,35 +1061,126 @@ const Customer_Discount_List: React.FC = () => {
   };
 
   const getOrderDue = (code: string | null): number => {
-    return round2(
-      getOrderParents(code).reduce((sum, r) => sum + round2(Math.max(0, r.total_amount)), 0)
+    const parentTotal = round2(
+      getOrderParents(code).reduce(
+        (sum, r) => sum + round2(Math.max(0, r.total_amount)),
+        0
+      )
     );
+
+    const itemsTotal = round2(
+      getOrderItems(code).reduce(
+        (sum, item) => sum + round2(Math.max(0, item.subtotal)),
+        0
+      )
+    );
+
+    if (itemsTotal > 0) return itemsTotal;
+    return parentTotal;
   };
 
-  const getOrderPaidInfo = (
+    const getOrderPaidInfo = (
+      code: string | null
+    ): { gcash: number; cash: number; totalPaid: number } => {
+      const parents = getOrderParents(code);
+      const gcash = round2(
+        parents.reduce((sum, r) => sum + round2(Math.max(0, r.gcash_amount)), 0)
+      );
+      const cash = round2(
+        parents.reduce((sum, r) => sum + round2(Math.max(0, r.cash_amount)), 0)
+      );
+      return { gcash, cash, totalPaid: round2(gcash + cash) };
+    };
+
+      const getSystemDue = (r: PromoBookingRow): number => {
+        const base = round2(Math.max(0, toNumber(r.price)));
+        return round2(
+          applyDiscount(base, r.discount_kind, r.discount_value).discountedCost
+        );
+      };
+
+      const getSystemPaidInfo = (
+        r: PromoBookingRow
+      ): { gcash: number; cash: number; totalPaid: number } => {
+        const gcash = round2(Math.max(0, toNumber(r.gcash_amount)));
+        const cash = round2(Math.max(0, toNumber(r.cash_amount)));
+        return {
+          gcash,
+          cash,
+          totalPaid: round2(gcash + cash),
+        };
+      };
+
+      const getSystemRemainingInfo = (
+        r: PromoBookingRow
+      ): { remaining: number; change: number; label: "Remaining" | "Change" } => {
+        const due = getSystemDue(r);
+        const paid = getSystemPaidInfo(r).totalPaid;
+        const diff = round2(due - paid);
+
+        if (diff > 0) {
+          return { remaining: diff, change: 0, label: "Remaining" };
+        }
+
+        return {
+          remaining: 0,
+          change: round2(Math.abs(diff)),
+          label: "Change",
+        };
+      };
+
+  const getOrderRemainingInfo = (
     code: string | null
-  ): { gcash: number; cash: number; totalPaid: number } => {
-    const parents = getOrderParents(code);
-    const gcash = round2(
-      parents.reduce((sum, r) => sum + round2(Math.max(0, r.gcash_amount)), 0)
-    );
-    const cash = round2(
-      parents.reduce((sum, r) => sum + round2(Math.max(0, r.cash_amount)), 0)
-    );
-    return { gcash, cash, totalPaid: round2(gcash + cash) };
+  ): { remaining: number; change: number; label: "Remaining" | "Change" } => {
+    const due = getOrderDue(code);
+    const paid = getOrderPaidInfo(code).totalPaid;
+    const diff = round2(due - paid);
+
+    if (diff > 0) {
+      return { remaining: diff, change: 0, label: "Remaining" };
+    }
+
+    return {
+      remaining: 0,
+      change: round2(Math.abs(diff)),
+      label: "Change",
+    };
   };
 
-  const getSystemDue = (r: PromoBookingRow): number => {
-    const base = round2(Math.max(0, toNumber(r.price)));
-    return round2(applyDiscount(base, r.discount_kind, r.discount_value).discountedCost);
+  const getGrandDue = (r: PromoBookingRow): number => {
+    return round2(getSystemDue(r) + getOrderDue(r.promo_code));
   };
 
-  const getSystemPaidInfo = (
+  const getGrandPaid = (r: PromoBookingRow): number => {
+    return round2(
+      getSystemPaidInfo(r).totalPaid + getOrderPaidInfo(r.promo_code).totalPaid
+    );
+  };
+
+  const getGrandBalanceInfo = (
     r: PromoBookingRow
-  ): { gcash: number; cash: number; totalPaid: number } => {
-    const gcash = round2(Math.max(0, toNumber(r.gcash_amount)));
-    const cash = round2(Math.max(0, toNumber(r.cash_amount)));
-    return { gcash, cash, totalPaid: round2(gcash + cash) };
+  ): {
+    remaining: number;
+    change: number;
+    label: "Overall Remaining" | "Overall Change";
+  } => {
+    const due = getGrandDue(r);
+    const paid = getGrandPaid(r);
+    const diff = round2(due - paid);
+
+    if (diff > 0) {
+      return {
+        remaining: diff,
+        change: 0,
+        label: "Overall Remaining",
+      };
+    }
+
+    return {
+      remaining: 0,
+      change: round2(Math.abs(diff)),
+      label: "Overall Change",
+    };
   };
 
   const isFinalPaidRow = (r: PromoBookingRow): boolean => {
@@ -1106,76 +1197,69 @@ const Customer_Discount_List: React.FC = () => {
     return systemOk && orderOk;
   };
 
-  const syncPromoFinalPaid = async (promoId: string): Promise<void> => {
-    const row = rows.find((r) => r.id === promoId);
-    if (!row) return;
+const syncPromoFinalPaid = async (promoId: string): Promise<void> => {
+  const row = rows.find((r) => r.id === promoId);
+  if (!row) return;
 
-    const latestOrderParents = row.promo_code ? orderParentsMap[row.promo_code] ?? [] : [];
-    const systemDue = getSystemDue(row);
-    const systemPaid = getSystemPaidInfo(row).totalPaid;
-    const systemOk = systemDue <= 0 ? true : systemPaid >= systemDue;
+  const systemDue = getSystemDue(row);
+  const systemPaid = getSystemPaidInfo(row).totalPaid;
+  const systemOk = systemDue <= 0 ? true : systemPaid >= systemDue;
 
-    const orderDue = round2(
-      latestOrderParents.reduce((sum, p) => sum + round2(Math.max(0, p.total_amount)), 0)
-    );
-    const orderPaid = round2(
-      latestOrderParents.reduce(
-        (sum, p) =>
-          sum + round2(Math.max(0, p.gcash_amount)) + round2(Math.max(0, p.cash_amount)),
-        0
-      )
-    );
+  const orderDue = getOrderDue(row.promo_code);
+  const orderPaid = getOrderPaidInfo(row.promo_code).totalPaid;
+  const hasAnyOrder = hasOrder(row.promo_code);
 
-    const finalPaid =
-      latestOrderParents.length === 0
-        ? systemOk
-        : systemOk && (orderDue <= 0 ? true : orderPaid >= orderDue);
+  const finalPaid = hasAnyOrder
+    ? systemOk && (orderDue <= 0 ? true : orderPaid >= orderDue)
+    : systemOk;
 
-    const { error } = await supabase
-      .from("promo_bookings")
-      .update({
-        is_paid: finalPaid,
-        paid_at: finalPaid ? new Date().toISOString() : null,
-      })
-      .eq("id", promoId);
+  const nextPaidAt = finalPaid ? new Date().toISOString() : null;
 
-    if (error) {
-      console.warn("syncPromoFinalPaid error:", error.message);
-      return;
-    }
+  const { error } = await supabase
+    .from("promo_bookings")
+    .update({
+      is_paid: finalPaid,
+      paid_at: nextPaidAt,
+    })
+    .eq("id", promoId);
 
-    setRows((prev) =>
-      prev.map((x) =>
-        x.id === promoId
-          ? {
-              ...x,
-              is_paid: finalPaid,
-              paid_at: finalPaid ? new Date().toISOString() : null,
-            }
-          : x
-      )
-    );
+  if (error) {
+    console.warn("syncPromoFinalPaid error:", error.message);
+    return;
+  }
 
-    setSelected((prev) =>
-      prev?.id === promoId
+  setRows((prev) =>
+    prev.map((x) =>
+      x.id === promoId
         ? {
-            ...prev,
+            ...x,
             is_paid: finalPaid,
-            paid_at: finalPaid ? new Date().toISOString() : null,
+            paid_at: nextPaidAt,
           }
-        : prev
-    );
+        : x
+    )
+  );
 
-    setSelectedOrderBooking((prev) =>
-      prev?.id === promoId
-        ? {
-            ...prev,
-            is_paid: finalPaid,
-            paid_at: finalPaid ? new Date().toISOString() : null,
-          }
-        : prev
-    );
-  };
+  setSelected((prev) =>
+    prev?.id === promoId
+      ? {
+          ...prev,
+          is_paid: finalPaid,
+          paid_at: nextPaidAt,
+        }
+      : prev
+  );
+
+  setSelectedOrderBooking((prev) =>
+    prev?.id === promoId
+      ? {
+          ...prev,
+          is_paid: finalPaid,
+          paid_at: nextPaidAt,
+        }
+      : prev
+  );
+};
 
   const recalcAddonParentAfterDelete = async (parentOrderId: string): Promise<void> => {
     const { data: remainingItems, error: remErr } = await supabase
@@ -1622,6 +1706,8 @@ const Customer_Discount_List: React.FC = () => {
       }));
 
       setOrderPaymentTarget(null);
+
+      await fetchOrdersForPromoCodes(rows.map((r) => String(r.promo_code ?? "")));
       await syncPromoFinalPaid(orderPaymentTarget.id);
     } catch (e) {
       console.error(e);
@@ -2146,16 +2232,12 @@ const Customer_Discount_List: React.FC = () => {
 
                     const systemDue = getSystemDue(r);
                     const systemPi = getSystemPaidInfo(r);
-                    const systemRemainingSigned = round2(systemDue - systemPi.totalPaid);
-                    const systemIsChange = systemRemainingSigned < 0;
-                    const systemRemainingAbs = round2(Math.abs(systemRemainingSigned));
+                    const systemBalance = getSystemRemainingInfo(r);
 
                     const orderItems = getOrderItems(r.promo_code);
                     const orderDue = getOrderDue(r.promo_code);
                     const orderPi = getOrderPaidInfo(r.promo_code);
-                    const orderRemainingSigned = round2(orderDue - orderPi.totalPaid);
-                    const orderIsChange = orderRemainingSigned < 0;
-                    const orderRemainingAbs = round2(Math.abs(orderRemainingSigned));
+                    const orderBalance = getOrderRemainingInfo(r.promo_code);
 
                     const last = lastLogFor(r.id);
                     const lastState = last ? attStatus(last) : null;
@@ -2237,8 +2319,11 @@ const Customer_Discount_List: React.FC = () => {
                               GCash ₱{systemPi.gcash.toFixed(2)} / Cash ₱{systemPi.cash.toFixed(2)}
                             </span>
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              {systemIsChange ? "Change" : "Remaining"} ₱
-                              {systemRemainingAbs.toFixed(2)}
+                              {systemBalance.label} ₱
+                              {(systemBalance.label === "Remaining"
+                                ? systemBalance.remaining
+                                : systemBalance.change
+                              ).toFixed(2)}
                             </span>
                             <button
                               className="receipt-btn"
@@ -2258,8 +2343,11 @@ const Customer_Discount_List: React.FC = () => {
                                 GCash ₱{orderPi.gcash.toFixed(2)} / Cash ₱{orderPi.cash.toFixed(2)}
                               </span>
                               <span style={{ fontSize: 12, opacity: 0.85 }}>
-                                {orderIsChange ? "Change" : "Remaining"} ₱
-                                {orderRemainingAbs.toFixed(2)}
+                              {orderBalance.label} ₱
+                              {(orderBalance.label === "Remaining"
+                                ? orderBalance.remaining
+                                : orderBalance.change
+                              ).toFixed(2)}
                               </span>
                               <button
                                 className="receipt-btn"
@@ -2366,31 +2454,36 @@ const Customer_Discount_List: React.FC = () => {
                   <span>{seatLabel(selectedOrderBooking)}</span>
                 </div>
 
-                <div className="receipt-row">
-                  <span>Order Total</span>
-                  <span>₱{getOrderDue(selectedOrderBooking.promo_code).toFixed(2)}</span>
-                </div>
+              {(() => {
+                const orderDue = getOrderDue(selectedOrderBooking.promo_code);
+                const orderPaid = getOrderPaidInfo(selectedOrderBooking.promo_code);
+                const orderBalance = getOrderRemainingInfo(selectedOrderBooking.promo_code);
 
-                <div className="receipt-row">
-                  <span>Order Paid</span>
-                  <span>
-                    ₱{getOrderPaidInfo(selectedOrderBooking.promo_code).totalPaid.toFixed(2)}
-                  </span>
-                </div>
+                return (
+                  <>
+                    <div className="receipt-row">
+                      <span>Order Total</span>
+                      <span>₱{orderDue.toFixed(2)}</span>
+                    </div>
 
-                <div className="receipt-row">
-                  <span>Order Remaining</span>
-                  <span>
-                    ₱
-                    {Math.abs(
-                      round2(
-                        getOrderDue(selectedOrderBooking.promo_code) -
-                          getOrderPaidInfo(selectedOrderBooking.promo_code).totalPaid
-                      )
-                    ).toFixed(2)}
-                  </span>
-                </div>
+                    <div className="receipt-row">
+                      <span>Total Paid</span>
+                      <span>₱{orderPaid.totalPaid.toFixed(2)}</span>
+                    </div>
 
+                    <div className="receipt-row">
+                      <span>{orderBalance.label}</span>
+                      <span>
+                        ₱
+                        {(orderBalance.label === "Remaining"
+                          ? orderBalance.remaining
+                          : orderBalance.change
+                        ).toFixed(2)}
+                      </span>
+                    </div>
+                  </>
+                );
+              })()}
                 <hr />
 
                 {getOrderItems(selectedOrderBooking.promo_code).length === 0 ? (
@@ -2860,102 +2953,109 @@ const Customer_Discount_List: React.FC = () => {
 
                 <hr />
 
-                {(() => {
-                  const due = getOrderDue(orderPaymentTarget.promo_code);
-                  const g = moneyFromStr(orderGcashInput);
-                  const c = moneyFromStr(orderCashInput);
-                  const totalPaid = round2(g + c);
+              {(() => {
+                const due = getOrderDue(orderPaymentTarget.promo_code);
+                const currentPaid = getOrderPaidInfo(orderPaymentTarget.promo_code);
 
-                  const remainingSigned = round2(due - totalPaid);
-                  const isChange = remainingSigned < 0;
-                  const remainingAbs = round2(Math.abs(remainingSigned));
+                const g = moneyFromStr(orderGcashInput);
+                const c = moneyFromStr(orderCashInput);
+                const totalPaid = round2(g + c);
 
-                  const willOrderPaid = due <= 0 ? true : totalPaid >= due;
-                  const systemOk = (() => {
-                    const sd = getSystemDue(orderPaymentTarget);
-                    const sp = getSystemPaidInfo(orderPaymentTarget).totalPaid;
-                    return sd <= 0 ? true : sp >= sd;
-                  })();
+                const remainingSigned = round2(due - totalPaid);
+                const isChange = remainingSigned < 0;
+                const remainingAbs = round2(Math.abs(remainingSigned));
 
-                  const finalAutoPaid = systemOk && willOrderPaid;
+                const willOrderPaid = due <= 0 ? true : totalPaid >= due;
+                const systemOk = (() => {
+                  const sd = getSystemDue(orderPaymentTarget);
+                  const sp = getSystemPaidInfo(orderPaymentTarget).totalPaid;
+                  return sd <= 0 ? true : sp >= sd;
+                })();
 
-                  return (
-                    <>
-                      <div className="receipt-row">
-                        <span>Order Due</span>
-                        <span>₱{due.toFixed(2)}</span>
-                      </div>
+                const finalAutoPaid = systemOk && willOrderPaid;
 
-                      <div className="receipt-row">
-                        <span>GCash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={orderGcashInput}
-                          onChange={(e) => setOrderGcashInput(e.currentTarget.value)}
-                        />
-                      </div>
+                return (
+                  <>
+                    <div className="receipt-row">
+                      <span>Order Due</span>
+                      <span>₱{due.toFixed(2)}</span>
+                    </div>
 
-                      <div className="receipt-row">
-                        <span>Cash</span>
-                        <input
-                          className="money-input"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={orderCashInput}
-                          onChange={(e) => setOrderCashInput(e.currentTarget.value)}
-                        />
-                      </div>
+                    <div className="receipt-row">
+                      <span>GCash</span>
+                      <input
+                        className="money-input"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={orderGcashInput}
+                        onChange={(e) => setOrderGcashInput(e.currentTarget.value)}
+                      />
+                    </div>
 
-                      <hr />
+                    <div className="receipt-row">
+                      <span>Cash</span>
+                      <input
+                        className="money-input"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={orderCashInput}
+                        onChange={(e) => setOrderCashInput(e.currentTarget.value)}
+                      />
+                    </div>
 
-                      <div className="receipt-row">
-                        <span>Total Paid</span>
-                        <span>₱{totalPaid.toFixed(2)}</span>
-                      </div>
+                    <hr />
 
-                      <div className="receipt-row">
-                        <span>{isChange ? "Change" : "Remaining"}</span>
-                        <span>₱{remainingAbs.toFixed(2)}</span>
-                      </div>
+                    <div className="receipt-row">
+                      <span>Current Saved Paid</span>
+                      <span>₱{currentPaid.totalPaid.toFixed(2)}</span>
+                    </div>
 
-                      <div className="receipt-row">
-                        <span>Order Paid</span>
-                        <span className="receipt-status">
-                          {willOrderPaid ? "YES" : "NO"}
-                        </span>
-                      </div>
+                    <div className="receipt-row">
+                      <span>Total Paid</span>
+                      <span>₱{totalPaid.toFixed(2)}</span>
+                    </div>
 
-                      <div className="receipt-row">
-                        <span>Final Promo Paid</span>
-                        <span className="receipt-status">
-                          {finalAutoPaid ? "PAID" : "UNPAID"}
-                        </span>
-                      </div>
+                    <div className="receipt-row">
+                      <span>{isChange ? "Change" : "Remaining"}</span>
+                      <span>₱{remainingAbs.toFixed(2)}</span>
+                    </div>
 
-                      <div className="modal-actions">
-                        <button
-                          className="receipt-btn"
-                          onClick={() => setOrderPaymentTarget(null)}
-                          type="button"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          className="receipt-btn"
-                          onClick={() => void saveOrderPayment()}
-                          disabled={savingOrderPayment}
-                          type="button"
-                        >
-                          {savingOrderPayment ? "Saving..." : "Save"}
-                        </button>
-                      </div>
-                    </>
-                  );
-                })()}
+                    <div className="receipt-row">
+                      <span>Order Paid</span>
+                      <span className="receipt-status">
+                        {willOrderPaid ? "YES" : "NO"}
+                      </span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Final Promo Paid</span>
+                      <span className="receipt-status">
+                        {finalAutoPaid ? "PAID" : "UNPAID"}
+                      </span>
+                    </div>
+
+                    <div className="modal-actions">
+                      <button
+                        className="receipt-btn"
+                        onClick={() => setOrderPaymentTarget(null)}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="receipt-btn"
+                        onClick={() => void saveOrderPayment()}
+                        disabled={savingOrderPayment}
+                        type="button"
+                      >
+                        {savingOrderPayment ? "Saving..." : "Save"}
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
               </div>
             </div>
           )}
@@ -3283,10 +3383,8 @@ const Customer_Discount_List: React.FC = () => {
                   const showOrderSection = hasOrder(selected.promo_code);
                   const orderDue = getOrderDue(selected.promo_code);
                   const orderPi = getOrderPaidInfo(selected.promo_code);
-                  const orderRemainingSigned = round2(orderDue - orderPi.totalPaid);
-                  const orderIsChange = orderRemainingSigned < 0;
-                  const orderRemainingAbs = round2(Math.abs(orderRemainingSigned));
 
+                  const orderBalance = getOrderRemainingInfo(selected.promo_code);
                   const finalPaid = toBool(selected.is_paid);
 
                   return (
@@ -3440,33 +3538,61 @@ const Customer_Discount_List: React.FC = () => {
                             <span>₱{orderPi.totalPaid.toFixed(2)}</span>
                           </div>
 
-                          <div className="receipt-row">
-                            <span>{orderIsChange ? "Change" : "Remaining"}</span>
-                            <span>₱{orderRemainingAbs.toFixed(2)}</span>
-                          </div>
+                        <div className="receipt-row">
+                          <span>{orderBalance.label}</span>
+                          <span>
+                            ₱
+                            {(orderBalance.label === "Remaining"
+                              ? orderBalance.remaining
+                              : orderBalance.change
+                            ).toFixed(2)}
+                          </span>
+                        </div>
                         </>
                       ) : null}
 
                       <hr />
 
-                      <div className="receipt-row">
-                        <span>Paid Status</span>
-                        <span className="receipt-status">
-                          {finalPaid ? "PAID" : "UNPAID"}
-                        </span>
-                      </div>
+                  <div className="receipt-row">
+                    <span>Paid Status</span>
+                    <span className="receipt-status">
+                      {finalPaid ? "PAID" : "UNPAID"}
+                    </span>
+                  </div>
 
-                      <div className="receipt-total">
-                        <span>TOTAL SYSTEM COST</span>
-                        <span>₱{systemDue.toFixed(2)}</span>
-                      </div>
+                  <div className="receipt-total">
+                    <span>TOTAL SYSTEM COST</span>
+                    <span>₱{systemDue.toFixed(2)}</span>
+                  </div>
 
-                      {showOrderSection ? (
-                        <div className="receipt-total" style={{ marginTop: 8 }}>
-                          <span>TOTAL ORDER</span>
-                          <span>₱{orderDue.toFixed(2)}</span>
-                        </div>
-                      ) : null}
+                  <div className="receipt-total" style={{ marginTop: 8 }}>
+                    <span>TOTAL ORDER</span>
+                    <span>₱{orderDue.toFixed(2)}</span>
+                  </div>
+
+                  <hr />
+
+                  <div className="receipt-row">
+                    <span>Overall Paid</span>
+                    <span>₱{getGrandPaid(selected).toFixed(2)}</span>
+                  </div>
+
+                  <div className="receipt-row">
+                    <span>{getGrandBalanceInfo(selected).label}</span>
+                    <span>
+                      ₱
+                      {(
+                        getGrandBalanceInfo(selected).label === "Overall Remaining"
+                          ? getGrandBalanceInfo(selected).remaining
+                          : getGrandBalanceInfo(selected).change
+                      ).toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="receipt-total" style={{ marginTop: 8 }}>
+                    <span>GRAND TOTAL</span>
+                    <span>₱{getGrandDue(selected).toFixed(2)}</span>
+                  </div>
                     </>
                   );
                 })()}

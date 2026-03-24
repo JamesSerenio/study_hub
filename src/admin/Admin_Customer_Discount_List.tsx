@@ -1342,7 +1342,12 @@ const Admin_Customer_Discount_List: React.FC = () => {
           ) : filteredRows.length === 0 ? (
             <p className="customer-note">No promo records found for this filter/range</p>
           ) : (
-            <div className="customer-table-wrap" key={`${rangeMode}-${activeRange.startIso}-${areaFilter}-${commonDurationFilter}-${conferenceDurationFilter}`}>
+            <div className="customer-table-wrap" key={`${rangeMode}-${activeRange.startIso}-${areaFilter}-${commonDurationFilter}-${conferenceDurationFilter}`}
+              style={{
+                maxHeight: "500px",
+                overflowY: "auto",
+                overflowX: "auto",
+              }}>
               <table className="customer-table">
                 <thead>
                   <tr>
