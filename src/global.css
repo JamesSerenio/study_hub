@@ -21,9 +21,41 @@ ion-item {
 
 /* ✅ Make the whole staff page fill viewport */
 .staff-shell-page {
-  min-height: 100vh; /* was height: 100% */
+  --menu-expanded-width: 280px;
+  --menu-collapsed-width: 88px;
+}
+.staff-shell-page.sidebar-collapsed {
+  --menu-expanded-width: var(--menu-collapsed-width);
+}
+.staff-split-pane {
+  --side-width: 280px;
+  --side-min-width: 280px;
+  --border: 0;
+  width: 100%;
+  height: 100%;
 }
 
+.staff-split-pane.is-collapsed {
+  --side-width: 88px;
+  --side-min-width: 88px;
+}
+
+/* mahalaga para ma-consume yung white space */
+.staff-split-pane::part(container) {
+  width: 100%;
+  height: 100%;
+}
+
+.staff-main-shell {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  background: transparent;
+}
+
+.staff-main-shell.expanded {
+  width: 100%;
+}
 /* Main content must stretch */
 .staff-main-shell {
   width: 100%;
@@ -329,8 +361,95 @@ ion-content,
 
 
 /* =========================
-   STAFF MENU (NO SCROLL)
+   ROOT / PAGE / SPLITPANE
 ========================= */
+
+.staff-shell-page {
+  --menu-expanded-width: 280px;
+  --menu-collapsed-width: 88px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.staff-shell-page.sidebar-collapsed {
+  --menu-expanded-width: var(--menu-collapsed-width);
+}
+
+.staff-split-pane {
+  --side-width: var(--menu-expanded-width);
+  --side-min-width: var(--menu-expanded-width);
+  --border: 0 !important;
+  width: 100%;
+  height: 100%;
+}
+
+.staff-split-pane.is-collapsed {
+  --side-width: var(--menu-collapsed-width);
+  --side-min-width: var(--menu-collapsed-width);
+}
+
+ion-split-pane {
+  --border: 0 !important;
+}
+
+ion-split-pane::part(container) {
+  width: 100%;
+  height: 100%;
+}
+
+ion-split-pane > ion-menu {
+  flex: 0 0 auto;
+}
+
+ion-split-pane > #main {
+  flex: 1 1 0%;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* =========================
+   SIDEBAR
+========================= */
+
+.staff-menu {
+  width: var(--menu-expanded-width) !important;
+  min-width: var(--menu-expanded-width) !important;
+  max-width: var(--menu-expanded-width) !important;
+  transition:
+    width 0.28s ease,
+    min-width 0.28s ease,
+    max-width 0.28s ease;
+  overflow: hidden;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: none;
+}
+
+.staff-menu::part(container) {
+  width: var(--menu-expanded-width) !important;
+  min-width: var(--menu-expanded-width) !important;
+  max-width: var(--menu-expanded-width) !important;
+  transition:
+    width 0.28s ease,
+    min-width 0.28s ease,
+    max-width 0.28s ease;
+  overflow: hidden;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: none;
+}
+
+.staff-menu.collapsed {
+  width: var(--menu-collapsed-width) !important;
+  min-width: var(--menu-collapsed-width) !important;
+  max-width: var(--menu-collapsed-width) !important;
+}
+
+.staff-menu.collapsed::part(container) {
+  width: var(--menu-collapsed-width) !important;
+  min-width: var(--menu-collapsed-width) !important;
+  max-width: var(--menu-collapsed-width) !important;
+}
 
 .staff-menu ion-content {
   --background: hsla(175, 5%, 98%, 1);
@@ -338,10 +457,11 @@ ion-content,
   overflow-x: hidden;
 }
 
-/* ✅ main container to prevent scroll caused by absolute elements */
+/* main container to prevent scroll caused by absolute elements */
 .staff-menu-content {
   position: relative;
-  overflow: hidden; /* ✅ prevents scrollbars */
+  overflow: hidden;
+  height: 100%;
 }
 
 /* =========================
@@ -353,23 +473,20 @@ ion-content,
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  overflow: hidden; /* ✅ extra safety */
+  overflow: hidden;
 }
 
-/* each flower */
 .menu-flower {
   position: absolute;
   pointer-events: none;
   user-select: none;
-
-  /* ✅ soft look like your sample */
   filter: blur(0.2px);
 }
 
-/* ✅ ensure items are above flowers */
 .menu-items-layer {
   position: relative;
   z-index: 2;
+  padding-bottom: 92px;
 }
 
 /* =========================
@@ -384,15 +501,59 @@ ion-content,
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: clamp(10px, 3vw, 16px);
+  padding: 12px 10px;
+  min-height: 68px;
   max-width: 100%;
+  transition: all 0.28s ease;
+}
+
+.menu-brand.collapsed {
+  justify-content: center;
+  padding: 12px 6px;
+  gap: 0;
+}
+
+.sidebar-toggle-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  outline: none;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(8px);
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.25s ease;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+.sidebar-toggle-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.sidebar-toggle-btn span {
+  display: block;
+  width: 18px;
+  height: 2.5px;
+  border-radius: 999px;
+  background: #56a28e;
 }
 
 .menu-logo {
-  width: clamp(24px, 6vw, 28px);
-  height: clamp(24px, 6vw, 28px);
+  width: 28px;
+  height: 28px;
   object-fit: contain;
   flex-shrink: 0;
+}
+
+.staff-menu.collapsed .menu-logo {
+  display: none;
 }
 
 .menu-title-text {
@@ -404,20 +565,20 @@ ion-content,
 .figma-title {
   font-family: "Porter Sans Block", sans-serif;
   font-weight: 400;
-
-  font-size: clamp(14px, 3.6vw, 16px);
+  font-size: 16px;
   line-height: 1.35;
-
   letter-spacing: 0.01em;
   text-transform: uppercase;
   color: #000;
-
   text-shadow:
     1px 1px 0 #bfbfbf,
     2px 2px 0 #9f9f9f,
     3px 3px 0 #7f7f7f;
-
   -webkit-text-stroke: 0.3px #000;
+}
+
+.staff-menu.collapsed .menu-title-text {
+  display: none;
 }
 
 /* =========================
@@ -426,24 +587,29 @@ ion-content,
 
 .menu-item {
   --background: transparent;
-  margin: 6px clamp(8px, 3vw, 12px);
+  margin: 6px 12px;
   border-radius: 14px;
-
   font-weight: 600;
   color: #56a28e;
-
   display: flex;
   align-items: center;
-
   min-height: 46px;
   max-width: 100%;
+  transition: all 0.25s ease;
+}
+
+.menu-item::part(native) {
+  border-radius: 14px;
+  padding-left: 14px;
+  padding-right: 14px;
 }
 
 .menu-icon {
-  width: clamp(20px, 5vw, 22px);
-  height: clamp(20px, 5vw, 22px);
+  width: 22px;
+  height: 22px;
   margin-right: 12px;
   flex-shrink: 0;
+  transition: margin 0.25s ease;
 }
 
 .menu-text {
@@ -476,48 +642,172 @@ ion-content,
   color: #000;
 }
 
+/* collapsed item */
+.menu-item-collapsed {
+  margin: 8px 10px;
+}
+
+.menu-item-collapsed::part(native) {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  justify-content: center;
+}
+
+.menu-item-collapsed .menu-icon {
+  margin-right: 0;
+}
+
+.menu-item-collapsed.active {
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.staff-menu.collapsed .menu-text {
+  display: none;
+}
+
 /* =========================
    LOGOUT BUTTON
 ========================= */
 
 .logout-btn {
   position: fixed;
-  bottom: clamp(12px, 3vw, 20px);
-  right: clamp(12px, 3vw, 20px);
-
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
   border-radius: 14px;
-
   --background: #56a28e;
   --background-hover: #4b927f;
   --color: #ffffff;
-
   padding: 8px 14px;
-  font-size: clamp(13px, 3.4vw, 14px);
+  font-size: 14px;
   font-weight: 500;
-
-  width: fit-content;
-  max-width: calc(100vw - 32px);
   white-space: nowrap;
-
   z-index: 999;
 }
 
+.logout-btn::part(native) {
+  width: 100%;
+}
+
+.logout-btn-collapsed {
+  left: 10px;
+  right: 10px;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  --padding-start: 0;
+  --padding-end: 0;
+}
+
+.logout-btn-collapsed::part(native) {
+  width: 100%;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.staff-menu.collapsed .logout-btn .button-inner {
+  justify-content: center;
+}
+
+/* =========================
+   MAIN AREA / REMOVE WHITE GAP
+========================= */
+
+.staff-main-shell {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  background: transparent;
+  transition: width 0.28s ease;
+}
+
+.staff-main-shell.expanded {
+  width: 100%;
+}
+
+/* para hindi magmukhang may white strip */
+.staff-shell-page,
+.staff-shell-page ion-split-pane,
+.staff-main-shell {
+  background: transparent;
+}
+
+/* =========================
+   OPTIONAL: smoother text hide
+========================= */
+
+.staff-menu.collapsed .menu-title-text,
+.staff-menu.collapsed .menu-text {
+  display: none;
+}
 
 /* =========================
    PAGE WRAP
-   NOTE: background comes from .staff-content (same as seat map page)
+   background comes from your content page
 ========================= */
-.customer-lists-container{
+
+.customer-lists-container {
   height: 100%;
   min-height: 100%;
   box-sizing: border-box;
   padding: clamp(12px, 3vw, 20px);
   background: transparent !important;
-
   will-change: transform, opacity;
-  transform: translate3d(0,0,0);
-
+  transform: translate3d(0, 0, 0);
   animation: fadeUpSmooth var(--dur-slow) var(--ease-out) both;
+}
+
+/* =========================
+   MOBILE SAFETY
+========================= */
+
+@media (max-width: 767px) {
+  .staff-shell-page {
+    --menu-expanded-width: 285px;
+    --menu-collapsed-width: 285px;
+  }
+
+  .staff-menu,
+  .staff-menu::part(container),
+  .staff-menu.collapsed,
+  .staff-menu.collapsed::part(container) {
+    width: 285px !important;
+    min-width: 285px !important;
+    max-width: 285px !important;
+  }
+
+  .staff-menu.collapsed .menu-title-text,
+  .staff-menu.collapsed .menu-text {
+    display: inline-block;
+  }
+
+  .staff-menu.collapsed .menu-logo {
+    display: block;
+  }
+
+  .menu-brand.collapsed {
+    justify-content: flex-start;
+    padding: 12px 10px;
+    gap: 10px;
+  }
+
+  .staff-menu.collapsed .menu-item-collapsed::part(native) {
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+    justify-content: flex-start;
+  }
+
+  .staff-menu.collapsed .menu-item-collapsed .menu-icon {
+    margin-right: 12px;
+  }
+
+  .staff-menu.collapsed .logout-btn-collapsed {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    min-width: unset;
+    height: auto;
+  }
 }
 
 /* =========================
@@ -2192,6 +2482,8 @@ ion-modal.booking-modal {
   color: rgba(31, 41, 55, 0.92);
 }
 
+
+
 /* hover */
 .booking-modal ion-datetime-button::part(native):hover {
   border-color: rgba(0, 0, 0, 0.16);
@@ -3196,7 +3488,7 @@ ion-modal.booking-modal {
 /* 🧸 Bear - FRONT (tabon sa seat img / card edge) */
 .seatmap-bear-outside {
   position: absolute;
-  left: clamp(-243px, -22vw, -120px);
+  left: clamp(-265px, -22vw, -120px);
   bottom: clamp(350px, 12vh, 170px);
   width: clamp(110px, 18vw, 300px);
   height: auto;
@@ -3209,7 +3501,7 @@ ion-modal.booking-modal {
 /* 🌿 Grass - right side (behind bear, but visible) */
 .seatmap-grass-outside {
   position: absolute;
-  right: clamp(-200px, -24vw, -130px);
+  right: clamp(-217px, -24vw, -130px);
   top: clamp(-140px, -12vh, 10px);
   width: clamp(300px, 20vw, 330px);
   height: auto;
@@ -5735,6 +6027,15 @@ ion-content.aao-content{
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.restock-search-inline {
+  width: min(100%, 420px);
+}
+
+.restock-search-inline .customer-searchbar-inner {
+  width: 100%;
+  max-width: 420px;
 }
 
 /* =========================

@@ -1,4 +1,3 @@
-// src/pages/Staff_menu.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   IonButtons,
@@ -21,11 +20,6 @@ import { motion, AnimatePresence } from "framer-motion";
 
 /* ✅ supabase */
 import { supabase } from "../utils/supabaseClient";
-import type {
-  RealtimePostgresInsertPayload,
-  RealtimePostgresUpdatePayload,
-  RealtimePostgresDeletePayload,
-} from "@supabase/supabase-js";
 
 /* pages */
 import Staff_Dashboard from "./Staff_Dashboard";
@@ -39,8 +33,6 @@ import Staff_Sales_Report from "./staff_sales_report";
 import Customer_Cancelled from "./Customer_Cancelled";
 import Staff_Consignment from "./Staff_Consignment";
 import Staff_Consignment_Record from "./Staff_Consignment_Record";
-
-/* ✅ NEW: customer consignment record page */
 import Customer_Consignment_Record from "./Customer_Consignment_Record";
 
 /* assets */
@@ -72,19 +64,14 @@ type FlowerStatic = {
 type AddOnNotifRow = {
   id: string;
   created_at: string;
-
   add_on_row_id: string;
-
   full_name: string;
   seat_number: string;
-
   add_on_id: string;
   add_on_name: string;
-
   quantity: number;
   price: number;
   total: number;
-
   is_read: boolean;
   read_at: string | null;
 };
@@ -92,19 +79,14 @@ type AddOnNotifRow = {
 type ConsignmentNotifRow = {
   id: string;
   created_at: string;
-
   consignment_row_id: string;
-
   full_name: string;
   seat_number: string;
-
   consignment_id: string;
   consignment_name: string;
-
   quantity: number;
   price: number;
   total: number;
-
   is_read: boolean;
   read_at: string | null;
 };
@@ -123,18 +105,27 @@ type UnifiedNotif = {
   read_at: string | null;
 };
 
+type RealtimeInsertPayload<T> = {
+  new: T;
+};
+
+type RealtimeUpdatePayload<T> = {
+  new: T;
+  old: Partial<T>;
+};
+
 const toMoney = (v: unknown): number => {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
 };
 
-const sleep = (msV: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, msV));
+const sleep = (msV: number): Promise<void> =>
+  new Promise((resolve) => window.setTimeout(resolve, msV));
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState("dashboard");
-
-  /* ✅ first-load layout fix */
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
   const [boot, setBoot] = useState(false);
 
   /* =========================
@@ -150,17 +141,14 @@ const Staff_menu: React.FC = () => {
   const [notifItems, setNotifItems] = useState<UnifiedNotif[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
-  // refs
   const bellWrapRef = useRef<HTMLDivElement | null>(null);
   const bellBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // popover position
   const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>({
     top: 64,
     right: 12,
   });
 
-  // ✅ keep ref synced for realtime callbacks
   useEffect(() => {
     notifOpenRef.current = notifOpen;
   }, [notifOpen]);
@@ -209,8 +197,14 @@ const Staff_menu: React.FC = () => {
 
   const fetchUnreadCount = async (): Promise<number> => {
     const [a, c] = await Promise.all([
-      supabase.from(ADDON_NOTIF_TABLE).select("id", { count: "exact", head: true }).eq("is_read", false),
-      supabase.from(CONSIGNMENT_NOTIF_TABLE).select("id", { count: "exact", head: true }).eq("is_read", false),
+      supabase
+        .from(ADDON_NOTIF_TABLE)
+        .select("id", { count: "exact", head: true })
+        .eq("is_read", false),
+      supabase
+        .from(CONSIGNMENT_NOTIF_TABLE)
+        .select("id", { count: "exact", head: true })
+        .eq("is_read", false),
     ]);
 
     const aCount = a.error ? 0 : Number(a.count ?? 0);
@@ -227,7 +221,9 @@ const Staff_menu: React.FC = () => {
     const [a, c] = await Promise.all([
       supabase
         .from(ADDON_NOTIF_TABLE)
-        .select("id, created_at, add_on_row_id, full_name, seat_number, add_on_id, add_on_name, quantity, price, total, is_read, read_at")
+        .select(
+          "id, created_at, add_on_row_id, full_name, seat_number, add_on_id, add_on_name, quantity, price, total, is_read, read_at"
+        )
         .order("created_at", { ascending: false })
         .limit(30),
       supabase
@@ -241,18 +237,12 @@ const Staff_menu: React.FC = () => {
 
     setNotifLoading(false);
 
-    if (a.error) {
-      // eslint-disable-next-line no-console
-      console.warn("fetch addon notifications:", a.error.message);
-    }
-    if (c.error) {
-      // eslint-disable-next-line no-console
-      console.warn("fetch consignment notifications:", c.error.message);
-    }
+    if (a.error) console.warn("fetch addon notifications:", a.error.message);
+    if (c.error) console.warn("fetch consignment notifications:", c.error.message);
 
     const merged = [
-      ...(((a.data as AddOnNotifRow[]) ?? []).map(mapAddOnToUnified)),
-      ...(((c.data as ConsignmentNotifRow[]) ?? []).map(mapConsignmentToUnified)),
+      ...(((a.data as AddOnNotifRow[] | null) ?? []).map(mapAddOnToUnified)),
+      ...(((c.data as ConsignmentNotifRow[] | null) ?? []).map(mapConsignmentToUnified)),
     ]
       .sort((x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime())
       .slice(0, 30);
@@ -261,13 +251,15 @@ const Staff_menu: React.FC = () => {
   };
 
   /* =========================
-      ✅ REALTIME refresh (debounced)
+      ✅ REALTIME refresh
   ========================= */
   const refreshTimerRef = useRef<number | null>(null);
   const suspendRefreshRef = useRef<boolean>(false);
 
   const cancelScheduledRefresh = (): void => {
-    if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
     refreshTimerRef.current = null;
   };
 
@@ -281,33 +273,38 @@ const Staff_menu: React.FC = () => {
     }, delayMs);
   };
 
-  /* =========================
-      ✅ AUTO-READ on open (BOTH TABLES)
-  ========================= */
   const markAllAsReadSilent = async (): Promise<void> => {
     cancelScheduledRefresh();
     suspendRefreshRef.current = true;
-
-    // instant hide badge
     setUnreadCount(0);
 
     const nowIso = new Date().toISOString();
 
     const [a, c] = await Promise.all([
-      supabase.from(ADDON_NOTIF_TABLE).update({ is_read: true, read_at: nowIso }).eq("is_read", false),
-      supabase.from(CONSIGNMENT_NOTIF_TABLE).update({ is_read: true, read_at: nowIso }).eq("is_read", false),
+      supabase
+        .from(ADDON_NOTIF_TABLE)
+        .update({ is_read: true, read_at: nowIso })
+        .eq("is_read", false),
+      supabase
+        .from(CONSIGNMENT_NOTIF_TABLE)
+        .update({ is_read: true, read_at: nowIso })
+        .eq("is_read", false),
     ]);
 
     if (a.error || c.error) {
-      // eslint-disable-next-line no-console
       console.warn("markAllAsReadSilent:", a.error?.message ?? "", c.error?.message ?? "");
       suspendRefreshRef.current = false;
       await fetchUnreadCount();
       return;
     }
 
-    // update UI list too
-    setNotifItems((prev) => prev.map((n) => ({ ...n, is_read: true, read_at: nowIso })));
+    setNotifItems((prev) =>
+      prev.map((n) => ({
+        ...n,
+        is_read: true,
+        read_at: nowIso,
+      }))
+    );
 
     await sleep(180);
     await fetchUnreadCount();
@@ -327,21 +324,24 @@ const Staff_menu: React.FC = () => {
   const openBell = async (): Promise<void> => {
     computePopoverPosition();
     setNotifOpen(true);
-
     await fetchNotifications();
     await markAllAsReadSilent();
 
-    if (notifOpenRef.current) await fetchNotifications();
+    if (notifOpenRef.current) {
+      await fetchNotifications();
+    }
   };
 
   const closeBell = (): void => setNotifOpen(false);
 
   const toggleBell = async (): Promise<void> => {
-    if (notifOpen) closeBell();
-    else await openBell();
+    if (notifOpen) {
+      closeBell();
+    } else {
+      await openBell();
+    }
   };
 
-  /* ✅ close dropdown on outside click */
   useEffect(() => {
     const onDocClick = (e: MouseEvent): void => {
       if (!notifOpenRef.current) return;
@@ -354,17 +354,15 @@ const Staff_menu: React.FC = () => {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  /* ✅ reposition on resize */
   useEffect(() => {
     const onResize = (): void => {
       if (notifOpenRef.current) computePopoverPosition();
     };
+
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ✅ REALTIME SUBSCRIBE ONCE (BOTH TABLES) */
   useEffect(() => {
     void fetchUnreadCount();
     void fetchNotifications();
@@ -372,36 +370,38 @@ const Staff_menu: React.FC = () => {
     const ch = supabase
       .channel("realtime_notifications_all")
 
-      // ---------- ADD-ONS ----------
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: ADDON_NOTIF_TABLE },
-        (payload: RealtimePostgresInsertPayload<AddOnNotifRow>) => {
-          const newRow = payload.new;
-          const u = mapAddOnToUnified(newRow);
+        (payload: unknown) => {
+          const row = (payload as RealtimeInsertPayload<AddOnNotifRow>).new;
+          const u = mapAddOnToUnified(row);
 
           setNotifItems((prev) => {
             if (prev.some((x) => x.id === u.id && x.kind === "addon")) return prev;
-            const merged = [u, ...prev].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            const merged = [u, ...prev].sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
             return merged.slice(0, 30);
           });
 
           if (notifOpenRef.current) {
             void markAllAsReadSilent();
-          } else {
-            if (!u.is_read) setUnreadCount((c) => c + 1);
+          } else if (!u.is_read) {
+            setUnreadCount((c) => c + 1);
           }
 
           scheduleRecount(600);
         }
       )
+
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: ADDON_NOTIF_TABLE },
-        (payload: RealtimePostgresUpdatePayload<AddOnNotifRow>) => {
-          const newRow = payload.new;
-          const oldRow = payload.old;
-
+        (payload: unknown) => {
+          const p = payload as RealtimeUpdatePayload<AddOnNotifRow>;
+          const newRow = p.new;
+          const oldRow = p.old;
           const u = mapAddOnToUnified(newRow);
 
           setNotifItems((prev) => {
@@ -413,7 +413,7 @@ const Staff_menu: React.FC = () => {
           });
 
           if (!notifOpenRef.current) {
-            const wasUnread = oldRow ? !(oldRow as Partial<AddOnNotifRow>).is_read : null;
+            const wasUnread = oldRow.is_read === undefined ? null : !oldRow.is_read;
             const isUnreadNow = !u.is_read;
 
             if (wasUnread === true && isUnreadNow === false) {
@@ -426,45 +426,47 @@ const Staff_menu: React.FC = () => {
           }
         }
       )
+
       .on(
         "postgres_changes",
         { event: "DELETE", schema: "public", table: ADDON_NOTIF_TABLE },
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        (_payload: RealtimePostgresDeletePayload<AddOnNotifRow>) => {
+        () => {
           scheduleRecount(250);
         }
       )
 
-      // ---------- CONSIGNMENT ----------
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
-        (payload: RealtimePostgresInsertPayload<ConsignmentNotifRow>) => {
-          const newRow = payload.new;
-          const u = mapConsignmentToUnified(newRow);
+        (payload: unknown) => {
+          const row = (payload as RealtimeInsertPayload<ConsignmentNotifRow>).new;
+          const u = mapConsignmentToUnified(row);
 
           setNotifItems((prev) => {
             if (prev.some((x) => x.id === u.id && x.kind === "consignment")) return prev;
-            const merged = [u, ...prev].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            const merged = [u, ...prev].sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
             return merged.slice(0, 30);
           });
 
           if (notifOpenRef.current) {
             void markAllAsReadSilent();
-          } else {
-            if (!u.is_read) setUnreadCount((c) => c + 1);
+          } else if (!u.is_read) {
+            setUnreadCount((c) => c + 1);
           }
 
           scheduleRecount(600);
         }
       )
+
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
-        (payload: RealtimePostgresUpdatePayload<ConsignmentNotifRow>) => {
-          const newRow = payload.new;
-          const oldRow = payload.old;
-
+        (payload: unknown) => {
+          const p = payload as RealtimeUpdatePayload<ConsignmentNotifRow>;
+          const newRow = p.new;
+          const oldRow = p.old;
           const u = mapConsignmentToUnified(newRow);
 
           setNotifItems((prev) => {
@@ -476,7 +478,7 @@ const Staff_menu: React.FC = () => {
           });
 
           if (!notifOpenRef.current) {
-            const wasUnread = oldRow ? !(oldRow as Partial<ConsignmentNotifRow>).is_read : null;
+            const wasUnread = oldRow.is_read === undefined ? null : !oldRow.is_read;
             const isUnreadNow = !u.is_read;
 
             if (wasUnread === true && isUnreadNow === false) {
@@ -489,16 +491,16 @@ const Staff_menu: React.FC = () => {
           }
         }
       )
+
       .on(
         "postgres_changes",
         { event: "DELETE", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        (_payload: RealtimePostgresDeletePayload<ConsignmentNotifRow>) => {
+        () => {
           scheduleRecount(250);
         }
       )
+
       .subscribe((status) => {
-        // eslint-disable-next-line no-console
         console.log("NOTIF CHANNEL:", status);
       });
 
@@ -518,19 +520,17 @@ const Staff_menu: React.FC = () => {
 
       cancelScheduledRefresh();
       suspendRefreshRef.current = false;
-
       void supabase.removeChannel(ch);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ✅ boot tick */
   useEffect(() => {
     const t = window.setTimeout(() => {
       setBoot(true);
       window.dispatchEvent(new Event("resize"));
       document.body.getBoundingClientRect();
     }, 0);
+
     return () => window.clearTimeout(t);
   }, []);
 
@@ -545,11 +545,8 @@ const Staff_menu: React.FC = () => {
       { name: "Memberships", key: "customer_promo_list", icon: discountIcon },
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
-
       { name: "Add Consignment", key: "staff_consignment", icon: consignmentIcon },
       { name: "Consignment Record", key: "staff_consignment_record", icon: staff_consignmentIcon },
-
-      /* ✅ NEW */
       { name: "Customer Consignment Record", key: "customer_consignment_record", icon: consignmentRecordIcon },
     ],
     []
@@ -599,7 +596,7 @@ const Staff_menu: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = (): void => {
     localStorage.clear();
     sessionStorage.clear();
     history.replace("/login");
@@ -616,15 +613,37 @@ const Staff_menu: React.FC = () => {
   };
 
   return (
-    <IonPage className="staff-shell-page">
-      <IonSplitPane contentId="main" when="(min-width: 768px)">
-        {/* SIDEBAR */}
-        <IonMenu contentId="main" className="staff-menu">
+    <IonPage className={`staff-shell-page ${isMenuCollapsed ? "sidebar-collapsed" : ""}`}>
+      <IonSplitPane
+        contentId="main"
+        when="(min-width: 768px)"
+        className={`staff-split-pane ${isMenuCollapsed ? "is-collapsed" : ""}`}
+      >
+        <IonMenu
+          contentId="main"
+          type="reveal"
+          className={`staff-menu ${isMenuCollapsed ? "collapsed" : ""}`}
+        >
           <IonHeader className="staff-menu-header">
             <IonToolbar>
-              <div className="menu-brand">
+              <div className={`menu-brand ${isMenuCollapsed ? "collapsed" : ""}`}>
+                <button
+                  type="button"
+                  className="sidebar-toggle-btn"
+                  onClick={() => setIsMenuCollapsed((prev) => !prev)}
+                  aria-label={isMenuCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  title={isMenuCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                >
+                  <span />
+                  <span />
+                  <span />
+                </button>
+
                 <img src={studyHubLogo} alt="Study Hub" className="menu-logo" />
-                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+
+                {!isMenuCollapsed && (
+                  <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+                )}
               </div>
             </IonToolbar>
           </IonHeader>
@@ -650,18 +669,26 @@ const Staff_menu: React.FC = () => {
               ))}
             </div>
 
-            <motion.div className="menu-items-layer" variants={listVariants} initial="hidden" animate="show">
+            <motion.div
+              className="menu-items-layer"
+              variants={listVariants}
+              initial="hidden"
+              animate="show"
+            >
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
-                  <motion.div variants={itemVariants} whileHover={{ x: 3 }}>
+                  <motion.div variants={itemVariants} whileHover={{ x: isMenuCollapsed ? 0 : 3 }}>
                     <IonItem
                       button
                       lines="none"
-                      className={`menu-item ${activePage === item.key ? "active" : ""}`}
+                      className={`menu-item ${activePage === item.key ? "active" : ""} ${
+                        isMenuCollapsed ? "menu-item-collapsed" : ""
+                      }`}
                       onClick={() => setActivePage(item.key)}
+                      title={item.name}
                     >
                       <img src={item.icon} alt={item.name} className="menu-icon" />
-                      <span className="menu-text">{item.name}</span>
+                      {!isMenuCollapsed && <span className="menu-text">{item.name}</span>}
                     </IonItem>
                   </motion.div>
                 </IonMenuToggle>
@@ -669,9 +696,13 @@ const Staff_menu: React.FC = () => {
 
               <IonMenuToggle autoHide={false}>
                 <motion.div variants={itemVariants}>
-                  <IonButton className="logout-btn" onClick={handleLogout}>
+                  <IonButton
+                    className={`logout-btn ${isMenuCollapsed ? "logout-btn-collapsed" : ""}`}
+                    onClick={handleLogout}
+                    title="Logout"
+                  >
                     <IonIcon icon={logOutOutline} slot="start" />
-                    Logout
+                    {!isMenuCollapsed && "Logout"}
                   </IonButton>
                 </motion.div>
               </IonMenuToggle>
@@ -679,8 +710,7 @@ const Staff_menu: React.FC = () => {
           </IonContent>
         </IonMenu>
 
-        {/* MAIN */}
-        <div id="main" className="staff-main-shell">
+        <div id="main" className={`staff-main-shell ${isMenuCollapsed ? "expanded" : ""}`}>
           <IonHeader>
             <IonToolbar className="staff-topbar">
               <IonButtons slot="start">
@@ -722,7 +752,6 @@ const Staff_menu: React.FC = () => {
             )}
           </IonContent>
 
-          {/* ✅ POPOVER */}
           {notifOpen && (
             <div
               className="notif-popover notif-popover--fixed"
@@ -737,7 +766,12 @@ const Staff_menu: React.FC = () => {
                 </div>
 
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button className="notif-close-btn" onClick={closeBell} aria-label="Close" type="button">
+                  <button
+                    className="notif-close-btn"
+                    onClick={closeBell}
+                    aria-label="Close"
+                    type="button"
+                  >
                     ✕
                   </button>
                 </div>
@@ -763,7 +797,10 @@ const Staff_menu: React.FC = () => {
                   <div className="notif-empty">No notifications yet.</div>
                 ) : (
                   notifItems.map((n) => (
-                    <div key={`${n.kind}-${n.id}`} className={`notif-row ${n.is_read ? "" : "notif-row--unread"}`}>
+                    <div
+                      key={`${n.kind}-${n.id}`}
+                      className={`notif-row ${n.is_read ? "" : "notif-row--unread"}`}
+                    >
                       <div className={`seat-pill ${n.kind === "consignment" ? "seat-pill--alt" : ""}`}>
                         {n.kind === "addon" ? "ADD-ON" : "CONSIGN"}
                       </div>

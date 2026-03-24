@@ -54,9 +54,13 @@ const seatText = (seat: string | string[] | null | undefined): string => {
   return seat ?? "";
 };
 
-/* =========================
-   DB TYPES (MATCH YOUR DB)
-========================= */
+const asString = (value: unknown): string =>
+  typeof value === "string" ? value : "";
+
+const toNum = (value: unknown): number => {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
 
 type ProfileRow = {
   role: string | null;
@@ -67,11 +71,8 @@ type CustomerSessionRow = {
   created_at: string | null;
   full_name: string;
   seat_number: string | string[] | null;
-
-  // ✅ your real column
   time_ended: string | null;
-
-  reservation: string; // "yes" | "no"
+  reservation: string;
   promo_booking_id: string | null;
 };
 
@@ -89,7 +90,7 @@ type PromoBookingRow = {
 type AlertKind = "walkin" | "reservation" | "promo";
 
 type AlertItem = {
-  key: string; // unique: kind-id-minute
+  key: string;
   kind: AlertKind;
   id: string;
   full_name: string;
@@ -98,30 +99,88 @@ type AlertItem = {
   end_iso: string;
 };
 
+type OrderAlertKind = "add_ons" | "consignment";
+
+type OrderAlertLine = {
+  name: string;
+  quantity: number;
+  size: string;
+  category: string;
+};
+
+type OrderAlertItem = {
+  key: string;
+  kind: OrderAlertKind;
+  id: string;
+  full_name: string;
+  seat_number: string;
+  created_at: string;
+  lines: OrderAlertLine[];
+};
+
+type AddOnCatalogRow = {
+  name?: string | null;
+  category?: string | null;
+  size?: string | null;
+};
+
+type ConsignmentCatalogRow = {
+  item_name?: string | null;
+  category?: string | null;
+  size?: string | null;
+};
+
+type AddOnOrderItemRow = {
+  quantity?: number | string | null;
+  price?: number | string | null;
+  add_ons?: AddOnCatalogRow | AddOnCatalogRow[] | null;
+};
+
+type ConsignmentOrderItemRow = {
+  quantity?: number | string | null;
+  price?: number | string | null;
+  consignment?: ConsignmentCatalogRow | ConsignmentCatalogRow[] | null;
+};
+
+type AddOnOrderRow = {
+  id: string;
+  full_name: string | null;
+  seat_number: string | null;
+  created_at: string | null;
+  addon_order_items?: AddOnOrderItemRow[] | null;
+};
+
+type ConsignmentOrderRow = {
+  id: string;
+  full_name: string | null;
+  seat_number: string | null;
+  created_at: string | null;
+  consignment_order_items?: ConsignmentOrderItemRow[] | null;
+};
 
 const getRoleLocal = (): string =>
   (localStorage.getItem("role") || "").toLowerCase();
 
+const firstObj = <T,>(value: T | T[] | null | undefined): T | null => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value;
+};
+
 const App: React.FC = () => {
-  // ✅ multi-alert list
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [orderAlerts, setOrderAlerts] = useState<OrderAlertItem[]>([]);
   const [showAlert, setShowAlert] = useState<boolean>(false);
 
-  // ✅ role state (starts from local, then verified by Supabase)
   const [role, setRole] = useState<string>(getRoleLocal());
   const isStaff = useMemo(() => role === "staff", [role]);
 
-  // prevent duplicates: "<kind>-<id>-<minute>"
   const triggeredRef = useRef<Set<string>>(new Set());
+  const orderTriggeredRef = useRef<Set<string>>(new Set());
 
-  // keep latest rows in memory
   const sessionsRef = useRef<Map<string, CustomerSessionRow>>(new Map());
   const promosRef = useRef<Map<string, PromoBookingRow>>(new Map());
 
-  /* =========================
-     ✅ ALWAYS SYNC ROLE FROM SUPABASE
-     (important sa Vercel)
-  ========================= */
   const syncRoleFromSupabase = async (): Promise<void> => {
     const { data: sess } = await supabase.auth.getSession();
     const user = sess.session?.user;
@@ -158,6 +217,7 @@ const App: React.FC = () => {
     const onStorage = (e: StorageEvent): void => {
       if (e.key === "role") setRole(getRoleLocal());
     };
+
     window.addEventListener("storage", onStorage);
 
     return () => {
@@ -166,24 +226,31 @@ const App: React.FC = () => {
     };
   }, []);
 
-  /* =========================
-     ALERT LOGIC (MULTI)
-  ========================= */
-
   const addAlert = (a: AlertItem): void => {
     setAlerts((prev) => {
       if (prev.some((x) => x.key === a.key)) return prev;
-
-      // ✅ sort: pinakamalapit na time on top (1min first)
-      const next = [...prev, a].sort((x, y) => x.minutes_left - y.minutes_left);
-      return next;
+      return [...prev, a].sort((x, y) => x.minutes_left - y.minutes_left);
     });
 
-    // ✅ open modal
     setShowAlert(true);
   };
 
-  const fireAlert = (kind: AlertKind, id: string, full_name: string, seat_number: string, end_iso: string): void => {
+  const addOrderAlert = (a: OrderAlertItem): void => {
+    setOrderAlerts((prev) => {
+      if (prev.some((x) => x.key === a.key)) return prev;
+      return [a, ...prev];
+    });
+
+    setShowAlert(true);
+  };
+
+  const fireAlert = (
+    kind: AlertKind,
+    id: string,
+    full_name: string,
+    seat_number: string,
+    end_iso: string
+  ): void => {
     const mLeft = minutesLeftCeil(end_iso);
     if (!ALERT_MINUTES.includes(mLeft)) return;
 
@@ -202,10 +269,125 @@ const App: React.FC = () => {
     });
   };
 
+  const buildAddOnLines = (rows: AddOnOrderItemRow[] | null | undefined): OrderAlertLine[] => {
+    return (rows ?? [])
+      .map((row) => {
+        const catalog = firstObj(row.add_ons);
+        const name = asString(catalog?.name).trim() || "Add-on Item";
+        const quantity = Math.max(1, Math.floor(toNum(row.quantity)));
+        const size = asString(catalog?.size).trim();
+        const category = asString(catalog?.category).trim();
+        return { name, quantity, size, category };
+      })
+      .filter((line) => line.name.trim().length > 0);
+  };
+
+  const buildConsignmentLines = (
+    rows: ConsignmentOrderItemRow[] | null | undefined
+  ): OrderAlertLine[] => {
+    return (rows ?? [])
+      .map((row) => {
+        const catalog = firstObj(row.consignment);
+        const name = asString(catalog?.item_name).trim() || "Consignment Item";
+        const quantity = Math.max(1, Math.floor(toNum(row.quantity)));
+        const size = asString(catalog?.size).trim();
+        const category = asString(catalog?.category).trim();
+        return { name, quantity, size, category };
+      })
+      .filter((line) => line.name.trim().length > 0);
+  };
+
+  const fetchAddOnOrderAlert = async (orderId: string): Promise<void> => {
+    const key = `add_ons-${orderId}`;
+    if (orderTriggeredRef.current.has(key)) return;
+
+    const { data, error } = await supabase
+      .from("addon_orders")
+      .select(
+        `
+          id,
+          full_name,
+          seat_number,
+          created_at,
+          addon_order_items (
+            quantity,
+            price,
+            add_ons (
+              name,
+              category,
+              size
+            )
+          )
+        `
+      )
+      .eq("id", orderId)
+      .maybeSingle<AddOnOrderRow>();
+
+    if (error || !data?.id) return;
+
+    const lines = buildAddOnLines(data.addon_order_items);
+    if (lines.length === 0) return;
+
+    orderTriggeredRef.current.add(key);
+
+    addOrderAlert({
+      key,
+      kind: "add_ons",
+      id: data.id,
+      full_name: asString(data.full_name).trim() || "Unknown Customer",
+      seat_number: asString(data.seat_number).trim() || "-",
+      created_at: asString(data.created_at),
+      lines,
+    });
+  };
+
+  const fetchConsignmentOrderAlert = async (orderId: string): Promise<void> => {
+    const key = `consignment-${orderId}`;
+    if (orderTriggeredRef.current.has(key)) return;
+
+    const { data, error } = await supabase
+      .from("consignment_orders")
+      .select(
+        `
+          id,
+          full_name,
+          seat_number,
+          created_at,
+          consignment_order_items (
+            quantity,
+            price,
+            consignment (
+              item_name,
+              category,
+              size
+            )
+          )
+        `
+      )
+      .eq("id", orderId)
+      .maybeSingle<ConsignmentOrderRow>();
+
+    if (error || !data?.id) return;
+
+    const lines = buildConsignmentLines(data.consignment_order_items);
+    if (lines.length === 0) return;
+
+    orderTriggeredRef.current.add(key);
+
+    addOrderAlert({
+      key,
+      kind: "consignment",
+      id: data.id,
+      full_name: asString(data.full_name).trim() || "Unknown Customer",
+      seat_number: asString(data.seat_number).trim() || "-",
+      created_at: asString(data.created_at),
+      lines,
+    });
+  };
+
   const tickCheckAll = (): void => {
     const now = Date.now();
 
-    // customer_sessions
     Array.from(sessionsRef.current.values()).forEach((s) => {
       const endIso = s.time_ended;
       if (!endIso) return;
@@ -216,17 +398,15 @@ const App: React.FC = () => {
         return;
       }
 
-      const kind: AlertKind =
-        s.promo_booking_id
-          ? "promo"
-          : String(s.reservation ?? "").toLowerCase() === "yes"
-          ? "reservation"
-          : "walkin";
+      const kind: AlertKind = s.promo_booking_id
+        ? "promo"
+        : String(s.reservation ?? "").toLowerCase() === "yes"
+        ? "reservation"
+        : "walkin";
 
       fireAlert(kind, s.id, s.full_name, seatText(s.seat_number), endIso);
     });
 
-    // promo_bookings (extra safety)
     Array.from(promosRef.current.values()).forEach((p) => {
       const endMs = new Date(p.end_at).getTime();
       if (!Number.isFinite(endMs) || endMs <= now) {
@@ -234,13 +414,11 @@ const App: React.FC = () => {
         return;
       }
 
-      const seat = p.area === "conference_room" ? "CONFERENCE ROOM" : (p.seat_number ?? "-");
+      const seat =
+        p.area === "conference_room" ? "CONFERENCE ROOM" : p.seat_number ?? "-";
+
       fireAlert("promo", p.id, p.full_name, seat, p.end_at);
     });
-
-    // ✅ if no alerts left, close modal
-    // (but keep open if there are still alerts)
-    // note: we DO NOT auto-close here because user may be reading.
   };
 
   const loadActiveCustomerSessions = async (): Promise<void> => {
@@ -248,7 +426,9 @@ const App: React.FC = () => {
 
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select("id, created_at, full_name, seat_number, time_ended, reservation, promo_booking_id")
+      .select(
+        "id, created_at, full_name, seat_number, time_ended, reservation, promo_booking_id"
+      )
       .not("time_ended", "is", null)
       .gt("time_ended", nowIso)
       .order("time_ended", { ascending: true })
@@ -280,14 +460,13 @@ const App: React.FC = () => {
     promosRef.current = map;
   };
 
-  /* =========================
-     STAFF-ONLY SUBSCRIPTIONS
-  ========================= */
   useEffect(() => {
     if (!isStaff) {
       setShowAlert(false);
       setAlerts([]);
+      setOrderAlerts([]);
       triggeredRef.current.clear();
+      orderTriggeredRef.current.clear();
       sessionsRef.current.clear();
       promosRef.current.clear();
       return;
@@ -295,7 +474,6 @@ const App: React.FC = () => {
 
     let alive = true;
 
-    // initial load + immediate check
     (async () => {
       await loadActiveCustomerSessions();
       await loadActivePromos();
@@ -366,7 +544,32 @@ const App: React.FC = () => {
       )
       .subscribe();
 
-    // ✅ tick every 1s so we never miss 5/3/1 (even on Vercel)
+    const chAddOnOrders = supabase
+      .channel("rt_addon_orders_alerts")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "addon_orders" },
+        (payload: RealtimePostgresInsertPayload<{ id: string }>) => {
+          const row = payload.new;
+          if (!row?.id) return;
+          void fetchAddOnOrderAlert(row.id);
+        }
+      )
+      .subscribe();
+
+    const chConsignmentOrders = supabase
+      .channel("rt_consignment_orders_alerts")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "consignment_orders" },
+        (payload: RealtimePostgresInsertPayload<{ id: string }>) => {
+          const row = payload.new;
+          if (!row?.id) return;
+          void fetchConsignmentOrderAlert(row.id);
+        }
+      )
+      .subscribe();
+
     const tick = window.setInterval(() => tickCheckAll(), 1000);
 
     const refresh = (): void => {
@@ -391,17 +594,26 @@ const App: React.FC = () => {
 
       void supabase.removeChannel(chSessions);
       void supabase.removeChannel(chPromos);
+      void supabase.removeChannel(chAddOnOrders);
+      void supabase.removeChannel(chConsignmentOrders);
     };
   }, [isStaff]);
 
-  // ✅ stop one alert
   const stopOne = (key: string): void => {
-    setAlerts((prev) => {
-      const next = prev.filter((x) => x.key !== key);
-      // if empty -> close
-      if (next.length === 0) setShowAlert(false);
-      return next;
-    });
+    setAlerts((prev) => prev.filter((x) => x.key !== key));
+    setOrderAlerts((prev) => prev.filter((x) => x.key !== key));
+
+    window.setTimeout(() => {
+      setAlerts((currentTimeAlerts) => {
+        setOrderAlerts((currentOrderAlerts) => {
+          if (currentTimeAlerts.length === 0 && currentOrderAlerts.length === 0) {
+            setShowAlert(false);
+          }
+          return currentOrderAlerts;
+        });
+        return currentTimeAlerts;
+      });
+    }, 0);
   };
 
   return (
@@ -410,8 +622,9 @@ const App: React.FC = () => {
         isOpen={showAlert}
         role={role}
         alerts={alerts}
+        orderAlerts={orderAlerts}
         onStopOne={stopOne}
-        onClose={() => setShowAlert(false)} // just close modal UI, alerts list stays (optional)
+        onClose={() => setShowAlert(false)}
       />
 
       <IonReactRouter>

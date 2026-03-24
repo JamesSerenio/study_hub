@@ -1,12 +1,4 @@
 // src/admin/Admin_menu.tsx
-// ✅ SAME CLASSNAMES AS Staff_menu
-// ✅ STATIC flowers
-// ✅ Keeps your existing pages/files/menu items
-// ✅ VERCEL FIX: boot + resize/reflow so dashboard shows immediately after login
-// ✅ Admin Cancelled Records menu item + page
-// ✅ Added: Consignment Record + Customer Consignment Record
-// ✅ Added: Consignment Approval page
-
 import React, { useEffect, useMemo, useState } from "react";
 import {
   IonButtons,
@@ -100,9 +92,10 @@ type FlowerStatic = {
 const Admin_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState<MenuKey>("dashboard");
-
-  // ✅ VERCEL FIRST-LOAD FIX (same as staff)
   const [boot, setBoot] = useState(false);
+
+  /* ✅ collapse sidebar */
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -205,21 +198,43 @@ const Admin_menu: React.FC = () => {
   };
 
   return (
-    <IonPage className="staff-shell-page">
-      <IonSplitPane contentId="main" when="(min-width: 768px)">
+    <IonPage className={`staff-shell-page ${isMenuCollapsed ? "sidebar-collapsed" : ""}`}>
+      <IonSplitPane
+        contentId="main"
+        when="(min-width: 768px)"
+        className={`staff-split-pane ${isMenuCollapsed ? "is-collapsed" : ""}`}
+      >
         {/* ================= SIDEBAR ================= */}
-        <IonMenu contentId="main" className="staff-menu">
+        <IonMenu
+          contentId="main"
+          type="reveal"
+          className={`staff-menu ${isMenuCollapsed ? "collapsed" : ""}`}
+        >
           <IonHeader className="staff-menu-header">
             <IonToolbar>
-              <div className="menu-brand">
+              <div className={`menu-brand ${isMenuCollapsed ? "collapsed" : ""}`}>
+                <button
+                  type="button"
+                  className="sidebar-toggle-btn"
+                  onClick={() => setIsMenuCollapsed((prev) => !prev)}
+                  aria-label={isMenuCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  title={isMenuCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                >
+                  <span />
+                  <span />
+                  <span />
+                </button>
+
                 <img src={studyHubLogo} alt="Me Tyme Lounge" className="menu-logo" />
-                <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+
+                {!isMenuCollapsed && (
+                  <span className="menu-title-text figma-title">Me Tyme Lounge</span>
+                )}
               </div>
             </IonToolbar>
           </IonHeader>
 
           <IonContent className="staff-menu-content">
-            {/* flowers background */}
             <div className="menu-flowers" aria-hidden="true">
               {flowers.map((f) => (
                 <img
@@ -240,30 +255,35 @@ const Admin_menu: React.FC = () => {
               ))}
             </div>
 
-            {/* menu items */}
             <motion.div className="menu-items-layer" variants={listVariants} initial="hidden" animate="show">
               {menuItems.map((item) => (
                 <IonMenuToggle key={item.key} autoHide={false}>
-                  <motion.div variants={itemVariants} whileHover={{ x: 3 }}>
+                  <motion.div variants={itemVariants} whileHover={{ x: isMenuCollapsed ? 0 : 3 }}>
                     <IonItem
                       button
                       lines="none"
-                      className={`menu-item ${activePage === item.key ? "active" : ""}`}
+                      className={`menu-item ${activePage === item.key ? "active" : ""} ${
+                        isMenuCollapsed ? "menu-item-collapsed" : ""
+                      }`}
                       onClick={() => setActivePage(item.key)}
+                      title={item.name}
                     >
                       <img src={item.icon} alt={item.name} className="menu-icon" />
-                      <span className="menu-text">{item.name}</span>
+                      {!isMenuCollapsed && <span className="menu-text">{item.name}</span>}
                     </IonItem>
                   </motion.div>
                 </IonMenuToggle>
               ))}
 
-              {/* logout */}
               <IonMenuToggle autoHide={false}>
                 <motion.div variants={itemVariants}>
-                  <IonButton className="logout-btn" onClick={handleLogout}>
+                  <IonButton
+                    className={`logout-btn ${isMenuCollapsed ? "logout-btn-collapsed" : ""}`}
+                    onClick={handleLogout}
+                    title="Logout"
+                  >
                     <IonIcon icon={logOutOutline} slot="start" />
-                    Logout
+                    {!isMenuCollapsed && "Logout"}
                   </IonButton>
                 </motion.div>
               </IonMenuToggle>
@@ -272,12 +292,13 @@ const Admin_menu: React.FC = () => {
         </IonMenu>
 
         {/* ================= MAIN ================= */}
-        <div id="main" className="staff-main-shell">
+        <div id="main" className={`staff-main-shell ${isMenuCollapsed ? "expanded" : ""}`}>
           <IonHeader>
-            <IonToolbar>
+            <IonToolbar className="staff-topbar">
               <IonButtons slot="start">
                 <IonMenuButton />
               </IonButtons>
+
               <span className="topbar-title">Admin Panel</span>
             </IonToolbar>
           </IonHeader>
