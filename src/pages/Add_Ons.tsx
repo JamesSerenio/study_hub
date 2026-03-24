@@ -121,14 +121,6 @@ type RpcConsignItem = {
   quantity: number;
 };
 
-type AddOnVerifiedEventDetail = {
-  full_name: string;
-  seat_number: string;
-  booking_code: string;
-  order_text: string;
-  mode: Mode;
-};
-
 /* =========================
    CONSTANTS
 ========================= */
@@ -172,20 +164,6 @@ const isConsignmentCategory = (cat: string): boolean => norm(cat) === "consignme
 const normalizeBookingCode = (value: string): string =>
   value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
 
-const buildOrderText = (items: SelectedItem[], mode: Mode): string => {
-  if (items.length === 0) {
-    return mode === "add_ons" ? "No order selected yet" : "No other item selected yet";
-  }
-
-  return items
-    .map((item) => `${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}`)
-    .join(", ");
-};
-
-const dispatchAddOnVerifiedAlert = (detail: AddOnVerifiedEventDetail): void => {
-  window.dispatchEvent(new CustomEvent<AddOnVerifiedEventDetail>("addon-code-verified", { detail }));
-};
-
 /* =========================
    PAGE
 ========================= */
@@ -199,7 +177,7 @@ const Add_Ons: React.FC = () => {
   const [toastMsg, setToastMsg] = useState<string>("");
   const [showToast, setShowToast] = useState<boolean>(false);
   const toastColor = useMemo<"success" | "danger">(
-    () => (toastMsg.toLowerCase().includes("success") || toastMsg.toLowerCase().includes("verified") ? "success" : "danger"),
+    () => (toastMsg.toLowerCase().includes("success") ? "success" : "danger"),
     [toastMsg]
   );
 
@@ -640,28 +618,16 @@ const Add_Ons: React.FC = () => {
       return;
     }
 
-    const verifiedName = result.session.full_name ?? "";
-    const verifiedSeat = result.session.seat_number ?? "";
-    const verifiedCode = normalizeBookingCode(result.session.booking_code ?? bookingCode);
-
     setBookingChecked(true);
     setBookingInfo(result.session);
 
     if (!fullName.trim()) {
-      setFullName(verifiedName);
+      setFullName(result.session.full_name ?? "");
     }
 
     if (!seat.trim()) {
-      setSeat(verifiedSeat);
+      setSeat(result.session.seat_number ?? "");
     }
-
-    dispatchAddOnVerifiedAlert({
-      full_name: fullName.trim() || verifiedName,
-      seat_number: seat.trim() || verifiedSeat,
-      booking_code: verifiedCode,
-      order_text: buildOrderText(selectedItems, mode),
-      mode,
-    });
 
     showSuccessToast("Booking code verified.");
   };

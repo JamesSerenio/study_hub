@@ -1,15 +1,8 @@
+// src/App.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  IonApp,
-  IonRouterOutlet,
-  setupIonicReact,
-  IonModal,
-  IonButton,
-  IonIcon,
-} from "@ionic/react";
+import { IonApp, IonRouterOutlet, setupIonicReact } from "@ionic/react";
 import { IonReactRouter } from "@ionic/react-router";
 import { Route, Redirect } from "react-router-dom";
-import { checkmarkCircleOutline } from "ionicons/icons";
 
 /* Pages */
 import Login from "./pages/Login";
@@ -61,9 +54,13 @@ const seatText = (seat: string | string[] | null | undefined): string => {
   return seat ?? "";
 };
 
-/* =========================
-   DB TYPES
-========================= */
+const asString = (value: unknown): string =>
+  typeof value === "string" ? value : "";
+
+const toNum = (value: unknown): number => {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
 
 type ProfileRow = {
   role: string | null;
@@ -102,95 +99,84 @@ type AlertItem = {
   end_iso: string;
 };
 
-type AddOnVerifiedEventDetail = {
+type OrderAlertKind = "add_ons" | "consignment";
+
+type OrderAlertLine = {
+  name: string;
+  quantity: number;
+  size: string;
+  category: string;
+};
+
+type OrderAlertItem = {
+  key: string;
+  kind: OrderAlertKind;
+  id: string;
   full_name: string;
   seat_number: string;
-  booking_code: string;
-  order_text: string;
-  mode: "add_ons" | "consignment";
+  created_at: string;
+  lines: OrderAlertLine[];
+};
+
+type AddOnCatalogRow = {
+  name?: string | null;
+  category?: string | null;
+  size?: string | null;
+};
+
+type ConsignmentCatalogRow = {
+  item_name?: string | null;
+  category?: string | null;
+  size?: string | null;
+};
+
+type AddOnOrderItemRow = {
+  quantity?: number | string | null;
+  price?: number | string | null;
+  add_ons?: AddOnCatalogRow | AddOnCatalogRow[] | null;
+};
+
+type ConsignmentOrderItemRow = {
+  quantity?: number | string | null;
+  price?: number | string | null;
+  consignment?: ConsignmentCatalogRow | ConsignmentCatalogRow[] | null;
+};
+
+type AddOnOrderRow = {
+  id: string;
+  full_name: string | null;
+  seat_number: string | null;
+  created_at: string | null;
+  addon_order_items?: AddOnOrderItemRow[] | null;
+};
+
+type ConsignmentOrderRow = {
+  id: string;
+  full_name: string | null;
+  seat_number: string | null;
+  created_at: string | null;
+  consignment_order_items?: ConsignmentOrderItemRow[] | null;
 };
 
 const getRoleLocal = (): string =>
   (localStorage.getItem("role") || "").toLowerCase();
 
-const AddOnCodeAlertModal: React.FC<{
-  isOpen: boolean;
-  detail: AddOnVerifiedEventDetail | null;
-  onClose: () => void;
-}> = ({ isOpen, detail, onClose }) => {
-  return (
-    <IonModal isOpen={isOpen} backdropDismiss={true} onDidDismiss={onClose} className="addon-verified-modal">
-      <div
-        style={{
-          padding: 18,
-          background: "#ffffff",
-          borderRadius: 20,
-          margin: "auto",
-          width: "min(92vw, 360px)",
-          boxShadow: "0 18px 40px rgba(0,0,0,0.18)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontSize: 22, fontWeight: 900, display: "flex", alignItems: "center", gap: 8 }}>
-            <IonIcon icon={checkmarkCircleOutline} style={{ color: "#39a84b", fontSize: 28 }} />
-            Code Verified
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              border: 0,
-              background: "transparent",
-              fontSize: 20,
-              cursor: "pointer",
-              color: "#111111",
-            }}
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div style={{ lineHeight: 1.7, color: "#222222", fontSize: 15 }}>
-          <div><strong>Name:</strong> {detail?.full_name || "-"}</div>
-          <div><strong>Seat:</strong> {detail?.seat_number || "-"}</div>
-          <div><strong>Type:</strong> {detail?.mode === "add_ons" ? "Order" : "Other Items"}</div>
-          <div><strong>Booking Code:</strong> {detail?.booking_code || "-"}</div>
-          <div><strong>Order:</strong> {detail?.order_text || "-"}</div>
-        </div>
-
-        <IonButton
-          expand="block"
-          onClick={onClose}
-          style={{
-            marginTop: 14,
-            "--background": "#39a84b",
-            "--background-hover": "#2f8f3f",
-            "--background-activated": "#2f8f3f",
-            "--color": "#ffffff",
-            "--border-radius": "14px",
-            fontWeight: 800,
-          }}
-        >
-          OK
-        </IonButton>
-      </div>
-    </IonModal>
-  );
+const firstObj = <T,>(value: T | T[] | null | undefined): T | null => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value;
 };
 
 const App: React.FC = () => {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [orderAlerts, setOrderAlerts] = useState<OrderAlertItem[]>([]);
   const [showAlert, setShowAlert] = useState<boolean>(false);
 
   const [role, setRole] = useState<string>(getRoleLocal());
   const isStaff = useMemo(() => role === "staff", [role]);
 
-  const [showAddOnVerified, setShowAddOnVerified] = useState<boolean>(false);
-  const [addOnVerifiedDetail, setAddOnVerifiedDetail] = useState<AddOnVerifiedEventDetail | null>(null);
-
   const triggeredRef = useRef<Set<string>>(new Set());
+  const orderTriggeredRef = useRef<Set<string>>(new Set());
 
   const sessionsRef = useRef<Map<string, CustomerSessionRow>>(new Map());
   const promosRef = useRef<Map<string, PromoBookingRow>>(new Map());
@@ -240,27 +226,19 @@ const App: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const onAddonVerified = (event: Event): void => {
-      const customEvent = event as CustomEvent<AddOnVerifiedEventDetail>;
-      if (!customEvent.detail) return;
-
-      setAddOnVerifiedDetail(customEvent.detail);
-      setShowAddOnVerified(true);
-    };
-
-    window.addEventListener("addon-code-verified", onAddonVerified as EventListener);
-
-    return () => {
-      window.removeEventListener("addon-code-verified", onAddonVerified as EventListener);
-    };
-  }, []);
-
   const addAlert = (a: AlertItem): void => {
     setAlerts((prev) => {
       if (prev.some((x) => x.key === a.key)) return prev;
-      const next = [...prev, a].sort((x, y) => x.minutes_left - y.minutes_left);
-      return next;
+      return [...prev, a].sort((x, y) => x.minutes_left - y.minutes_left);
+    });
+
+    setShowAlert(true);
+  };
+
+  const addOrderAlert = (a: OrderAlertItem): void => {
+    setOrderAlerts((prev) => {
+      if (prev.some((x) => x.key === a.key)) return prev;
+      return [a, ...prev];
     });
 
     setShowAlert(true);
@@ -291,6 +269,122 @@ const App: React.FC = () => {
     });
   };
 
+  const buildAddOnLines = (rows: AddOnOrderItemRow[] | null | undefined): OrderAlertLine[] => {
+    return (rows ?? [])
+      .map((row) => {
+        const catalog = firstObj(row.add_ons);
+        const name = asString(catalog?.name).trim() || "Add-on Item";
+        const quantity = Math.max(1, Math.floor(toNum(row.quantity)));
+        const size = asString(catalog?.size).trim();
+        const category = asString(catalog?.category).trim();
+        return { name, quantity, size, category };
+      })
+      .filter((line) => line.name.trim().length > 0);
+  };
+
+  const buildConsignmentLines = (
+    rows: ConsignmentOrderItemRow[] | null | undefined
+  ): OrderAlertLine[] => {
+    return (rows ?? [])
+      .map((row) => {
+        const catalog = firstObj(row.consignment);
+        const name = asString(catalog?.item_name).trim() || "Consignment Item";
+        const quantity = Math.max(1, Math.floor(toNum(row.quantity)));
+        const size = asString(catalog?.size).trim();
+        const category = asString(catalog?.category).trim();
+        return { name, quantity, size, category };
+      })
+      .filter((line) => line.name.trim().length > 0);
+  };
+
+  const fetchAddOnOrderAlert = async (orderId: string): Promise<void> => {
+    const key = `add_ons-${orderId}`;
+    if (orderTriggeredRef.current.has(key)) return;
+
+    const { data, error } = await supabase
+      .from("addon_orders")
+      .select(
+        `
+          id,
+          full_name,
+          seat_number,
+          created_at,
+          addon_order_items (
+            quantity,
+            price,
+            add_ons (
+              name,
+              category,
+              size
+            )
+          )
+        `
+      )
+      .eq("id", orderId)
+      .maybeSingle<AddOnOrderRow>();
+
+    if (error || !data?.id) return;
+
+    const lines = buildAddOnLines(data.addon_order_items);
+    if (lines.length === 0) return;
+
+    orderTriggeredRef.current.add(key);
+
+    addOrderAlert({
+      key,
+      kind: "add_ons",
+      id: data.id,
+      full_name: asString(data.full_name).trim() || "Unknown Customer",
+      seat_number: asString(data.seat_number).trim() || "-",
+      created_at: asString(data.created_at),
+      lines,
+    });
+  };
+
+  const fetchConsignmentOrderAlert = async (orderId: string): Promise<void> => {
+    const key = `consignment-${orderId}`;
+    if (orderTriggeredRef.current.has(key)) return;
+
+    const { data, error } = await supabase
+      .from("consignment_orders")
+      .select(
+        `
+          id,
+          full_name,
+          seat_number,
+          created_at,
+          consignment_order_items (
+            quantity,
+            price,
+            consignment (
+              item_name,
+              category,
+              size
+            )
+          )
+        `
+      )
+      .eq("id", orderId)
+      .maybeSingle<ConsignmentOrderRow>();
+
+    if (error || !data?.id) return;
+
+    const lines = buildConsignmentLines(data.consignment_order_items);
+    if (lines.length === 0) return;
+
+    orderTriggeredRef.current.add(key);
+
+    addOrderAlert({
+      key,
+      kind: "consignment",
+      id: data.id,
+      full_name: asString(data.full_name).trim() || "Unknown Customer",
+      seat_number: asString(data.seat_number).trim() || "-",
+      created_at: asString(data.created_at),
+      lines,
+    });
+  };
+
   const tickCheckAll = (): void => {
     const now = Date.now();
 
@@ -304,12 +398,11 @@ const App: React.FC = () => {
         return;
       }
 
-      const kind: AlertKind =
-        s.promo_booking_id
-          ? "promo"
-          : String(s.reservation ?? "").toLowerCase() === "yes"
-          ? "reservation"
-          : "walkin";
+      const kind: AlertKind = s.promo_booking_id
+        ? "promo"
+        : String(s.reservation ?? "").toLowerCase() === "yes"
+        ? "reservation"
+        : "walkin";
 
       fireAlert(kind, s.id, s.full_name, seatText(s.seat_number), endIso);
     });
@@ -321,7 +414,9 @@ const App: React.FC = () => {
         return;
       }
 
-      const seat = p.area === "conference_room" ? "CONFERENCE ROOM" : (p.seat_number ?? "-");
+      const seat =
+        p.area === "conference_room" ? "CONFERENCE ROOM" : p.seat_number ?? "-";
+
       fireAlert("promo", p.id, p.full_name, seat, p.end_at);
     });
   };
@@ -331,7 +426,9 @@ const App: React.FC = () => {
 
     const { data, error } = await supabase
       .from("customer_sessions")
-      .select("id, created_at, full_name, seat_number, time_ended, reservation, promo_booking_id")
+      .select(
+        "id, created_at, full_name, seat_number, time_ended, reservation, promo_booking_id"
+      )
       .not("time_ended", "is", null)
       .gt("time_ended", nowIso)
       .order("time_ended", { ascending: true })
@@ -367,7 +464,9 @@ const App: React.FC = () => {
     if (!isStaff) {
       setShowAlert(false);
       setAlerts([]);
+      setOrderAlerts([]);
       triggeredRef.current.clear();
+      orderTriggeredRef.current.clear();
       sessionsRef.current.clear();
       promosRef.current.clear();
       return;
@@ -445,6 +544,32 @@ const App: React.FC = () => {
       )
       .subscribe();
 
+    const chAddOnOrders = supabase
+      .channel("rt_addon_orders_alerts")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "addon_orders" },
+        (payload: RealtimePostgresInsertPayload<{ id: string }>) => {
+          const row = payload.new;
+          if (!row?.id) return;
+          void fetchAddOnOrderAlert(row.id);
+        }
+      )
+      .subscribe();
+
+    const chConsignmentOrders = supabase
+      .channel("rt_consignment_orders_alerts")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "consignment_orders" },
+        (payload: RealtimePostgresInsertPayload<{ id: string }>) => {
+          const row = payload.new;
+          if (!row?.id) return;
+          void fetchConsignmentOrderAlert(row.id);
+        }
+      )
+      .subscribe();
+
     const tick = window.setInterval(() => tickCheckAll(), 1000);
 
     const refresh = (): void => {
@@ -462,34 +587,42 @@ const App: React.FC = () => {
 
     return () => {
       alive = false;
+
       window.clearInterval(tick);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVis);
+
       void supabase.removeChannel(chSessions);
       void supabase.removeChannel(chPromos);
+      void supabase.removeChannel(chAddOnOrders);
+      void supabase.removeChannel(chConsignmentOrders);
     };
   }, [isStaff]);
 
   const stopOne = (key: string): void => {
-    setAlerts((prev) => {
-      const next = prev.filter((x) => x.key !== key);
-      if (next.length === 0) setShowAlert(false);
-      return next;
-    });
+    setAlerts((prev) => prev.filter((x) => x.key !== key));
+    setOrderAlerts((prev) => prev.filter((x) => x.key !== key));
+
+    window.setTimeout(() => {
+      setAlerts((currentTimeAlerts) => {
+        setOrderAlerts((currentOrderAlerts) => {
+          if (currentTimeAlerts.length === 0 && currentOrderAlerts.length === 0) {
+            setShowAlert(false);
+          }
+          return currentOrderAlerts;
+        });
+        return currentTimeAlerts;
+      });
+    }, 0);
   };
 
   return (
     <IonApp>
-      <AddOnCodeAlertModal
-        isOpen={showAddOnVerified}
-        detail={addOnVerifiedDetail}
-        onClose={() => setShowAddOnVerified(false)}
-      />
-
       <TimeAlertModal
         isOpen={showAlert}
         role={role}
         alerts={alerts}
+        orderAlerts={orderAlerts}
         onStopOne={stopOne}
         onClose={() => setShowAlert(false)}
       />
