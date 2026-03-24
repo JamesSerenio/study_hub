@@ -19,7 +19,7 @@ type OrderAlertLine = {
   name: string;
   quantity: number;
   size: string;
-  category: string;
+  image_url?: string | null;
 };
 
 type OrderAlertItem = {
@@ -39,8 +39,8 @@ const kindLabel = (k: AlertKind): string => {
 };
 
 const orderKindLabel = (k: OrderAlertKind): string => {
-  if (k === "consignment") return "CONSIGNMENT ORDER";
-  return "ADD-ONS ORDER";
+  if (k === "consignment") return "OTHER ITEMS";
+  return "ORDER";
 };
 
 interface Props {
@@ -62,9 +62,12 @@ const TimeAlertModal: React.FC<Props> = ({
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const isStaff = (role ?? "").toLowerCase() === "staff";
+  const normalizedRole = (role ?? "").toLowerCase();
+  const isStaffOrAdmin =
+    normalizedRole === "staff" || normalizedRole === "admin";
+
   const totalAlerts = alerts.length + orderAlerts.length;
-  const canOpen = isStaff && isOpen && totalAlerts > 0;
+  const canOpen = isStaffOrAdmin && isOpen && totalAlerts > 0;
 
   useEffect(() => {
     const a = audioRef.current;
@@ -92,15 +95,19 @@ const TimeAlertModal: React.FC<Props> = ({
     };
   }, [canOpen]);
 
-  if (!isStaff) return null;
+  if (!isStaffOrAdmin) return null;
 
   return (
-    <IonModal isOpen={canOpen} backdropDismiss={false} className="time-alert-modal">
+    <IonModal
+      isOpen={canOpen}
+      backdropDismiss={false}
+      className="time-alert-modal"
+    >
       <div
         className="time-alert-wrapper"
         style={{
           minHeight: "100%",
-          background: "#f6fbf6",
+          background: "rgba(0, 0, 0, 0.18)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -113,23 +120,17 @@ const TimeAlertModal: React.FC<Props> = ({
           className="alert-box"
           style={{
             width: "100%",
-            maxWidth: 520,
-            background: "#ffffff",
+            maxWidth: 430,
+            maxHeight: "85vh",
+            overflowY: "auto",
+            background: "#efe4ba",
+            border: "3px solid red",
             borderRadius: 18,
-            padding: 16,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-            border: "2px solid #6a8f4e",
+            padding: 14,
+            boxShadow: "0 12px 30px rgba(0,0,0,0.22)",
           }}
         >
-          <div
-            style={{
-              fontWeight: 900,
-              marginBottom: 12,
-              color: "#2f5d34",
-              fontSize: 20,
-              textAlign: "center",
-            }}
-          >
+          <div style={{ fontWeight: 900, marginBottom: 10 }}>
             🚨 {totalAlerts} ALERT(S)
           </div>
 
@@ -142,6 +143,7 @@ const TimeAlertModal: React.FC<Props> = ({
                   borderRadius: 14,
                   padding: 12,
                   border: "2px solid #6a8f4e",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
                 }}
               >
                 <div
@@ -149,25 +151,25 @@ const TimeAlertModal: React.FC<Props> = ({
                     fontWeight: 900,
                     marginBottom: 8,
                     color: "#2f5d34",
-                    fontSize: 17,
+                    fontSize: 16,
                   }}
                 >
-                  🛒 NEW ORDER ALERT
-                </div>
-
-                <div style={{ color: "#1f3522", lineHeight: 1.6 }}>
-                  <strong>Type:</strong> {orderKindLabel(o.kind)} <br />
-                  <strong>Customer:</strong> {o.full_name} <br />
-                  <strong>Seat:</strong> {o.seat_number || "-"}
+                  🛒 NEW {orderKindLabel(o.kind)} ALERT
                 </div>
 
                 <div
                   style={{
-                    display: "grid",
-                    gap: 8,
-                    marginTop: 10,
+                    color: "#1f3522",
+                    lineHeight: 1.6,
+                    marginBottom: 10,
+                    fontSize: 14,
                   }}
                 >
+                  <strong>Customer:</strong> {o.full_name} <br />
+                  <strong>Seat:</strong> {o.seat_number || "-"}
+                </div>
+
+                <div style={{ display: "grid", gap: 8 }}>
                   {o.lines.map((line, index) => (
                     <div
                       key={`${o.key}-line-${index}`}
@@ -176,27 +178,72 @@ const TimeAlertModal: React.FC<Props> = ({
                         borderRadius: 10,
                         padding: 10,
                         border: "1px solid #cfe4cf",
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "center",
                       }}
                     >
-                      <div
-                        style={{
-                          fontWeight: 800,
-                          color: "#2f5d34",
-                          marginBottom: 4,
-                        }}
-                      >
-                        {line.quantity}x {line.name}
-                      </div>
+                      {line.image_url ? (
+                        <img
+                          src={line.image_url}
+                          alt={line.name}
+                          style={{
+                            width: 70,
+                            height: 70,
+                            objectFit: "cover",
+                            borderRadius: 10,
+                            flexShrink: 0,
+                            border: "1px solid #cfe4cf",
+                            background: "#fff",
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: 70,
+                            height: 70,
+                            borderRadius: 10,
+                            flexShrink: 0,
+                            border: "1px solid #cfe4cf",
+                            background: "#fff",
+                            color: "#7a927c",
+                            fontSize: 11,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            textAlign: "center",
+                            padding: 4,
+                            fontWeight: 700,
+                          }}
+                        >
+                          NO IMAGE
+                        </div>
+                      )}
 
-                      <div
-                        style={{
-                          fontSize: 13,
-                          color: "#335c38",
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        <strong>Size:</strong> {line.size || "-"} <br />
-                        <strong>Category:</strong> {line.category || "-"}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontWeight: 800,
+                            color: "#2f5d34",
+                            marginBottom: 4,
+                            fontSize: 16,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {line.name}
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: 14,
+                            color: "#335c38",
+                            lineHeight: 1.5,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          <strong>Quantity:</strong> {line.quantity} <br />
+                          <strong>Size:</strong> {line.size || "-"}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -205,15 +252,17 @@ const TimeAlertModal: React.FC<Props> = ({
                 <IonButton
                   expand="block"
                   className="alert-btn"
-                  style={{
-                    marginTop: 10,
-                    "--background": "#6a8f4e",
-                    "--background-hover": "#5b7c43",
-                    "--background-activated": "#5b7c43",
-                    "--color": "#ffffff",
-                    "--border-radius": "10px",
-                    fontWeight: 700,
-                  } as React.CSSProperties}
+                  style={
+                    {
+                      marginTop: 10,
+                      "--background": "#769954",
+                      "--background-hover": "#6b8b4c",
+                      "--background-activated": "#6b8b4c",
+                      "--color": "#ffffff",
+                      "--border-radius": "10px",
+                      fontWeight: 700,
+                    } as React.CSSProperties
+                  }
                   onClick={() => onStopOne(o.key)}
                 >
                   STOP ORDER ALERT
@@ -225,24 +274,16 @@ const TimeAlertModal: React.FC<Props> = ({
               <div
                 key={a.key}
                 style={{
-                  background: "#ffffff",
-                  borderRadius: 14,
-                  padding: 12,
-                  border: "2px solid #6a8f4e",
+                  background: "#fff",
+                  borderRadius: 10,
+                  padding: 10,
                 }}
               >
-                <div
-                  style={{
-                    fontWeight: 900,
-                    marginBottom: 8,
-                    color: "#2f5d34",
-                    fontSize: 17,
-                  }}
-                >
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>
                   ⏰ {a.minutes_left} MINUTE(S) LEFT
                 </div>
 
-                <div style={{ color: "#1f3522", lineHeight: 1.6 }}>
+                <div style={{ fontSize: 14, lineHeight: 1.6 }}>
                   <strong>Type:</strong> {kindLabel(a.kind)} <br />
                   <strong>Customer:</strong> {a.full_name} <br />
                   <strong>Seat:</strong> {a.seat_number || "-"}
@@ -250,16 +291,9 @@ const TimeAlertModal: React.FC<Props> = ({
 
                 <IonButton
                   expand="block"
+                  color="danger"
                   className="alert-btn"
-                  style={{
-                    marginTop: 10,
-                    "--background": "#6a8f4e",
-                    "--background-hover": "#5b7c43",
-                    "--background-activated": "#5b7c43",
-                    "--color": "#ffffff",
-                    "--border-radius": "10px",
-                    fontWeight: 700,
-                  } as React.CSSProperties}
+                  style={{ marginTop: 8 }}
                   onClick={() => onStopOne(a.key)}
                 >
                   STOP THIS ALERT
@@ -270,14 +304,8 @@ const TimeAlertModal: React.FC<Props> = ({
 
           <IonButton
             expand="block"
-            fill="outline"
-            style={{
-              marginTop: 12,
-              "--color": "#2f5d34",
-              "--border-color": "#6a8f4e",
-              "--border-radius": "10px",
-              fontWeight: 700,
-            } as React.CSSProperties}
+            fill="clear"
+            style={{ marginTop: 10 }}
             onClick={onClose}
           >
             Close (keep alerts)

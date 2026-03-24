@@ -111,6 +111,31 @@ type CustomerSessionCodeRow = {
   time_ended: string | null;
 };
 
+type PromoCodeRow = {
+  id: string;
+  promo_code: string | null;
+  full_name: string | null;
+  seat_number: string | null;
+  start_at: string;
+  end_at: string;
+  validity_end_at: string | null;
+  attempts_left: number | null;
+  max_attempts: number | null;
+};
+
+type UnifiedCodeInfo = {
+  source: "customer_session" | "promo_booking";
+  id: string;
+  code: string;
+  full_name: string;
+  seat_number: string;
+  start_at: string;
+  end_at: string | null;
+  validity_end_at: string | null;
+  attempts_left: number | null;
+  max_attempts: number | null;
+};
+
 type RpcAddOnItem = {
   add_on_id: string;
   quantity: number;
@@ -161,8 +186,32 @@ const cleanSize = (s: string | null | undefined): string => (s ?? "").trim();
 
 const isConsignmentCategory = (cat: string): boolean => norm(cat) === "consignment";
 
-const normalizeBookingCode = (value: string): string =>
-  value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+const normalizeAccessCode = (value: string): string =>
+  String(value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .trim()
+    .slice(0, 20);
+
+const isFutureOrOpen = (iso: string | null | undefined): boolean => {
+  if (!iso) return true;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return true;
+  return Date.now() <= t;
+};
+
+const isPromoStillValid = (row: PromoCodeRow): boolean => {
+  const validityOk = row.validity_end_at
+    ? Date.now() <= new Date(row.validity_end_at).getTime()
+    : true;
+
+  const endOk = Date.now() <= new Date(row.end_at).getTime();
+
+  const attemptsOk =
+    row.attempts_left == null ? true : Number(row.attempts_left) > 0;
+
+  return validityOk && endOk && attemptsOk;
+};
 
 /* =========================
    PAGE
@@ -198,7 +247,7 @@ const Add_Ons: React.FC = () => {
   const [pickerSearch, setPickerSearch] = useState<string>("");
 
   const [bookingChecked, setBookingChecked] = useState<boolean>(false);
-  const [bookingInfo, setBookingInfo] = useState<CustomerSessionCodeRow | null>(null);
+  const [bookingInfo, setBookingInfo] = useState<UnifiedCodeInfo | null>(null);
 
   const showError = (msg: string): void => {
     setToastMsg(msg);
@@ -574,15 +623,15 @@ const Add_Ons: React.FC = () => {
   };
 
   const validateBookingCode = async (): Promise<
-    { ok: true; session: CustomerSessionCodeRow } | { ok: false; message: string }
+    { ok: true; session: UnifiedCodeInfo } | { ok: false; message: string }
   > => {
-    const code = normalizeBookingCode(bookingCode);
+    const code = normalizeAccessCode(bookingCode);
 
-    if (!code || code.length !== 4) {
-      return { ok: false, message: "Booking Code is required. Enter the 4-character code." };
+    if (!code) {
+      return { ok: false, message: "Booking / Promo Code is required." };
     }
 
-    const { data, error } = await supabase
+    const { data: customerData, error: customerError } = await supabase
       .from("customer_sessions")
       .select("id, booking_code, full_name, seat_number, time_started, time_ended")
       .eq("booking_code", code)
@@ -590,22 +639,71 @@ const Add_Ons: React.FC = () => {
       .limit(1)
       .maybeSingle<CustomerSessionCodeRow>();
 
-    if (error) {
-      return { ok: false, message: `Code check failed: ${error.message}` };
+    if (customerError) {
+      return { ok: false, message: `Code check failed: ${customerError.message}` };
     }
 
-    if (!data) {
-      return { ok: false, message: "Invalid booking code." };
+    if (customerData) {
+      const endOk = isFutureOrOpen(customerData.time_ended);
+
+      if (!endOk) {
+        return { ok: false, message: "This booking code expired." };
+      }
+
+      return {
+        ok: true,
+        session: {
+          source: "customer_session",
+          id: customerData.id,
+          code: customerData.booking_code ?? code,
+          full_name: customerData.full_name ?? "",
+          seat_number: customerData.seat_number ?? "",
+          start_at: customerData.time_started,
+          end_at: customerData.time_ended,
+          validity_end_at: null,
+          attempts_left: null,
+          max_attempts: null,
+        },
+      };
     }
 
-    const nowMs = Date.now();
-    const endMs = data.time_ended ? new Date(data.time_ended).getTime() : Number.NaN;
+    const { data: promoData, error: promoError } = await supabase
+      .from("promo_bookings")
+      .select(
+        "id, promo_code, full_name, seat_number, start_at, end_at, validity_end_at, attempts_left, max_attempts"
+      )
+      .eq("promo_code", code)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<PromoCodeRow>();
 
-    if (Number.isFinite(endMs) && nowMs > endMs) {
-      return { ok: false, message: "This code expired." };
+    if (promoError) {
+      return { ok: false, message: `Promo code check failed: ${promoError.message}` };
     }
 
-    return { ok: true, session: data };
+    if (!promoData) {
+      return { ok: false, message: "Invalid booking or promo code." };
+    }
+
+    if (!isPromoStillValid(promoData)) {
+      return { ok: false, message: "This promo code expired." };
+    }
+
+    return {
+      ok: true,
+      session: {
+        source: "promo_booking",
+        id: promoData.id,
+        code: promoData.promo_code ?? code,
+        full_name: promoData.full_name ?? "",
+        seat_number: promoData.seat_number ?? "",
+        start_at: promoData.start_at,
+        end_at: promoData.end_at,
+        validity_end_at: promoData.validity_end_at,
+        attempts_left: promoData.attempts_left,
+        max_attempts: promoData.max_attempts,
+      },
+    };
   };
 
   const handleCheckCode = async (): Promise<void> => {
@@ -629,13 +727,17 @@ const Add_Ons: React.FC = () => {
       setSeat(result.session.seat_number ?? "");
     }
 
-    showSuccessToast("Booking code verified.");
+    showSuccessToast(
+      result.session.source === "promo_booking"
+        ? "Promo code verified."
+        : "Booking code verified."
+    );
   };
 
   const handleSubmit = async (): Promise<void> => {
     const name = fullName.trim();
     const selectedSeat = seat.trim();
-    const normalizedCode = normalizeBookingCode(bookingCode);
+    const normalizedCode = normalizeAccessCode(bookingCode);
 
     if (!name) {
       showError("Full Name is required.");
@@ -1125,14 +1227,14 @@ const Add_Ons: React.FC = () => {
 
             <div className="booking-check-wrap">
               <IonItem className="ao-form-item">
-                <IonLabel position="stacked">Booking Code *</IonLabel>
+                <IonLabel position="stacked">Booking / Promo Code *</IonLabel>
                 <IonInput
                   value={bookingCode}
-                  maxlength={4}
-                  placeholder="Enter 4-character code"
+                  maxlength={20}
+                  placeholder="Enter booking code or promo code"
                   onIonInput={(e) => {
                     const raw = asString(e.detail.value);
-                    setBookingCode(normalizeBookingCode(raw));
+                    setBookingCode(normalizeAccessCode(raw));
                     setBookingChecked(false);
                     setBookingInfo(null);
                   }}
@@ -1142,7 +1244,7 @@ const Add_Ons: React.FC = () => {
               <IonButton
                 className="ao-primary"
                 style={{ marginTop: 0 }}
-                disabled={isLoading || normalizeBookingCode(bookingCode).length !== 4}
+                disabled={isLoading || normalizeAccessCode(bookingCode).length === 0}
                 onClick={() => void handleCheckCode()}
               >
                 Check Code
@@ -1151,7 +1253,9 @@ const Add_Ons: React.FC = () => {
 
             {bookingInfo && bookingChecked ? (
               <div className="booking-hint">
-                <strong>Verified:</strong> {bookingInfo.full_name} • Seat {bookingInfo.seat_number}
+                <strong>Verified:</strong> {bookingInfo.full_name || "-"} • Seat{" "}
+                {bookingInfo.seat_number || "-"} •{" "}
+                {bookingInfo.source === "promo_booking" ? "PROMO" : "BOOKING"}
               </div>
             ) : null}
 

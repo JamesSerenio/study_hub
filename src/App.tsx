@@ -1,8 +1,7 @@
-// src/App.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IonApp, IonRouterOutlet, setupIonicReact } from "@ionic/react";
 import { IonReactRouter } from "@ionic/react-router";
-import { Route, Redirect } from "react-router-dom";
+import { Route, Redirect, useLocation } from "react-router-dom";
 
 /* Pages */
 import Login from "./pages/Login";
@@ -19,9 +18,9 @@ import TimeAlertModal from "./components/TimeAlertModal";
 /* Supabase */
 import { supabase } from "./utils/supabaseClient";
 import type {
+  RealtimePostgresDeletePayload,
   RealtimePostgresInsertPayload,
   RealtimePostgresUpdatePayload,
-  RealtimePostgresDeletePayload,
 } from "@supabase/supabase-js";
 
 /* CSS */
@@ -38,7 +37,6 @@ import "./global.css";
 
 setupIonicReact();
 
-/* 🔔 ALERT TIMES */
 const ALERT_MINUTES: number[] = [5, 3, 1];
 
 const minutesLeftCeil = (endIso: string): number => {
@@ -61,6 +59,18 @@ const toNum = (value: unknown): number => {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : 0;
 };
+
+const getRoleLocal = (): string =>
+  (localStorage.getItem("role") || "").toLowerCase();
+
+const firstObj = <T,>(value: T | T[] | null | undefined): T | null => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value;
+};
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => window.setTimeout(resolve, ms));
 
 type ProfileRow = {
   role: string | null;
@@ -105,7 +115,7 @@ type OrderAlertLine = {
   name: string;
   quantity: number;
   size: string;
-  category: string;
+  image_url?: string | null;
 };
 
 type OrderAlertItem = {
@@ -120,25 +130,23 @@ type OrderAlertItem = {
 
 type AddOnCatalogRow = {
   name?: string | null;
-  category?: string | null;
   size?: string | null;
+  image_url?: string | null;
 };
 
 type ConsignmentCatalogRow = {
   item_name?: string | null;
-  category?: string | null;
   size?: string | null;
+  image_url?: string | null;
 };
 
 type AddOnOrderItemRow = {
   quantity?: number | string | null;
-  price?: number | string | null;
   add_ons?: AddOnCatalogRow | AddOnCatalogRow[] | null;
 };
 
 type ConsignmentOrderItemRow = {
   quantity?: number | string | null;
-  price?: number | string | null;
   consignment?: ConsignmentCatalogRow | ConsignmentCatalogRow[] | null;
 };
 
@@ -158,26 +166,28 @@ type ConsignmentOrderRow = {
   consignment_order_items?: ConsignmentOrderItemRow[] | null;
 };
 
-const getRoleLocal = (): string =>
-  (localStorage.getItem("role") || "").toLowerCase();
+const AppRoutes: React.FC = () => {
+  const location = useLocation();
 
-const firstObj = <T,>(value: T | T[] | null | undefined): T | null => {
-  if (!value) return null;
-  if (Array.isArray(value)) return value[0] ?? null;
-  return value;
-};
-
-const App: React.FC = () => {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [orderAlerts, setOrderAlerts] = useState<OrderAlertItem[]>([]);
   const [showAlert, setShowAlert] = useState<boolean>(false);
-
   const [role, setRole] = useState<string>(getRoleLocal());
-  const isStaff = useMemo(() => role === "staff", [role]);
+
+  const isStaffOrAdmin = useMemo(
+    () => role === "staff" || role === "admin",
+    [role]
+  );
+
+  const isAllowedAlertRoute = useMemo(() => {
+    return (
+      location.pathname === "/staff-menu" || location.pathname === "/admin-menu"
+    );
+  }, [location.pathname]);
+
+  const canShowModal = isStaffOrAdmin && isAllowedAlertRoute;
 
   const triggeredRef = useRef<Set<string>>(new Set());
-  const orderTriggeredRef = useRef<Set<string>>(new Set());
-
   const sessionsRef = useRef<Map<string, CustomerSessionRow>>(new Map());
   const promosRef = useRef<Map<string, PromoBookingRow>>(new Map());
 
@@ -231,16 +241,11 @@ const App: React.FC = () => {
       if (prev.some((x) => x.key === a.key)) return prev;
       return [...prev, a].sort((x, y) => x.minutes_left - y.minutes_left);
     });
-
     setShowAlert(true);
   };
 
   const addOrderAlert = (a: OrderAlertItem): void => {
-    setOrderAlerts((prev) => {
-      if (prev.some((x) => x.key === a.key)) return prev;
-      return [a, ...prev];
-    });
-
+    setOrderAlerts([a]);
     setShowAlert(true);
   };
 
@@ -269,15 +274,18 @@ const App: React.FC = () => {
     });
   };
 
-  const buildAddOnLines = (rows: AddOnOrderItemRow[] | null | undefined): OrderAlertLine[] => {
+  const buildAddOnLines = (
+    rows: AddOnOrderItemRow[] | null | undefined
+  ): OrderAlertLine[] => {
     return (rows ?? [])
       .map((row) => {
         const catalog = firstObj(row.add_ons);
-        const name = asString(catalog?.name).trim() || "Add-on Item";
-        const quantity = Math.max(1, Math.floor(toNum(row.quantity)));
-        const size = asString(catalog?.size).trim();
-        const category = asString(catalog?.category).trim();
-        return { name, quantity, size, category };
+        return {
+          name: asString(catalog?.name).trim() || "Order Item",
+          quantity: Math.max(1, Math.floor(toNum(row.quantity))),
+          size: asString(catalog?.size).trim() || "-",
+          image_url: catalog?.image_url ?? null,
+        };
       })
       .filter((line) => line.name.trim().length > 0);
   };
@@ -288,101 +296,112 @@ const App: React.FC = () => {
     return (rows ?? [])
       .map((row) => {
         const catalog = firstObj(row.consignment);
-        const name = asString(catalog?.item_name).trim() || "Consignment Item";
-        const quantity = Math.max(1, Math.floor(toNum(row.quantity)));
-        const size = asString(catalog?.size).trim();
-        const category = asString(catalog?.category).trim();
-        return { name, quantity, size, category };
+        return {
+          name: asString(catalog?.item_name).trim() || "Other Item",
+          quantity: Math.max(1, Math.floor(toNum(row.quantity))),
+          size: asString(catalog?.size).trim() || "-",
+          image_url: catalog?.image_url ?? null,
+        };
       })
       .filter((line) => line.name.trim().length > 0);
   };
 
   const fetchAddOnOrderAlert = async (orderId: string): Promise<void> => {
     const key = `add_ons-${orderId}`;
-    if (orderTriggeredRef.current.has(key)) return;
 
-    const { data, error } = await supabase
-      .from("addon_orders")
-      .select(
-        `
-          id,
-          full_name,
-          seat_number,
-          created_at,
-          addon_order_items (
-            quantity,
-            price,
-            add_ons (
-              name,
-              category,
-              size
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { data, error } = await supabase
+        .from("addon_orders")
+        .select(
+          `
+            id,
+            full_name,
+            seat_number,
+            created_at,
+            addon_order_items (
+              quantity,
+              add_ons (
+                name,
+                size,
+                image_url
+              )
             )
-          )
-        `
-      )
-      .eq("id", orderId)
-      .maybeSingle<AddOnOrderRow>();
+          `
+        )
+        .eq("id", orderId)
+        .maybeSingle<AddOnOrderRow>();
 
-    if (error || !data?.id) return;
+      if (!error && data?.id) {
+        const lines = buildAddOnLines(data.addon_order_items);
 
-    const lines = buildAddOnLines(data.addon_order_items);
-    if (lines.length === 0) return;
+        if (lines.length > 0) {
+          addOrderAlert({
+            key,
+            kind: "add_ons",
+            id: data.id,
+            full_name: asString(data.full_name).trim() || "Unknown Customer",
+            seat_number: asString(data.seat_number).trim() || "-",
+            created_at: asString(data.created_at),
+            lines,
+          });
 
-    orderTriggeredRef.current.add(key);
+          const hasImage = lines.some((line) => !!line.image_url);
+          if (hasImage) return;
+        }
+      }
 
-    addOrderAlert({
-      key,
-      kind: "add_ons",
-      id: data.id,
-      full_name: asString(data.full_name).trim() || "Unknown Customer",
-      seat_number: asString(data.seat_number).trim() || "-",
-      created_at: asString(data.created_at),
-      lines,
-    });
+      await sleep(250);
+    }
   };
 
-  const fetchConsignmentOrderAlert = async (orderId: string): Promise<void> => {
+  const fetchConsignmentOrderAlert = async (
+    orderId: string
+  ): Promise<void> => {
     const key = `consignment-${orderId}`;
-    if (orderTriggeredRef.current.has(key)) return;
 
-    const { data, error } = await supabase
-      .from("consignment_orders")
-      .select(
-        `
-          id,
-          full_name,
-          seat_number,
-          created_at,
-          consignment_order_items (
-            quantity,
-            price,
-            consignment (
-              item_name,
-              category,
-              size
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { data, error } = await supabase
+        .from("consignment_orders")
+        .select(
+          `
+            id,
+            full_name,
+            seat_number,
+            created_at,
+            consignment_order_items (
+              quantity,
+              consignment (
+                item_name,
+                size,
+                image_url
+              )
             )
-          )
-        `
-      )
-      .eq("id", orderId)
-      .maybeSingle<ConsignmentOrderRow>();
+          `
+        )
+        .eq("id", orderId)
+        .maybeSingle<ConsignmentOrderRow>();
 
-    if (error || !data?.id) return;
+      if (!error && data?.id) {
+        const lines = buildConsignmentLines(data.consignment_order_items);
 
-    const lines = buildConsignmentLines(data.consignment_order_items);
-    if (lines.length === 0) return;
+        if (lines.length > 0) {
+          addOrderAlert({
+            key,
+            kind: "consignment",
+            id: data.id,
+            full_name: asString(data.full_name).trim() || "Unknown Customer",
+            seat_number: asString(data.seat_number).trim() || "-",
+            created_at: asString(data.created_at),
+            lines,
+          });
 
-    orderTriggeredRef.current.add(key);
+          const hasImage = lines.some((line) => !!line.image_url);
+          if (hasImage) return;
+        }
+      }
 
-    addOrderAlert({
-      key,
-      kind: "consignment",
-      id: data.id,
-      full_name: asString(data.full_name).trim() || "Unknown Customer",
-      seat_number: asString(data.seat_number).trim() || "-",
-      created_at: asString(data.created_at),
-      lines,
-    });
+      await sleep(250);
+    }
   };
 
   const tickCheckAll = (): void => {
@@ -447,7 +466,9 @@ const App: React.FC = () => {
 
     const { data, error } = await supabase
       .from("promo_bookings")
-      .select("id, created_at, full_name, seat_number, area, start_at, end_at, status")
+      .select(
+        "id, created_at, full_name, seat_number, area, start_at, end_at, status"
+      )
       .gt("end_at", nowIso)
       .order("end_at", { ascending: true })
       .limit(400);
@@ -461,12 +482,11 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!isStaff) {
+    if (!isStaffOrAdmin) {
       setShowAlert(false);
       setAlerts([]);
       setOrderAlerts([]);
       triggeredRef.current.clear();
-      orderTriggeredRef.current.clear();
       sessionsRef.current.clear();
       promosRef.current.clear();
       return;
@@ -587,7 +607,6 @@ const App: React.FC = () => {
 
     return () => {
       alive = false;
-
       window.clearInterval(tick);
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVis);
@@ -597,50 +616,66 @@ const App: React.FC = () => {
       void supabase.removeChannel(chAddOnOrders);
       void supabase.removeChannel(chConsignmentOrders);
     };
-  }, [isStaff]);
+  }, [isStaffOrAdmin]);
+
+  useEffect(() => {
+    if (!canShowModal) {
+      setShowAlert(false);
+    }
+  }, [canShowModal]);
 
   const stopOne = (key: string): void => {
     setAlerts((prev) => prev.filter((x) => x.key !== key));
     setOrderAlerts((prev) => prev.filter((x) => x.key !== key));
 
     window.setTimeout(() => {
-      setAlerts((currentTimeAlerts) => {
-        setOrderAlerts((currentOrderAlerts) => {
-          if (currentTimeAlerts.length === 0 && currentOrderAlerts.length === 0) {
+      setAlerts((timeNow) => {
+        setOrderAlerts((orderNow) => {
+          if (timeNow.length === 0 && orderNow.length === 0) {
             setShowAlert(false);
           }
-          return currentOrderAlerts;
+          return orderNow;
         });
-        return currentTimeAlerts;
+        return timeNow;
       });
     }, 0);
   };
 
   return (
+    <>
+      {canShowModal ? (
+        <TimeAlertModal
+          isOpen={showAlert}
+          role={role}
+          alerts={alerts}
+          orderAlerts={orderAlerts}
+          onStopOne={stopOne}
+          onClose={() => setShowAlert(false)}
+        />
+      ) : null}
+
+      <IonRouterOutlet>
+        <Route exact path="/add_ons" component={Add_Ons} />
+        <Route exact path="/book-add" component={Book_Add} />
+        <Route exact path="/seat_map" component={Seat_Map} />
+        <Route exact path="/login" component={Login} />
+        <Route exact path="/staff-menu" component={Staff_menu} />
+        <Route exact path="/admin-menu" component={Admin_menu} />
+        <Route exact path="/home" component={Home} />
+
+        <Route exact path="/">
+          <Redirect to="/book-add" />
+        </Route>
+      </IonRouterOutlet>
+    </>
+  );
+};
+
+const App: React.FC = () => {
+  return (
     <IonApp>
-      <TimeAlertModal
-        isOpen={showAlert}
-        role={role}
-        alerts={alerts}
-        orderAlerts={orderAlerts}
-        onStopOne={stopOne}
-        onClose={() => setShowAlert(false)}
-      />
-
       <IonReactRouter>
-        <IonRouterOutlet>
-          <Route exact path="/add_ons" component={Add_Ons} />
-          <Route exact path="/book-add" component={Book_Add} />
-          <Route exact path="/seat_map" component={Seat_Map} />
-          <Route exact path="/login" component={Login} />
-          <Route exact path="/staff-menu" component={Staff_menu} />
-          <Route exact path="/admin-menu" component={Admin_menu} />
-          <Route exact path="/home" component={Home} />
-
-          <Route exact path="/">
-            <Redirect to="/book-add" />
-          </Route>
-        </IonRouterOutlet>
+        <AppRoutes />
       </IonReactRouter>
     </IonApp>
   );
