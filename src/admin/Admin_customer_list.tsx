@@ -1408,39 +1408,39 @@ const Admin_customer_list: React.FC = () => {
         }
       };
 
-    const togglePaid = async (s: CustomerSession): Promise<void> => {
-      try {
-        setTogglingPaidId(s.id);
+  const togglePaid = async (s: CustomerSession): Promise<void> => {
+    try {
+      setTogglingPaidId(s.id);
 
-        const currentPaid = toBool(s.is_paid);
-        const nextPaid = !currentPaid;
+      const currentPaid = toBool(s.is_paid);
+      const nextPaid = !currentPaid;
 
-        const { data: updated, error } = await supabase
-          .from("customer_sessions")
-          .update({
-            is_paid: nextPaid,
-            paid_at: nextPaid ? s.paid_at ?? new Date().toISOString() : null,
-          })
-          .eq("id", s.id)
-          .select("*")
-          .single();
+      const { data: updated, error } = await supabase
+        .from("customer_sessions")
+        .update({
+          is_paid: nextPaid,
+          paid_at: nextPaid ? s.paid_at ?? new Date().toISOString() : null,
+        })
+        .eq("id", s.id)
+        .select("*")
+        .single();
 
-        if (error || !updated) {
-          alert(`Toggle paid error: ${error?.message ?? "Unknown error"}`);
-          return;
-        }
-
-        const updatedRow = updated as CustomerSession;
-        setSessions((prev) => prev.map((x) => (x.id === s.id ? updatedRow : x)));
-        setSelectedSession((prev) => (prev?.id === s.id ? updatedRow : prev));
-        setSelectedOrderSession((prev) => (prev?.id === s.id ? updatedRow : prev));
-      } catch (e) {
-        console.error(e);
-        alert("Toggle paid failed.");
-      } finally {
-        setTogglingPaidId(null);
+      if (error || !updated) {
+        alert(`Toggle paid error: ${error?.message ?? "Unknown error"}`);
+        return;
       }
-    };
+
+      const updatedRow = updated as CustomerSession;
+      setSessions((prev) => prev.map((x) => (x.id === s.id ? updatedRow : x)));
+      setSelectedSession((prev) => (prev?.id === s.id ? updatedRow : prev));
+      setSelectedOrderSession((prev) => (prev?.id === s.id ? updatedRow : prev));
+    } catch (e) {
+      console.error(e);
+      alert("Toggle paid failed.");
+    } finally {
+      setTogglingPaidId(null);
+    }
+  };
 
   /* =========================
      ORDER CANCEL HELPERS
