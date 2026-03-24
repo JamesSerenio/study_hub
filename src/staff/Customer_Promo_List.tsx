@@ -569,7 +569,7 @@ const allocateAmountsAcrossOrders = (
       source: p.source,
       gcash_amount: useGcash,
       cash_amount: useCash,
-      isPaid,
+      is_paid: isPaid,
       paid_at: isPaid ? new Date().toISOString() : null,
     });
   });
