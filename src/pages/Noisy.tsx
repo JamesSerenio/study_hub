@@ -66,15 +66,17 @@ const Noisy: React.FC = () => {
     try {
       setSaving(true);
 
-      const { error } = await supabase.from("noisy_reports").insert([
-        {
-          name: trimmedName,
-          seat_number: trimmedSeat,
-          report_type: reportType,
-          message: trimmedMessage,
-          status: "pending",
-        },
-      ]);
+      const payload = {
+        name: trimmedName,
+        seat_number: trimmedSeat,
+        report_type: reportType,
+        message: trimmedMessage,
+        concern: trimmedMessage,
+        status: "pending",
+        is_read: false,
+      };
+
+      const { error } = await supabase.from("noisy_reports").insert([payload]);
 
       if (error) {
         alert(`Failed to save: ${error.message}`);

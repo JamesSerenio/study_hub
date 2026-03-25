@@ -61,46 +61,15 @@ type FlowerStatic = {
   rotateDeg?: number;
 };
 
-type AddOnNotifRow = {
+type NoisyNotifRow = {
   id: string;
   created_at: string;
-  add_on_row_id: string;
-  full_name: string;
+  name: string;
   seat_number: string;
-  add_on_id: string;
-  add_on_name: string;
-  quantity: number;
-  price: number;
-  total: number;
-  is_read: boolean;
-  read_at: string | null;
-};
-
-type ConsignmentNotifRow = {
-  id: string;
-  created_at: string;
-  consignment_row_id: string;
-  full_name: string;
-  seat_number: string;
-  consignment_id: string;
-  consignment_name: string;
-  quantity: number;
-  price: number;
-  total: number;
-  is_read: boolean;
-  read_at: string | null;
-};
-
-type UnifiedNotif = {
-  kind: "addon" | "consignment";
-  id: string;
-  created_at: string;
-  full_name: string;
-  seat_number: string;
-  item_name: string;
-  quantity: number;
-  price: number;
-  total: number;
+  report_type: string | null;
+  message: string | null;
+  concern?: string | null;
+  status: string | null;
   is_read: boolean;
   read_at: string | null;
 };
@@ -114,13 +83,6 @@ type RealtimeUpdatePayload<T> = {
   old: Partial<T>;
 };
 
-const toMoney = (v: unknown): number => {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
-
-const sleep = (msV: number): Promise<void> =>
-  new Promise((resolve) => window.setTimeout(resolve, msV));
 
 const Staff_menu: React.FC = () => {
   const history = useHistory();
@@ -131,23 +93,26 @@ const Staff_menu: React.FC = () => {
   /* =========================
       🔔 Notifications
   ========================= */
-  const ADDON_NOTIF_TABLE = "add_on_notifications";
-  const CONSIGNMENT_NOTIF_TABLE = "consignment_notifications";
+  const NOISY_TABLE = "noisy_reports";
 
   const [notifOpen, setNotifOpen] = useState<boolean>(false);
   const notifOpenRef = useRef<boolean>(false);
 
   const [notifLoading, setNotifLoading] = useState<boolean>(false);
-  const [notifItems, setNotifItems] = useState<UnifiedNotif[]>([]);
+  const [notifItems, setNotifItems] = useState<NoisyNotifRow[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
-  const bellWrapRef = useRef<HTMLDivElement | null>(null);
   const bellBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>({
-    top: 64,
-    right: 12,
-  });
+  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>(
+    {
+      top: 64,
+      right: 12,
+    }
+  );
+
+  const refreshTimerRef = useRef<number | null>(null);
+  const suspendRefreshRef = useRef<boolean>(false);
 
   useEffect(() => {
     notifOpenRef.current = notifOpen;
@@ -167,94 +132,35 @@ const Staff_menu: React.FC = () => {
     }).format(d);
   };
 
-  const mapAddOnToUnified = (r: AddOnNotifRow): UnifiedNotif => ({
-    kind: "addon",
-    id: r.id,
-    created_at: r.created_at,
-    full_name: r.full_name,
-    seat_number: r.seat_number,
-    item_name: r.add_on_name,
-    quantity: Number(r.quantity) || 0,
-    price: toMoney(r.price),
-    total: toMoney(r.total),
-    is_read: Boolean(r.is_read),
-    read_at: r.read_at ?? null,
-  });
-
-  const mapConsignmentToUnified = (r: ConsignmentNotifRow): UnifiedNotif => ({
-    kind: "consignment",
-    id: r.id,
-    created_at: r.created_at,
-    full_name: r.full_name,
-    seat_number: r.seat_number,
-    item_name: r.consignment_name,
-    quantity: Number(r.quantity) || 0,
-    price: toMoney(r.price),
-    total: toMoney(r.total),
-    is_read: Boolean(r.is_read),
-    read_at: r.read_at ?? null,
-  });
-
-  const fetchUnreadCount = async (): Promise<number> => {
-    const [a, c] = await Promise.all([
-      supabase
-        .from(ADDON_NOTIF_TABLE)
-        .select("id", { count: "exact", head: true })
-        .eq("is_read", false),
-      supabase
-        .from(CONSIGNMENT_NOTIF_TABLE)
-        .select("id", { count: "exact", head: true })
-        .eq("is_read", false),
-    ]);
-
-    const aCount = a.error ? 0 : Number(a.count ?? 0);
-    const cCount = c.error ? 0 : Number(c.count ?? 0);
-
-    const total = aCount + cCount;
-    setUnreadCount(total);
-    return total;
+  const normalizeType = (value: string | null | undefined): string => {
+    const v = String(value ?? "other").trim().toLowerCase();
+    if (
+      v === "concern" ||
+      v === "feedback" ||
+      v === "suggestion" ||
+      v === "complaint" ||
+      v === "request" ||
+      v === "other"
+    ) {
+      return v;
+    }
+    return "other";
   };
 
-  const fetchNotifications = async (): Promise<void> => {
-    setNotifLoading(true);
-
-    const [a, c] = await Promise.all([
-      supabase
-        .from(ADDON_NOTIF_TABLE)
-        .select(
-          "id, created_at, add_on_row_id, full_name, seat_number, add_on_id, add_on_name, quantity, price, total, is_read, read_at"
-        )
-        .order("created_at", { ascending: false })
-        .limit(30),
-      supabase
-        .from(CONSIGNMENT_NOTIF_TABLE)
-        .select(
-          "id, created_at, consignment_row_id, full_name, seat_number, consignment_id, consignment_name, quantity, price, total, is_read, read_at"
-        )
-        .order("created_at", { ascending: false })
-        .limit(30),
-    ]);
-
-    setNotifLoading(false);
-
-    if (a.error) console.warn("fetch addon notifications:", a.error.message);
-    if (c.error) console.warn("fetch consignment notifications:", c.error.message);
-
-    const merged = [
-      ...(((a.data as AddOnNotifRow[] | null) ?? []).map(mapAddOnToUnified)),
-      ...(((c.data as ConsignmentNotifRow[] | null) ?? []).map(mapConsignmentToUnified)),
-    ]
-      .sort((x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime())
-      .slice(0, 30);
-
-    setNotifItems(merged);
+  const getTypeLabel = (value: string | null | undefined): string => {
+    const v = normalizeType(value);
+    return v.charAt(0).toUpperCase() + v.slice(1);
   };
 
-  /* =========================
-      ✅ REALTIME refresh
-  ========================= */
-  const refreshTimerRef = useRef<number | null>(null);
-  const suspendRefreshRef = useRef<boolean>(false);
+  const getAvatarText = (name: string): string => {
+    const trimmed = name.trim();
+    if (!trimmed) return "?";
+    return trimmed.charAt(0).toUpperCase();
+  };
+
+  const getMessageText = (row: NoisyNotifRow): string => {
+    return String(row.message ?? row.concern ?? "").trim() || "No message.";
+  };
 
   const cancelScheduledRefresh = (): void => {
     if (refreshTimerRef.current !== null) {
@@ -266,38 +172,55 @@ const Staff_menu: React.FC = () => {
   const scheduleRecount = (delayMs = 220): void => {
     if (suspendRefreshRef.current) return;
     cancelScheduledRefresh();
+
     refreshTimerRef.current = window.setTimeout(() => {
       if (suspendRefreshRef.current) return;
       void fetchUnreadCount();
-      if (notifOpenRef.current) void fetchNotifications();
+      if (!notifOpenRef.current) return;
     }, delayMs);
   };
 
-  const markAllAsReadSilent = async (): Promise<void> => {
-    cancelScheduledRefresh();
-    suspendRefreshRef.current = true;
-    setUnreadCount(0);
+  const fetchUnreadCount = async (): Promise<number> => {
+    const result = await supabase
+      .from(NOISY_TABLE)
+      .select("id", { count: "exact", head: true })
+      .eq("is_read", false);
 
-    const nowIso = new Date().toISOString();
+    const total = result.error ? 0 : Number(result.count ?? 0);
+    setUnreadCount(total);
+    return total;
+  };
 
-    const [a, c] = await Promise.all([
-      supabase
-        .from(ADDON_NOTIF_TABLE)
-        .update({ is_read: true, read_at: nowIso })
-        .eq("is_read", false),
-      supabase
-        .from(CONSIGNMENT_NOTIF_TABLE)
-        .update({ is_read: true, read_at: nowIso })
-        .eq("is_read", false),
-    ]);
+  const fetchNotifications = async (): Promise<void> => {
+    setNotifLoading(true);
 
-    if (a.error || c.error) {
-      console.warn("markAllAsReadSilent:", a.error?.message ?? "", c.error?.message ?? "");
-      suspendRefreshRef.current = false;
-      await fetchUnreadCount();
+    const { data, error } = await supabase
+      .from(NOISY_TABLE)
+      .select(
+        "id, created_at, name, seat_number, report_type, message, concern, status, is_read, read_at"
+      )
+      .order("created_at", { ascending: false })
+      .limit(40);
+
+    setNotifLoading(false);
+
+    if (error) {
+      console.warn("fetch noisy notifications:", error.message);
       return;
     }
 
+    setNotifItems((data as NoisyNotifRow[] | null) ?? []);
+  };
+
+  const markAllAsReadSilent = async (): Promise<void> => {
+    if (suspendRefreshRef.current) return;
+
+    cancelScheduledRefresh();
+    suspendRefreshRef.current = true;
+
+    const nowIso = new Date().toISOString();
+
+    setUnreadCount(0);
     setNotifItems((prev) =>
       prev.map((n) => ({
         ...n,
@@ -306,9 +229,42 @@ const Staff_menu: React.FC = () => {
       }))
     );
 
-    await sleep(180);
-    await fetchUnreadCount();
+    const { error } = await supabase
+      .from(NOISY_TABLE)
+      .update({ is_read: true, read_at: nowIso })
+      .eq("is_read", false);
+
+    if (error) {
+      console.warn("markAllAsReadSilent:", error.message);
+      await fetchUnreadCount();
+      if (notifOpenRef.current) {
+        await fetchNotifications();
+      }
+    }
+
     suspendRefreshRef.current = false;
+  };
+
+  const handleDeleteNotification = async (id: string): Promise<void> => {
+    const ok = window.confirm("Delete this message?");
+    if (!ok) return;
+
+    const current = notifItems.find((x) => x.id === id);
+
+    const { error } = await supabase.from(NOISY_TABLE).delete().eq("id", id);
+
+    if (error) {
+      alert(`Delete failed: ${error.message}`);
+      return;
+    }
+
+    setNotifItems((prev) => prev.filter((x) => x.id !== id));
+
+    if (current && !current.is_read) {
+      setUnreadCount((c) => Math.max(0, c - 1));
+    } else {
+      void fetchUnreadCount();
+    }
   };
 
   const computePopoverPosition = (): void => {
@@ -325,14 +281,12 @@ const Staff_menu: React.FC = () => {
     computePopoverPosition();
     setNotifOpen(true);
     await fetchNotifications();
-    await markAllAsReadSilent();
-
-    if (notifOpenRef.current) {
-      await fetchNotifications();
-    }
+    void markAllAsReadSilent();
   };
 
-  const closeBell = (): void => setNotifOpen(false);
+  const closeBell = (): void => {
+    setNotifOpen(false);
+  };
 
   const toggleBell = async (): Promise<void> => {
     if (notifOpen) {
@@ -341,18 +295,6 @@ const Staff_menu: React.FC = () => {
       await openBell();
     }
   };
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent): void => {
-      if (!notifOpenRef.current) return;
-      const wrap = bellWrapRef.current;
-      if (!wrap) return;
-      if (!wrap.contains(e.target as Node)) setNotifOpen(false);
-    };
-
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
 
   useEffect(() => {
     const onResize = (): void => {
@@ -368,145 +310,81 @@ const Staff_menu: React.FC = () => {
     void fetchNotifications();
 
     const ch = supabase
-      .channel("realtime_notifications_all")
-
+      .channel("realtime_noisy_reports_notifications")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: ADDON_NOTIF_TABLE },
+        { event: "INSERT", schema: "public", table: NOISY_TABLE },
         (payload: unknown) => {
-          const row = (payload as RealtimeInsertPayload<AddOnNotifRow>).new;
-          const u = mapAddOnToUnified(row);
+          const row = (payload as RealtimeInsertPayload<NoisyNotifRow>).new;
 
           setNotifItems((prev) => {
-            if (prev.some((x) => x.id === u.id && x.kind === "addon")) return prev;
-            const merged = [u, ...prev].sort(
-              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            if (prev.some((x) => x.id === row.id)) return prev;
+            const merged = [row, ...prev].sort(
+              (a, b) =>
+                new Date(b.created_at).getTime() -
+                new Date(a.created_at).getTime()
             );
-            return merged.slice(0, 30);
+            return merged.slice(0, 40);
           });
 
           if (notifOpenRef.current) {
             void markAllAsReadSilent();
-          } else if (!u.is_read) {
+          } else if (!row.is_read) {
             setUnreadCount((c) => c + 1);
+            scheduleRecount(600);
           }
-
-          scheduleRecount(600);
         }
       )
-
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: ADDON_NOTIF_TABLE },
+        { event: "UPDATE", schema: "public", table: NOISY_TABLE },
         (payload: unknown) => {
-          const p = payload as RealtimeUpdatePayload<AddOnNotifRow>;
+          const p = payload as RealtimeUpdatePayload<NoisyNotifRow>;
           const newRow = p.new;
           const oldRow = p.old;
-          const u = mapAddOnToUnified(newRow);
 
           setNotifItems((prev) => {
-            const idx = prev.findIndex((x) => x.kind === "addon" && x.id === u.id);
+            const idx = prev.findIndex((x) => x.id === newRow.id);
             if (idx === -1) return prev;
+
             const copy = [...prev];
-            copy[idx] = u;
+            copy[idx] = newRow;
             return copy;
           });
 
-          if (!notifOpenRef.current) {
-            const wasUnread = oldRow.is_read === undefined ? null : !oldRow.is_read;
-            const isUnreadNow = !u.is_read;
+          if (notifOpenRef.current) return;
 
-            if (wasUnread === true && isUnreadNow === false) {
-              setUnreadCount((c) => Math.max(0, c - 1));
-            } else if (wasUnread === false && isUnreadNow === true) {
-              setUnreadCount((c) => c + 1);
-            } else {
-              scheduleRecount(350);
-            }
-          }
-        }
-      )
+          const wasUnread =
+            oldRow.is_read === undefined ? null : !oldRow.is_read;
+          const isUnreadNow = !newRow.is_read;
 
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: ADDON_NOTIF_TABLE },
-        () => {
-          scheduleRecount(250);
-        }
-      )
-
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
-        (payload: unknown) => {
-          const row = (payload as RealtimeInsertPayload<ConsignmentNotifRow>).new;
-          const u = mapConsignmentToUnified(row);
-
-          setNotifItems((prev) => {
-            if (prev.some((x) => x.id === u.id && x.kind === "consignment")) return prev;
-            const merged = [u, ...prev].sort(
-              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-            );
-            return merged.slice(0, 30);
-          });
-
-          if (notifOpenRef.current) {
-            void markAllAsReadSilent();
-          } else if (!u.is_read) {
+          if (wasUnread === true && isUnreadNow === false) {
+            setUnreadCount((c) => Math.max(0, c - 1));
+          } else if (wasUnread === false && isUnreadNow === true) {
             setUnreadCount((c) => c + 1);
           }
-
-          scheduleRecount(600);
         }
       )
-
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
-        (payload: unknown) => {
-          const p = payload as RealtimeUpdatePayload<ConsignmentNotifRow>;
-          const newRow = p.new;
-          const oldRow = p.old;
-          const u = mapConsignmentToUnified(newRow);
-
-          setNotifItems((prev) => {
-            const idx = prev.findIndex((x) => x.kind === "consignment" && x.id === u.id);
-            if (idx === -1) return prev;
-            const copy = [...prev];
-            copy[idx] = u;
-            return copy;
-          });
-
+        { event: "DELETE", schema: "public", table: NOISY_TABLE },
+        () => {
           if (!notifOpenRef.current) {
-            const wasUnread = oldRow.is_read === undefined ? null : !oldRow.is_read;
-            const isUnreadNow = !u.is_read;
-
-            if (wasUnread === true && isUnreadNow === false) {
-              setUnreadCount((c) => Math.max(0, c - 1));
-            } else if (wasUnread === false && isUnreadNow === true) {
-              setUnreadCount((c) => c + 1);
-            } else {
-              scheduleRecount(350);
-            }
+            scheduleRecount(250);
+          } else {
+            void fetchUnreadCount();
           }
         }
       )
-
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: CONSIGNMENT_NOTIF_TABLE },
-        () => {
-          scheduleRecount(250);
-        }
-      )
-
       .subscribe((status) => {
-        console.log("NOTIF CHANNEL:", status);
+        console.log("NOISY NOTIF CHANNEL:", status);
       });
 
     const onFocusOrWake = (): void => {
       void fetchUnreadCount();
-      if (notifOpenRef.current) void fetchNotifications();
+      if (notifOpenRef.current) {
+        computePopoverPosition();
+      }
     };
 
     window.addEventListener("focus", onFocusOrWake);
@@ -538,7 +416,11 @@ const Staff_menu: React.FC = () => {
     () => [
       { name: "Dashboard", key: "dashboard", icon: dashboardIcon },
       { name: "Customer Lists", key: "customer_lists", icon: listIcon },
-      { name: "Customer Reservations", key: "customer_reservations", icon: reserveIcon },
+      {
+        name: "Customer Reservations",
+        key: "customer_reservations",
+        icon: reserveIcon,
+      },
       { name: "Customer Calendar", key: "customer_calendar", icon: calendarIcon },
       { name: "Customer Add-Ons", key: "customer_add_ons", icon: onsIcon },
       { name: "Customer Cancelled", key: "customer_cancelled", icon: cancelledIcon },
@@ -546,8 +428,16 @@ const Staff_menu: React.FC = () => {
       { name: "Sales Report", key: "staff_sales_report", icon: salesIcon },
       { name: "Product Item Lists", key: "product_item_lists", icon: foodIcon },
       { name: "Add Consignment", key: "staff_consignment", icon: consignmentIcon },
-      { name: "Consignment Record", key: "staff_consignment_record", icon: staff_consignmentIcon },
-      { name: "Customer Consignment Record", key: "customer_consignment_record", icon: consignmentRecordIcon },
+      {
+        name: "Consignment Record",
+        key: "staff_consignment_record",
+        icon: staff_consignmentIcon,
+      },
+      {
+        name: "Customer Consignment Record",
+        key: "customer_consignment_record",
+        icon: consignmentRecordIcon,
+      },
     ],
     []
   );
@@ -720,7 +610,7 @@ const Staff_menu: React.FC = () => {
               <span className="topbar-title">Staff Dashboard</span>
 
               <IonButtons slot="end">
-                <div className="topbar-tools" ref={bellWrapRef}>
+                <div className="topbar-tools">
                   <button
                     ref={bellBtnRef}
                     className="notif-bell-btn"
@@ -758,11 +648,15 @@ const Staff_menu: React.FC = () => {
               style={{ top: `${popoverPos.top}px`, right: `${popoverPos.right}px` }}
               role="dialog"
               aria-label="Notifications"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             >
               <div className="notif-popover-head">
                 <div>
-                  <div className="notif-title">Notifications</div>
-                  <div className="notif-subtitle">Add-ons + Others • live • auto-read on open</div>
+                  <div className="notif-title">Guest Messages</div>
+                  <div className="notif-subtitle">
+                    Anonymous / guest concern, feedback, suggestion, request
+                  </div>
                 </div>
 
                 <div style={{ display: "flex", gap: 8 }}>
@@ -777,43 +671,57 @@ const Staff_menu: React.FC = () => {
                 </div>
               </div>
 
-              <div className="notif-grid-head">
-                <div>Type</div>
-                <div>Fullname</div>
-                <div>Seat</div>
-                <div>Date/Time</div>
-                <div>Item</div>
-                <div className="t-right">Qty</div>
-                <div className="t-right">Price</div>
-                <div className="t-right">Total</div>
-              </div>
-
               <div className="notif-popover-body">
                 {notifLoading ? (
                   <div className="notif-empty">
                     <IonSpinner name="dots" />
                   </div>
                 ) : notifItems.length === 0 ? (
-                  <div className="notif-empty">No notifications yet.</div>
+                  <div className="notif-empty">No messages yet.</div>
                 ) : (
-                  notifItems.map((n) => (
-                    <div
-                      key={`${n.kind}-${n.id}`}
-                      className={`notif-row ${n.is_read ? "" : "notif-row--unread"}`}
-                    >
-                      <div className={`seat-pill ${n.kind === "consignment" ? "seat-pill--alt" : ""}`}>
-                        {n.kind === "addon" ? "ADD-ON" : "CONSIGN"}
-                      </div>
+                  notifItems.map((n) => {
+                    const typeValue = normalizeType(n.report_type);
 
-                      <div className="ellipsis">{n.full_name}</div>
-                      <div className="seat-pill">{n.seat_number}</div>
-                      <div className="dt">{formatPHDateTime(n.created_at)}</div>
-                      <div className="ellipsis">{n.item_name}</div>
-                      <div className="t-right">{Number(n.quantity)}</div>
-                      <div className="t-right">₱{toMoney(n.price).toFixed(2)}</div>
-                      <div className="t-right total">₱{toMoney(n.total).toFixed(2)}</div>
-                    </div>
-                  ))
+                    return (
+                      <div
+                        key={n.id}
+                        className={`notif-chat-item ${n.is_read ? "" : "notif-chat-item--unread"}`}
+                      >
+                        <div className="notif-avatar">{getAvatarText(n.name)}</div>
+
+                        <div className="notif-main">
+                          <div className="notif-topline">
+                            <div className="notif-name">{n.name || "Guest User"}</div>
+                            <div className="notif-datetime">{formatPHDateTime(n.created_at)}</div>
+                          </div>
+
+                          <div className="notif-meta">
+                            <span className={`notif-type-pill notif-type-pill--${typeValue}`}>
+                              {getTypeLabel(typeValue)}
+                            </span>
+                            <span className="notif-seat-pill">
+                              Seat: {n.seat_number || "-"}
+                            </span>
+                          </div>
+
+                          <div className="notif-message">{getMessageText(n)}</div>
+
+                          <div className="notif-actions">
+                            <button
+                              type="button"
+                              className="notif-delete-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleDeleteNotification(n.id);
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
