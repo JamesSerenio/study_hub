@@ -1065,24 +1065,6 @@ const Admin_Customer_Discount_List: React.FC = () => {
     conferenceDurationFilter,
   ]);
 
-  const totals = useMemo(() => {
-    const nowMs = tick;
-    const total = filteredRows.reduce((sum, r) => sum + getGrandDue(r), 0);
-
-    let upcoming = 0;
-    let ongoing = 0;
-    let finished = 0;
-
-    for (const r of filteredRows) {
-      const st = getStatus(r.start_at, r.end_at, nowMs);
-      if (st === "UPCOMING") upcoming += 1;
-      else if (st === "ONGOING") ongoing += 1;
-      else finished += 1;
-    }
-
-    return { total: round2(total), upcoming, ongoing, finished };
-  }, [filteredRows, tick, ordersMap, orderParentsMap]);
-
   const logsFor = (bookingId: string): PromoBookingAttendanceRow[] =>
     attMap[bookingId] ?? [];
   const lastLogFor = (bookingId: string): PromoBookingAttendanceRow | null => {
@@ -1200,6 +1182,24 @@ const Admin_Customer_Discount_List: React.FC = () => {
       label: "Overall Change",
     };
   };
+
+    const totals = useMemo(() => {
+    const nowMs = tick;
+    const total = filteredRows.reduce((sum, r) => sum + getGrandDue(r), 0);
+
+    let upcoming = 0;
+    let ongoing = 0;
+    let finished = 0;
+
+    for (const r of filteredRows) {
+      const st = getStatus(r.start_at, r.end_at, nowMs);
+      if (st === "UPCOMING") upcoming += 1;
+      else if (st === "ONGOING") ongoing += 1;
+      else finished += 1;
+    }
+
+    return { total: round2(total), upcoming, ongoing, finished };
+  }, [filteredRows, tick, ordersMap, orderParentsMap]);
 
   const isFinalPaidRow = (r: PromoBookingRow): boolean => {
     const systemDue = getSystemDue(r);
@@ -2803,7 +2803,7 @@ const Admin_Customer_Discount_List: React.FC = () => {
 
                           <div style={{ marginTop: 10 }}>
                             <button
-                              className="receipt-btn"
+                              className="receipt-btn admin-danger"
                               onClick={() => openOrderCancelModal(selectedOrderBooking, item)}
                               disabled={cancellingOrderItemId === item.id}
                               type="button"
