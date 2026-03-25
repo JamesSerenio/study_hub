@@ -1,29 +1,18 @@
 // src/components/BookingModal.tsx
+// ✅ ONE CALENDAR only for reservation range
+// ✅ Tap 2 dates => auto range (ex. Mar 1 + Mar 3 => Mar 1 to Mar 3)
 // ✅ Seat required ONLY for reservation
-// ✅ NON-reservation can save WITHOUT seat (seat_number stored as "N/A" because DB is NOT NULL)
+// ✅ NON-reservation can save WITHOUT seat (seat_number stored as "N/A")
 // ✅ Seat picker UI shown ONLY when reservation
 // ✅ Conflict check runs ONLY when reservation
-// ✅ Reservation auto-blocks seats in seat_blocked_times (source="reserved")
-// ✅ Seat buttons DISABLED until date+time+duration ready (prevents stale summary seat)
-// ✅ Auto refresh seats when date/time changes
-// ✅ Auto-delete expired reserved blocks (end_at < now) so seats come back
-// ✅ FIX: Reservation "Open Time" will NOT use 2999 anymore
-// ✅ Reservation openTime => end_at = end of selected reservation date
-// ✅ Non-reservation openTime can stay FAR_FUTURE
-// ✅ FIX: Removed strict "past reservation time" blocking
-// ✅ FIX: DB `date` ALWAYS saves CURRENT DATE (local) even for reservation
-// ✅ NO any
-// ✅ NEW UI: Reservation Date uses BEAUTIFUL CALENDAR PICKER
-// ✅ NEW FIX: Can save even without login (auto anonymous auth)
-// ✅ NEW: Phone Number required
-// ✅ NEW: Phone validation MODAL
-// ✅ REMOVED: Customer Field
-// ✅ REMOVED: Specific ID input / id_number
-// ✅ UPDATED: Generates 4-char booking code for BOTH reservation and non-reservation
-// ✅ UPDATED: Saves booking_code to DB for BOTH reservation and non-reservation
-// ✅ UPDATED: Reservation code usable only when reservation date/time starts
-// ✅ UPDATED: Walk-in / non-reservation code usable immediately after save
-// ✅ NOTE: For add-ons / other pages, validate current time against session time_started/time_ended
+// ✅ Reservation auto-blocks seats PER DAY in seat_blocked_times (source="reserved")
+// ✅ Reservation code is valid only on exact reserved date/time window
+// ✅ Attendance modal included BELOW using same promo-like style
+// ✅ Attendance is for reservation only
+// ✅ IN starts attendance log
+// ✅ OUT stops attendance log and adds to customer_sessions.total_time / total_amount
+// ✅ Multi-day reservation supported
+// ✅ strict TS (NO any)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -43,6 +32,7 @@ import {
   IonToggle,
   IonDatetime,
   IonAlert,
+  IonTextarea,
 } from "@ionic/react";
 import { closeOutline } from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
@@ -58,6 +48,7 @@ const SEAT_NA = "N/A";
 const FAR_FUTURE_ISO = new Date("2999-12-31T23:59:59.000Z").toISOString();
 
 type CustomerType = "reviewer" | "student" | "regular" | "";
+type AttendanceAction = "IN" | "OUT";
 
 interface CustomerForm {
   full_name: string;
@@ -67,6 +58,7 @@ interface CustomerForm {
   seat_number: string[];
   reservation: boolean;
   reservation_date?: string;
+  reservation_end_date?: string;
   time_started: string;
 }
 
@@ -79,17 +71,67 @@ type Props = {
   seatGroups: SeatGroup[];
 };
 
-const isCustomerType = (v: unknown): v is CustomerType =>
-  v === "" || v === "reviewer" || v === "student" || v === "regular";
-
 type SeatBlockedRow = {
+  id?: string;
   seat_number: string;
   start_at: string;
   end_at: string;
   source: "promo" | "regular" | "reserved" | string;
 };
 
-type SeatConflictRow = { seat_number: string };
+type SeatConflictRow = {
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+};
+
+type SeatBlockInsert = {
+  seat_number: string;
+  start_at: string;
+  end_at: string;
+  source: "reserved" | "regular";
+  created_by: string | null;
+  note: string | null;
+};
+
+type SeatBlockInsertResult = { id: string; seat_number: string };
+
+type AttendanceSessionRow = {
+  id: string;
+  full_name: string;
+  booking_code: string | null;
+  reservation: string;
+  reservation_date: string | null;
+  reservation_end_date?: string | null;
+  hour_avail: string;
+  time_started: string;
+  time_ended: string | null;
+  expected_end_at: string | null;
+  total_time: number | string | null;
+  total_amount: number | string | null;
+};
+
+type AttendanceLogRow = {
+  id: string;
+  session_id: string;
+  booking_code: string;
+  attendance_date: string;
+  in_at: string;
+  out_at: string | null;
+  note: string | null;
+  auto_closed: boolean;
+  created_at: string;
+};
+
+const BOOKING_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+const isCustomerType = (v: unknown): v is CustomerType =>
+  v === "" || v === "reviewer" || v === "student" || v === "regular";
+
+const toNumber = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
 
 const toYYYYMMDD = (v: string): string | null => {
   const m = v.trim().match(/^(\d{4}-\d{2}-\d{2})/);
@@ -274,6 +316,19 @@ const endOfLocalDayIso = (yyyyMmDd: string): string => {
   return new Date(y, mo, d, 23, 59, 59, 999).toISOString();
 };
 
+const addDuration = (startIso: string, durationHHMM: string): string => {
+  const start = new Date(startIso);
+  if (!Number.isFinite(start.getTime())) return startIso;
+
+  const [hRaw, mRaw] = durationHHMM.split(":");
+  const dh = Number(hRaw);
+  const dm = Number(mRaw);
+  if (Number.isNaN(dh) || Number.isNaN(dm)) return startIso;
+
+  const totalMinutes = dh * 60 + dm;
+  return new Date(start.getTime() + totalMinutes * 60_000).toISOString();
+};
+
 const clampToReservationDay = (endIso: string, reservationDate?: string): string => {
   if (!reservationDate) return endIso;
   const eod = endOfLocalDayIso(reservationDate);
@@ -283,25 +338,27 @@ const clampToReservationDay = (endIso: string, reservationDate?: string): string
   return endMs > eodMs ? eod : endIso;
 };
 
-const isBookingCodeUsableNow = (startIso: string, endIso: string): boolean => {
-  const now = Date.now();
-  const start = new Date(startIso).getTime();
-  const end = new Date(endIso).getTime();
+const formatPH = (d: Date) =>
+  d.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  return now >= start && now <= end;
+const formatReservationDateOnly = (yyyyMmDd?: string): string => {
+  if (!yyyyMmDd) return "No date selected";
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  const dt = new Date(y, (m ?? 1) - 1, d ?? 1);
+  return dt.toLocaleDateString("en-PH", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 };
-
-type SeatBlockInsert = {
-  seat_number: string;
-  start_at: string;
-  end_at: string;
-  source: "reserved" | "regular";
-  created_by: string | null;
-  note: string | null;
-};
-
-type SeatBlockInsertResult = { id: string; seat_number: string };
 
 const ensureAuthUserId = async (): Promise<string> => {
   const { data: sess } = await supabase.auth.getSession();
@@ -313,8 +370,6 @@ const ensureAuthUserId = async (): Promise<string> => {
   }
   return data.user.id;
 };
-
-const BOOKING_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 const generateBookingCode = (): string => {
   let out = "";
@@ -341,6 +396,101 @@ const createUniqueBookingCode = async (): Promise<string> => {
   throw new Error("Failed to generate unique booking code. Please try again.");
 };
 
+const rangeDatesInclusive = (startYmd: string, endYmd: string): string[] => {
+  const start = new Date(`${startYmd}T00:00:00`);
+  const end = new Date(`${endYmd}T00:00:00`);
+
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return [];
+  if (start.getTime() > end.getTime()) return [];
+
+  const out: string[] = [];
+  const cur = new Date(start);
+
+  while (cur.getTime() <= end.getTime()) {
+    out.push(cur.toLocaleDateString("en-CA"));
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  return out;
+};
+
+const overlaps = (aStart: string, aEnd: string, bStart: string, bEnd: string): boolean => {
+  const aS = new Date(aStart).getTime();
+  const aE = new Date(aEnd).getTime();
+  const bS = new Date(bStart).getTime();
+  const bE = new Date(bEnd).getTime();
+
+  if (![aS, aE, bS, bE].every(Number.isFinite)) return false;
+  return aS < bE && aE > bS;
+};
+
+const getManilaNow = (): Date => {
+  const now = new Date();
+  const manilaString = now.toLocaleString("en-US", { timeZone: "Asia/Manila" });
+  return new Date(manilaString);
+};
+
+const getManilaYMD = (): string => {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+};
+
+const dateAtSessionClock = (ymd: string, sessionStartIso: string): Date => {
+  const base = new Date(sessionStartIso);
+  const year = Number(ymd.slice(0, 4));
+  const month = Number(ymd.slice(5, 7)) - 1;
+  const day = Number(ymd.slice(8, 10));
+
+  return new Date(
+    year,
+    month,
+    day,
+    base.getHours(),
+    base.getMinutes(),
+    0,
+    0
+  );
+};
+
+const addMinutes = (date: Date, minutes: number): Date => {
+  return new Date(date.getTime() + minutes * 60_000);
+};
+
+const endOfLocalDay = (ymd: string): Date => {
+  const year = Number(ymd.slice(0, 4));
+  const month = Number(ymd.slice(5, 7)) - 1;
+  const day = Number(ymd.slice(8, 10));
+  return new Date(year, month, day, 23, 59, 59, 999);
+};
+
+const isDateWithinRange = (target: string, start: string | null, end: string | null | undefined): boolean => {
+  if (!start) return false;
+  const finalEnd = end ?? start;
+  return target >= start && target <= finalEnd;
+};
+
+const getBillAmount = (minutes: number): number => {
+  const billableMin = Math.max(0, Math.floor(minutes) - FREE_MINUTES);
+  return (billableMin / 60) * HOURLY_RATE;
+};
+
+const formatDateTime = (iso: string | null): string => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "—";
+  return d.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: Props) {
   const [form, setForm] = useState<CustomerForm>({
     full_name: "",
@@ -350,6 +500,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     seat_number: [],
     reservation: false,
     reservation_date: undefined,
+    reservation_end_date: undefined,
     time_started: new Date().toISOString(),
   });
 
@@ -375,6 +526,16 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   const [savedBookingCode, setSavedBookingCode] = useState("");
   const [savedCodeActiveNow, setSavedCodeActiveNow] = useState(false);
   const [savedCodeForReservation, setSavedCodeForReservation] = useState(false);
+
+  // attendance modal state
+  const [attendanceModalOpen, setAttendanceModalOpen] = useState(false);
+  const [attendanceCode, setAttendanceCode] = useState("");
+  const [attendanceAction, setAttendanceAction] = useState<AttendanceAction>("IN");
+  const [attendanceNote, setAttendanceNote] = useState("");
+  const [attendanceLogs, setAttendanceLogs] = useState<AttendanceLogRow[]>([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+
+  const manilaDay = useMemo(() => getManilaYMD(), [attendanceModalOpen]);
 
   const commitReservationTime = (raw: string) => {
     const normalized = normalizeReservationTime(raw);
@@ -408,24 +569,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     return (billableMin / 60) * HOURLY_RATE;
   };
 
-  const addDuration = (startIso: string, durationHHMM: string): string => {
-    const start = new Date(startIso);
-    if (!Number.isFinite(start.getTime())) return startIso;
-
-    const [hRaw, mRaw] = durationHHMM.split(":");
-    const dh = Number(hRaw);
-    const dm = Number(mRaw);
-    if (Number.isNaN(dh) || Number.isNaN(dm)) return startIso;
-
-    const totalMinutes = dh * 60 + dm;
-    return new Date(start.getTime() + totalMinutes * 60_000).toISOString();
-  };
-
-  const getTimeEndedFrom = (startIso: string): string => {
-    if (openTime) return startIso;
-    return addDuration(startIso, timeAvail);
-  };
-
   const cleanupExpiredReserved = async (): Promise<void> => {
     const nowIso = new Date().toISOString();
     const { error } = await supabase
@@ -435,26 +578,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       .lt("end_at", nowIso);
 
     if (error) console.warn("cleanupExpiredReserved:", error.message);
-  };
-
-  const fetchOccupiedSeats = async (startIso: string, endIso: string): Promise<void> => {
-    await cleanupExpiredReserved();
-
-    const { data, error } = await supabase
-      .from("seat_blocked_times")
-      .select("seat_number, start_at, end_at, source")
-      .lt("start_at", endIso)
-      .gt("end_at", startIso);
-
-    if (error) {
-      console.error(error);
-      setOccupiedSeats([]);
-      return;
-    }
-
-    const rows = (data ?? []) as SeatBlockedRow[];
-    const seats = rows.map((r) => String(r.seat_number).trim()).filter(Boolean);
-    setOccupiedSeats(Array.from(new Set(seats)));
   };
 
   useEffect(() => {
@@ -472,20 +595,187 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     };
   }, [isOpen]);
 
+  const reservationDates = useMemo((): string[] => {
+    if (!form.reservation) return [];
+    if (!form.reservation_date || !form.reservation_end_date) return [];
+    return rangeDatesInclusive(form.reservation_date, form.reservation_end_date);
+  }, [form.reservation, form.reservation_date, form.reservation_end_date]);
+
+  const reservationStartIso = useMemo((): string | null => {
+    if (!form.reservation) return null;
+    if (!form.reservation_date) return null;
+
+    const normalized = normalizeReservationTime(timeStartedNormalized);
+    if (!normalized) return null;
+
+    const parsed = parseReservationToISO(normalized, form.reservation_date);
+    return parsed ?? null;
+  }, [form.reservation, form.reservation_date, timeStartedNormalized]);
+
+  const reservationLastDayEndIso = useMemo((): string | null => {
+    if (!form.reservation || !form.reservation_end_date) return null;
+    if (!form.reservation_date) return null;
+
+    const normalized = normalizeReservationTime(timeStartedNormalized);
+    if (!normalized) return null;
+
+    const lastStartIso = parseReservationToISO(normalized, form.reservation_end_date);
+    if (!lastStartIso) return null;
+
+    if (openTime) return endOfLocalDayIso(form.reservation_end_date);
+
+    const normalizedAvail = normalizeTimeAvail(timeAvailInput);
+    if (!normalizedAvail || normalizedAvail === "00:00") return null;
+
+    const end = addDuration(lastStartIso, normalizedAvail);
+    return clampToReservationDay(end, form.reservation_end_date);
+  }, [
+    form.reservation,
+    form.reservation_date,
+    form.reservation_end_date,
+    timeStartedNormalized,
+    openTime,
+    timeAvailInput,
+  ]);
+
+  const isSeatPickReady = useMemo((): boolean => {
+    if (!form.reservation) return false;
+    if (!reservationStartIso) return false;
+    if (!form.reservation_date || !form.reservation_end_date) return false;
+    if (reservationDates.length === 0) return false;
+
+    if (openTime) return true;
+
+    const normalizedAvail = normalizeTimeAvail(timeAvailInput);
+    if (!normalizedAvail) return false;
+    if (normalizedAvail === "00:00") return false;
+
+    return true;
+  }, [
+    form.reservation,
+    form.reservation_date,
+    form.reservation_end_date,
+    reservationStartIso,
+    reservationDates,
+    openTime,
+    timeAvailInput,
+  ]);
+
+  const seatPickHint = useMemo((): string => {
+    if (!form.reservation) return "";
+    if (!form.reservation_date) return "Select reservation date range first.";
+    if (!form.reservation_end_date) return "Select reservation date range first.";
+    if (form.reservation_end_date < form.reservation_date) return "End date cannot be earlier than start date.";
+    if (!reservationStartIso) return "Set a valid Time Started first.";
+    if (!openTime) {
+      const normalizedAvail = normalizeTimeAvail(timeAvailInput);
+      if (!normalizedAvail) return "Set a valid Time Avail first.";
+      if (normalizedAvail === "00:00") return "Time Avail must be greater than 00:00.";
+    }
+    return "";
+  }, [
+    form.reservation,
+    form.reservation_date,
+    form.reservation_end_date,
+    reservationStartIso,
+    openTime,
+    timeAvailInput,
+  ]);
+
+  const buildReservationWindows = (): Array<{ date: string; startIso: string; endIso: string }> => {
+    if (!form.reservation_date || !form.reservation_end_date) return [];
+
+    const normalized = normalizeReservationTime(timeStartedNormalized);
+    if (!normalized) return [];
+
+    const days = rangeDatesInclusive(form.reservation_date, form.reservation_end_date);
+    if (days.length === 0) return [];
+
+    return days
+      .map((day) => {
+        const startIso = parseReservationToISO(normalized, day);
+        if (!startIso) return null;
+
+        if (openTime) {
+          return {
+            date: day,
+            startIso,
+            endIso: endOfLocalDayIso(day),
+          };
+        }
+
+        const normalizedAvail = normalizeTimeAvail(timeAvailInput);
+        if (!normalizedAvail || normalizedAvail === "00:00") return null;
+
+        const endIso = clampToReservationDay(addDuration(startIso, normalizedAvail), day);
+
+        return {
+          date: day,
+          startIso,
+          endIso,
+        };
+      })
+      .filter((v): v is { date: string; startIso: string; endIso: string } => v !== null);
+  };
+
+  const fetchOccupiedSeats = async (): Promise<void> => {
+    await cleanupExpiredReserved();
+
+    const windows = buildReservationWindows();
+    if (windows.length === 0) {
+      setOccupiedSeats([]);
+      return;
+    }
+
+    const minStartIso = windows[0].startIso;
+    const maxEndIso = windows[windows.length - 1].endIso;
+
+    const { data, error } = await supabase
+      .from("seat_blocked_times")
+      .select("seat_number, start_at, end_at, source")
+      .lt("start_at", maxEndIso)
+      .gt("end_at", minStartIso);
+
+    if (error) {
+      console.error(error);
+      setOccupiedSeats([]);
+      return;
+    }
+
+    const rows = (data ?? []) as SeatBlockedRow[];
+
+    const occupied = new Set<string>();
+
+    rows.forEach((row) => {
+      windows.forEach((w) => {
+        if (overlaps(row.start_at, row.end_at, w.startIso, w.endIso)) {
+          occupied.add(String(row.seat_number).trim());
+        }
+      });
+    });
+
+    setOccupiedSeats(Array.from(occupied));
+  };
+
   const createSeatBlocksForReservation = async (
     seatNums: string[],
-    startIso: string,
-    endIso: string,
     userId: string
   ): Promise<SeatBlockInsertResult[]> => {
-    const payload: SeatBlockInsert[] = seatNums.map((s) => ({
-      seat_number: s,
-      start_at: startIso,
-      end_at: endIso,
-      source: "reserved",
-      created_by: userId,
-      note: "reservation",
-    }));
+    const windows = buildReservationWindows();
+    const payload: SeatBlockInsert[] = [];
+
+    windows.forEach((w) => {
+      seatNums.forEach((seat) => {
+        payload.push({
+          seat_number: seat,
+          start_at: w.startIso,
+          end_at: w.endIso,
+          source: "reserved",
+          created_by: userId,
+          note: `reservation ${w.date}`,
+        });
+      });
+    });
 
     const { data, error } = await supabase
       .from("seat_blocked_times")
@@ -501,59 +791,51 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     await supabase.from("seat_blocked_times").delete().in("id", ids);
   };
 
-  const reservationStartIso = useMemo((): string | null => {
-    if (!form.reservation) return null;
-    if (!form.reservation_date) return null;
+  const applyPickedDateRange = (raw: unknown) => {
+    const values: string[] = [];
 
-    const normalized = normalizeReservationTime(timeStartedNormalized);
-    if (!normalized) return null;
-
-    const parsed = parseReservationToISO(normalized, form.reservation_date);
-    return parsed ?? null;
-  }, [form.reservation, form.reservation_date, timeStartedNormalized]);
-
-  const isSeatPickReady = useMemo((): boolean => {
-    if (!form.reservation) return false;
-    if (!reservationStartIso) return false;
-
-    if (openTime) return true;
-
-    const normalizedAvail = normalizeTimeAvail(timeAvailInput);
-    if (!normalizedAvail) return false;
-    if (normalizedAvail === "00:00") return false;
-
-    return true;
-  }, [form.reservation, reservationStartIso, openTime, timeAvailInput]);
-
-  const seatPickHint = useMemo((): string => {
-    if (!form.reservation) return "";
-    if (!form.reservation_date) return "Select reservation date first.";
-    if (!reservationStartIso) return "Set a valid Time Started first.";
-    if (!openTime) {
-      const normalizedAvail = normalizeTimeAvail(timeAvailInput);
-      if (!normalizedAvail) return "Set a valid Time Avail first.";
-      if (normalizedAvail === "00:00") return "Time Avail must be greater than 00:00.";
-    }
-    return "";
-  }, [form.reservation, form.reservation_date, reservationStartIso, openTime, timeAvailInput]);
-
-  const applyPickedDate = (raw: unknown) => {
-    const pick = (s: string) => {
-      const d = toYYYYMMDD(s);
-      if (!d) return;
-
-      setForm((p) => {
-        if (p.reservation_date === d) return { ...p, seat_number: [] };
-        return { ...p, reservation_date: d, seat_number: [], reservation: true };
+    if (typeof raw === "string") {
+      const d = toYYYYMMDD(raw);
+      if (d) values.push(d);
+    } else if (Array.isArray(raw)) {
+      raw.forEach((item) => {
+        if (typeof item === "string") {
+          const d = toYYYYMMDD(item);
+          if (d) values.push(d);
+        }
       });
+    }
 
+    const uniqueSorted = Array.from(new Set(values)).sort();
+
+    if (uniqueSorted.length === 0) {
+      setForm((p) => ({
+        ...p,
+        reservation_date: undefined,
+        reservation_end_date: undefined,
+        seat_number: [],
+        reservation: true,
+      }));
       setOccupiedSeats([]);
       setDateTouchTick((x) => x + 1);
       setRefreshSeatsTick((x) => x + 1);
-    };
+      return;
+    }
 
-    if (typeof raw === "string") pick(raw);
-    else if (Array.isArray(raw) && typeof raw[0] === "string") pick(raw[0]);
+    const start = uniqueSorted[0];
+    const end = uniqueSorted[uniqueSorted.length - 1];
+
+    setForm((p) => ({
+      ...p,
+      reservation_date: start,
+      reservation_end_date: end,
+      seat_number: [],
+      reservation: true,
+    }));
+
+    setOccupiedSeats([]);
+    setDateTouchTick((x) => x + 1);
+    setRefreshSeatsTick((x) => x + 1);
   };
 
   useEffect(() => {
@@ -573,7 +855,13 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     setTimeStartedNormalized("00:00 am");
     timeStartedRef.current = "00:00 am";
 
-    setForm((p) => ({ ...p, seat_number: [] }));
+    setForm((p) => ({
+      ...p,
+      seat_number: [],
+      reservation_date: undefined,
+      reservation_end_date: undefined,
+    }));
+
     setOccupiedSeats([]);
     setDateTouchTick(0);
     setRefreshSeatsTick((x) => x + 1);
@@ -592,72 +880,24 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
 
     setForm((p) => ({ ...p, seat_number: [] }));
 
-    if (!isSeatPickReady || !reservationStartIso) {
+    if (!isSeatPickReady) {
       setOccupiedSeats([]);
       return;
     }
 
-    const startIso = reservationStartIso;
-
-    let endIso: string;
-
-    if (openTime) {
-      endIso = form.reservation_date ? endOfLocalDayIso(form.reservation_date) : startIso;
-    } else {
-      const normalizedAvail = normalizeTimeAvail(timeAvailInput);
-      if (!normalizedAvail || normalizedAvail === "00:00") {
-        setOccupiedSeats([]);
-        return;
-      }
-
-      if (timeAvail !== normalizedAvail) setTimeAvail(normalizedAvail);
-      if (timeAvailInput !== normalizedAvail) setTimeAvailInput(normalizedAvail);
-
-      const computedEnd = addDuration(startIso, normalizedAvail);
-      endIso =
-        computedEnd === startIso
-          ? new Date(new Date(startIso).getTime() + 60_000).toISOString()
-          : computedEnd;
-
-      endIso = clampToReservationDay(endIso, form.reservation_date);
-    }
-
-    void fetchOccupiedSeats(startIso, endIso);
+    void fetchOccupiedSeats();
   }, [
     isOpen,
     form.reservation,
     form.reservation_date,
+    form.reservation_end_date,
     timeStartedNormalized,
     openTime,
     timeAvailInput,
     isSeatPickReady,
-    reservationStartIso,
     dateTouchTick,
     refreshSeatsTick,
-    timeAvail,
   ]);
-
-  const formatPH = (d: Date) =>
-    d.toLocaleString("en-PH", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      weekday: "long",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-  const formatReservationDateOnly = (yyyyMmDd?: string): string => {
-    if (!yyyyMmDd) return "No date selected";
-    const [y, m, d] = yyyyMmDd.split("-").map(Number);
-    const dt = new Date(y, (m ?? 1) - 1, d ?? 1);
-    return dt.toLocaleDateString("en-PH", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  };
 
   const summaryStartIso = useMemo(() => {
     if (!form.reservation) return timeSnapshotIso;
@@ -665,9 +905,12 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
   }, [form.reservation, reservationStartIso, timeSnapshotIso]);
 
   const summaryEndIso = useMemo(() => {
+    if (form.reservation) {
+      return reservationLastDayEndIso ?? summaryStartIso;
+    }
     if (openTime) return summaryStartIso;
-    return getTimeEndedFrom(summaryStartIso);
-  }, [openTime, summaryStartIso, timeAvail]);
+    return addDuration(summaryStartIso, timeAvail);
+  }, [form.reservation, reservationLastDayEndIso, summaryStartIso, openTime, timeAvail]);
 
   const totalMinutesPreview = getTotalMinutes();
   const totalHHMMPreview = toHHMM(totalMinutesPreview);
@@ -685,6 +928,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       seat_number: [],
       reservation: false,
       reservation_date: undefined,
+      reservation_end_date: undefined,
       time_started: new Date().toISOString(),
     });
 
@@ -713,8 +957,13 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
     const phoneToStore = phoneCheck.normalized;
 
     if (form.reservation) {
-      if (!form.reservation_date) return alert("Please select a reservation date.");
+      if (!form.reservation_date) return alert("Please select reservation date range.");
+      if (!form.reservation_end_date) return alert("Please select reservation date range.");
+      if (form.reservation_end_date < form.reservation_date) {
+        return alert("Reservation end date cannot be earlier than start date.");
+      }
       if (!reservationStartIso) return alert("Please enter a valid Time Started.");
+
       if (!openTime) {
         const normalizedAvail = normalizeTimeAvail(timeAvailInput);
         if (!normalizedAvail) return alert("Invalid Time Avail.");
@@ -722,6 +971,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         setTimeAvail(normalizedAvail);
         setTimeAvailInput(normalizedAvail);
       }
+
       if (form.seat_number.length === 0) return alert("Please select at least one seat.");
     } else {
       if (!openTime) {
@@ -741,70 +991,105 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
       return alert(msg);
     }
 
-    const startIsoToStore =
-      form.reservation && reservationStartIso ? reservationStartIso : new Date().toISOString();
-
     const dateToStore = todayLocalYYYYMMDD();
-
-    const timeEndedToStore = (() => {
-      if (form.reservation && openTime) {
-        return form.reservation_date ? endOfLocalDayIso(form.reservation_date) : startIsoToStore;
-      }
-
-      if (!form.reservation && openTime) {
-        return FAR_FUTURE_ISO;
-      }
-
-      const computed = getTimeEndedFrom(startIsoToStore);
-      const end =
-        computed === startIsoToStore
-          ? new Date(new Date(startIsoToStore).getTime() + 60_000).toISOString()
-          : computed;
-
-      return form.reservation ? clampToReservationDay(end, form.reservation_date) : end;
-    })();
-
-    if (form.reservation) {
-      const { data: conflicts, error: conflictErr } = await supabase
-        .from("seat_blocked_times")
-        .select("seat_number")
-        .in("seat_number", form.seat_number)
-        .lt("start_at", timeEndedToStore)
-        .gt("end_at", startIsoToStore);
-
-      if (conflictErr) return alert(`Seat check error: ${conflictErr.message}`);
-
-      const conflictSeats = (conflicts ?? [])
-        .map((r: SeatConflictRow) => String(r.seat_number).trim())
-        .filter(Boolean);
-
-      if (conflictSeats.length > 0) {
-        return alert(`Seat already taken: ${conflictSeats.join(", ")}`);
-      }
-    }
-
-    const totalMin = getTotalMinutes();
-    const totalHoursForDB = Number((totalMin / 60).toFixed(2));
-    const timeAmount = openTime ? 0 : getAmountPeso();
-
-    const seatToStore = form.reservation ? form.seat_number.join(", ") : SEAT_NA;
 
     let createdBlockIds: string[] = [];
 
     try {
       const bookingCode = await createUniqueBookingCode();
 
-      const codeIsActiveNow = isBookingCodeUsableNow(startIsoToStore, timeEndedToStore);
+      let startIsoToStore = new Date().toISOString();
+      let timeEndedToStore = FAR_FUTURE_ISO;
+      let expectedEndAt: string | null = null;
 
       if (form.reservation) {
-        const created = await createSeatBlocksForReservation(
-          form.seat_number,
-          startIsoToStore,
-          timeEndedToStore,
-          userId
-        );
+        const windows = buildReservationWindows();
+        if (windows.length === 0) return alert("Invalid reservation schedule.");
+
+        startIsoToStore = windows[0].startIso;
+        timeEndedToStore = windows[windows.length - 1].endIso;
+        expectedEndAt = timeEndedToStore;
+
+        const minStartIso = windows[0].startIso;
+        const maxEndIso = windows[windows.length - 1].endIso;
+
+        const { data: blocks, error: conflictErr } = await supabase
+          .from("seat_blocked_times")
+          .select("seat_number, start_at, end_at")
+          .in("seat_number", form.seat_number)
+          .lt("start_at", maxEndIso)
+          .gt("end_at", minStartIso);
+
+        if (conflictErr) return alert(`Seat check error: ${conflictErr.message}`);
+
+        const existingRows = (blocks ?? []) as SeatConflictRow[];
+        const conflictSeats = new Set<string>();
+
+        existingRows.forEach((row) => {
+          windows.forEach((w) => {
+            if (overlaps(row.start_at, row.end_at, w.startIso, w.endIso)) {
+              conflictSeats.add(String(row.seat_number).trim());
+            }
+          });
+        });
+
+        if (conflictSeats.size > 0) {
+          return alert(`Seat already taken: ${Array.from(conflictSeats).join(", ")}`);
+        }
+
+        const created = await createSeatBlocksForReservation(form.seat_number, userId);
         createdBlockIds = created.map((r) => r.id);
+
+        const { error: sessionErr } = await supabase.from("customer_sessions").insert({
+          staff_id: null,
+          date: dateToStore,
+          full_name: trimmedName,
+          phone_number: phoneToStore,
+          customer_type: form.customer_type,
+          has_id: form.has_id,
+          hour_avail: openTime ? "OPEN" : timeAvail,
+          time_started: startIsoToStore,
+          time_ended: timeEndedToStore,
+          total_time: 0,
+          total_amount: 0,
+          seat_number: form.seat_number.join(", "),
+          reservation: "yes",
+          reservation_date: form.reservation_date,
+          reservation_end_date: form.reservation_end_date,
+          expected_end_at: expectedEndAt,
+          booking_code: bookingCode,
+        });
+
+        if (sessionErr) {
+          await rollbackSeatBlocks(createdBlockIds);
+          return alert(`Error saving session: ${sessionErr.message}`);
+        }
+
+        setSavedBookingCode(bookingCode);
+        setSavedCodeActiveNow(false);
+        setSavedCodeForReservation(true);
+        setCodeModalOpen(true);
+
+        resetBookingForm();
+        onSaved(true);
+        return;
       }
+
+      startIsoToStore = new Date().toISOString();
+
+      if (openTime) {
+        timeEndedToStore = FAR_FUTURE_ISO;
+      } else {
+        const computed = addDuration(startIsoToStore, timeAvail);
+        timeEndedToStore =
+          computed === startIsoToStore
+            ? new Date(new Date(startIsoToStore).getTime() + 60_000).toISOString()
+            : computed;
+      }
+
+      const totalMin = getTotalMinutes();
+      const totalHoursForDB = Number((totalMin / 60).toFixed(2));
+      const timeAmount = openTime ? 0 : getAmountPeso();
 
       const { error: sessionErr } = await supabase.from("customer_sessions").insert({
         staff_id: null,
@@ -818,31 +1103,309 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
         time_ended: timeEndedToStore,
         total_time: openTime ? 0 : totalHoursForDB,
         total_amount: timeAmount,
-        seat_number: seatToStore,
-        reservation: form.reservation ? "yes" : "no",
-        reservation_date: form.reservation_date ?? null,
+        seat_number: SEAT_NA,
+        reservation: "no",
+        reservation_date: null,
+        reservation_end_date: null,
+        expected_end_at: timeEndedToStore,
         booking_code: bookingCode,
       });
 
       if (sessionErr) {
-        await rollbackSeatBlocks(createdBlockIds);
         return alert(`Error saving session: ${sessionErr.message}`);
       }
 
-      const wasReservation = form.reservation;
-
       setSavedBookingCode(bookingCode);
-      setSavedCodeActiveNow(codeIsActiveNow);
-      setSavedCodeForReservation(wasReservation);
+      setSavedCodeActiveNow(true);
+      setSavedCodeForReservation(false);
       setCodeModalOpen(true);
 
       resetBookingForm();
-      onSaved(wasReservation);
+      onSaved(false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       return alert(`Error saving: ${msg}`);
     }
   };
+
+  // =========================
+  // ATTENDANCE
+  // =========================
+
+  const getAllowedWindow = (session: AttendanceSessionRow, ymd: string): { start: Date; end: Date } | null => {
+    if (!isDateWithinRange(ymd, session.reservation_date, session.reservation_end_date)) return null;
+
+    const start = dateAtSessionClock(ymd, session.time_started);
+
+    if (session.hour_avail === "OPEN") {
+      return { start, end: endOfLocalDay(ymd) };
+    }
+
+    const normalized = normalizeTimeAvail(session.hour_avail);
+    if (!normalized) return null;
+
+    const [h, m] = normalized.split(":").map(Number);
+    const totalMinutes = h * 60 + m;
+    const end = addMinutes(start, totalMinutes);
+
+    const endOfDay = endOfLocalDay(ymd);
+    return {
+      start,
+      end: end.getTime() > endOfDay.getTime() ? endOfDay : end,
+    };
+  };
+
+  const findReservationSessionByCode = async (codeRaw: string): Promise<AttendanceSessionRow | null> => {
+    const code = codeRaw.trim().toUpperCase();
+    if (!code) return null;
+
+    const { data, error } = await supabase
+      .from("customer_sessions")
+      .select(`
+        id,
+        full_name,
+        booking_code,
+        reservation,
+        reservation_date,
+        reservation_end_date,
+        hour_avail,
+        time_started,
+        time_ended,
+        expected_end_at,
+        total_time,
+        total_amount
+      `)
+      .eq("booking_code", code)
+      .eq("reservation", "yes")
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    return (data ?? null) as AttendanceSessionRow | null;
+  };
+
+  const loadAttendanceHistory = async (): Promise<void> => {
+    const code = attendanceCode.trim().toUpperCase();
+    if (!code) {
+      setAttendanceLogs([]);
+      return;
+    }
+
+    try {
+      const session = await findReservationSessionByCode(code);
+      if (!session) {
+        setAttendanceLogs([]);
+        alert("Reservation booking code not found.");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("customer_session_attendance")
+        .select("*")
+        .eq("session_id", session.id)
+        .order("in_at", { ascending: false });
+
+      if (error) throw new Error(error.message);
+
+      setAttendanceLogs((data ?? []) as AttendanceLogRow[]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to load history.";
+      alert(msg);
+    }
+  };
+
+  const autoCloseExpiredLogIfNeeded = async (session: AttendanceSessionRow): Promise<void> => {
+    const today = getManilaYMD();
+    const window = getAllowedWindow(session, today);
+    if (!window) return;
+
+    const { data, error } = await supabase
+      .from("customer_session_attendance")
+      .select("*")
+      .eq("session_id", session.id)
+      .eq("attendance_date", today)
+      .is("out_at", null)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+
+    const openLog = (data ?? null) as AttendanceLogRow | null;
+    if (!openLog) return;
+
+    const now = getManilaNow();
+    if (now.getTime() <= window.end.getTime()) return;
+
+    const outAtIso = window.end.toISOString();
+    const inAt = new Date(openLog.in_at);
+    const minutes = Math.max(0, Math.floor((window.end.getTime() - inAt.getTime()) / 60000));
+    const addAmount = getBillAmount(minutes);
+
+    const nextTotalTime = toNumber(session.total_time) + minutes / 60;
+    const nextTotalAmount = toNumber(session.total_amount) + addAmount;
+
+    const { error: updLogErr } = await supabase
+      .from("customer_session_attendance")
+      .update({
+        out_at: outAtIso,
+        auto_closed: true,
+      })
+      .eq("id", openLog.id);
+
+    if (updLogErr) throw new Error(updLogErr.message);
+
+    const { error: updSessionErr } = await supabase
+      .from("customer_sessions")
+      .update({
+        total_time: nextTotalTime,
+        total_amount: nextTotalAmount,
+      })
+      .eq("id", session.id);
+
+    if (updSessionErr) throw new Error(updSessionErr.message);
+  };
+
+  const handleAttendanceSave = async (): Promise<void> => {
+    const code = attendanceCode.trim().toUpperCase();
+    if (!code) return alert("Enter booking code first.");
+
+    setAttendanceLoading(true);
+
+    try {
+      const session = await findReservationSessionByCode(code);
+      if (!session) {
+        alert("Reservation booking code not found.");
+        return;
+      }
+
+      await autoCloseExpiredLogIfNeeded(session);
+
+      const today = getManilaYMD();
+      const window = getAllowedWindow(session, today);
+
+      if (!window) {
+        alert("This reservation code is not valid for today.");
+        return;
+      }
+
+      const now = getManilaNow();
+
+      if (attendanceAction === "IN") {
+        if (now.getTime() < window.start.getTime()) {
+          alert("Code is not active yet for today's reserved schedule.");
+          return;
+        }
+
+        if (now.getTime() > window.end.getTime()) {
+          alert("Code already expired for today's reserved schedule.");
+          return;
+        }
+
+        const { data: existingOpen, error: openErr } = await supabase
+          .from("customer_session_attendance")
+          .select("*")
+          .eq("session_id", session.id)
+          .eq("attendance_date", today)
+          .is("out_at", null)
+          .limit(1)
+          .maybeSingle();
+
+        if (openErr) throw new Error(openErr.message);
+
+        if (existingOpen) {
+          alert("This reservation is already IN for today.");
+          return;
+        }
+
+        const { error: insErr } = await supabase
+          .from("customer_session_attendance")
+          .insert({
+            session_id: session.id,
+            booking_code: code,
+            attendance_date: today,
+            in_at: now.toISOString(),
+            note: attendanceNote.trim() || null,
+          });
+
+        if (insErr) throw new Error(insErr.message);
+
+        alert("Attendance IN saved.");
+      } else {
+        const { data: openLog, error: openErr } = await supabase
+          .from("customer_session_attendance")
+          .select("*")
+          .eq("session_id", session.id)
+          .eq("attendance_date", today)
+          .is("out_at", null)
+          .limit(1)
+          .maybeSingle();
+
+        if (openErr) throw new Error(openErr.message);
+
+        const activeLog = (openLog ?? null) as AttendanceLogRow | null;
+        if (!activeLog) {
+          alert("No active IN log found for today.");
+          return;
+        }
+
+        const actualOut = now.getTime() > window.end.getTime() ? window.end : now;
+        const inAt = new Date(activeLog.in_at);
+        const minutes = Math.max(0, Math.floor((actualOut.getTime() - inAt.getTime()) / 60000));
+        const addAmount = getBillAmount(minutes);
+
+        const nextTotalTime = toNumber(session.total_time) + minutes / 60;
+        const nextTotalAmount = toNumber(session.total_amount) + addAmount;
+
+        const { error: updLogErr } = await supabase
+          .from("customer_session_attendance")
+          .update({
+            out_at: actualOut.toISOString(),
+            note: attendanceNote.trim() || activeLog.note || null,
+          })
+          .eq("id", activeLog.id);
+
+        if (updLogErr) throw new Error(updLogErr.message);
+
+        const { error: updSessionErr } = await supabase
+          .from("customer_sessions")
+          .update({
+            total_time: nextTotalTime,
+            total_amount: nextTotalAmount,
+          })
+          .eq("id", session.id);
+
+        if (updSessionErr) throw new Error(updSessionErr.message);
+
+        alert("Attendance OUT saved.");
+      }
+
+      setAttendanceNote("");
+      await loadAttendanceHistory();
+      onSaved(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to save attendance.";
+      alert(msg);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!attendanceModalOpen) return;
+    const code = attendanceCode.trim().toUpperCase();
+    if (!code) return;
+
+    void (async () => {
+      try {
+        const session = await findReservationSessionByCode(code);
+        if (!session) return;
+        await autoCloseExpiredLogIfNeeded(session);
+        await loadAttendanceHistory();
+      } catch {
+        // silent
+      }
+    })();
+  }, [attendanceModalOpen]);
 
   return (
     <>
@@ -929,6 +1492,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                     reservation: checked,
                     seat_number: [],
                     reservation_date: checked ? p.reservation_date : undefined,
+                    reservation_end_date: checked ? p.reservation_end_date : undefined,
                   }));
 
                   setOccupiedSeats([]);
@@ -956,9 +1520,11 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                   }}
                 >
                   <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>Reservation Date</div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>Reservation Date Range</div>
                     <div style={{ fontSize: 13, opacity: 0.75, marginTop: 4 }}>
-                      {formatReservationDateOnly(form.reservation_date)}
+                      {form.reservation_date && form.reservation_end_date
+                        ? `${formatReservationDateOnly(form.reservation_date)} → ${formatReservationDateOnly(form.reservation_end_date)}`
+                        : "Tap two dates to create a range"}
                     </div>
                   </div>
 
@@ -968,8 +1534,15 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                     showDefaultTitle={true}
                     locale="en-PH"
                     min={todayLocalYYYYMMDD()}
-                    value={form.reservation_date}
-                    onIonChange={(e) => applyPickedDate(e.detail.value)}
+                    multiple={true}
+                    value={
+                      form.reservation_date && form.reservation_end_date
+                        ? [form.reservation_date, form.reservation_end_date]
+                        : form.reservation_date
+                        ? [form.reservation_date]
+                        : []
+                    }
+                    onIonChange={(e) => applyPickedDateRange(e.detail.value)}
                   />
                 </div>
 
@@ -1082,14 +1655,21 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               </p>
 
               <p className="summary-text">
-                <strong>Time Out:</strong>{" "}
-                {form.reservation ? (reservationStartIso ? timeOutDisplay : "—") : timeOutDisplay}
+                <strong>Reservation Range:</strong>{" "}
+                {form.reservation
+                  ? `${formatReservationDateOnly(form.reservation_date)} → ${formatReservationDateOnly(form.reservation_end_date)}`
+                  : "N/A"}
+              </p>
+
+              <p className="summary-text">
+                <strong>Expiry:</strong>{" "}
+                {form.reservation ? (reservationLastDayEndIso ? formatPH(new Date(reservationLastDayEndIso)) : "—") : timeOutDisplay}
               </p>
 
               {!openTime && (
                 <>
-                  <p className="summary-text">Total Hours: {totalHHMMPreview}</p>
-                  <p className="summary-text">Total Amount: ₱{timeAmountPreview.toFixed(2)}</p>
+                  <p className="summary-text">Per Day Hours: {totalHHMMPreview}</p>
+                  <p className="summary-text">Per Day Amount: ₱{timeAmountPreview.toFixed(2)}</p>
                 </>
               )}
 
@@ -1099,11 +1679,47 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                   {isSeatPickReady ? (form.seat_number.length ? form.seat_number.join(", ") : "None") : "—"}
                 </p>
               )}
+
+              {form.reservation && (
+                <p className="summary-text">
+                  <strong>Total Reserved Days:</strong> {reservationDates.length}
+                </p>
+              )}
             </div>
 
             <IonButton expand="block" onClick={() => void handleSubmitBooking()}>
               Save Record
             </IonButton>
+
+            <div
+              style={{
+                marginTop: 16,
+                borderRadius: 16,
+                padding: 16,
+                border: "1px solid rgba(0,0,0,0.10)",
+                background: "#fffaf0",
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 6 }}>
+                ATTENDANCE (IN / OUT)
+              </div>
+              <div style={{ fontSize: 14, opacity: 0.8, marginBottom: 12 }}>
+                Reservation only. Tap the button then enter code + select IN/OUT inside the modal.
+              </div>
+
+              <IonButton
+                size="small"
+                onClick={() => {
+                  setAttendanceCode("");
+                  setAttendanceNote("");
+                  setAttendanceAction("IN");
+                  setAttendanceLogs([]);
+                  setAttendanceModalOpen(true);
+                }}
+              >
+                Enter Code
+              </IonButton>
+            </div>
           </div>
         </IonContent>
       </IonModal>
@@ -1139,8 +1755,8 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
           >
             <div style={{ fontSize: 15, opacity: 0.8, marginBottom: 10 }}>
               {savedCodeForReservation
-                ? "This code may be used for order / add-ons"
-                : " This code may be used for order / add-ons"}
+                ? "This code is for reservation attendance / order / add-ons"
+                : "This code may be used for order / add-ons"}
             </div>
 
             <div
@@ -1155,7 +1771,6 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
               {savedBookingCode}
             </div>
 
-
             <div
               style={{
                 marginBottom: 16,
@@ -1168,7 +1783,7 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             >
               {savedCodeActiveNow
                 ? "Code is active now and can already be used."
-                : "Code is NOT active yet. It will only work on the exact reserved date/time."}
+                : "Reservation code will work only on the reserved date/time."}
             </div>
 
             <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 16 }}>
@@ -1178,6 +1793,163 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
             <IonButton expand="block" onClick={() => setCodeModalOpen(false)}>
               OK
             </IonButton>
+          </div>
+        </IonContent>
+      </IonModal>
+
+      {/* ATTENDANCE MODAL */}
+      <IonModal
+        isOpen={attendanceModalOpen}
+        onDidDismiss={() => setAttendanceModalOpen(false)}
+        className="booking-modal"
+      >
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>Reservation</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={() => setAttendanceModalOpen(false)}>
+                <IonIcon icon={closeOutline} />
+              </IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
+
+        <IonContent className="ion-padding">
+          <div
+            style={{
+              maxWidth: 560,
+              margin: "0 auto",
+              borderRadius: 24,
+              background: "#e9d3a0",
+              padding: 18,
+              boxShadow: "0 16px 40px rgba(0,0,0,0.16)",
+            }}
+          >
+            <div
+              style={{
+                maxWidth: 430,
+                margin: "0 auto",
+                borderRadius: 20,
+                background: "#fff8ea",
+                padding: 20,
+                boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+              }}
+            >
+              <div style={{ textAlign: "center", marginBottom: 12 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.5 }}>
+                  ATTENDANCE
+                </div>
+                <div style={{ fontSize: 14, marginTop: 4 }}>
+                  Enter Reservation Code · Select IN/OUT · Manila Day: <strong>{manilaDay}</strong>
+                </div>
+              </div>
+
+              <IonItem lines="none" style={{ "--background": "transparent" } as React.CSSProperties}>
+                <IonLabel position="stacked">Reservation Code</IonLabel>
+                <IonInput
+                  value={attendanceCode}
+                  placeholder="e.g. AB23"
+                  onIonChange={(e) => setAttendanceCode((e.detail.value ?? "").toUpperCase())}
+                />
+              </IonItem>
+
+              <IonItem lines="none" style={{ "--background": "transparent" } as React.CSSProperties}>
+                <IonLabel position="stacked">Action</IonLabel>
+                <IonSelect
+                  value={attendanceAction}
+                  interface="popover"
+                  onIonChange={(e) => {
+                    const v = e.detail.value;
+                    setAttendanceAction(v === "OUT" ? "OUT" : "IN");
+                  }}
+                >
+                  <IonSelectOption value="IN">IN</IonSelectOption>
+                  <IonSelectOption value="OUT">OUT</IonSelectOption>
+                </IonSelect>
+              </IonItem>
+
+              <IonItem lines="none" style={{ "--background": "transparent" } as React.CSSProperties}>
+                <IonLabel position="stacked">Note</IonLabel>
+                <IonTextarea
+                  value={attendanceNote}
+                  autoGrow={true}
+                  placeholder="Optional note..."
+                  onIonChange={(e) => setAttendanceNote(e.detail.value ?? "")}
+                />
+              </IonItem>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  marginTop: 14,
+                  flexWrap: "wrap",
+                }}
+              >
+                <IonButton
+                  size="small"
+                  color="dark"
+                  onClick={() => setAttendanceModalOpen(false)}
+                >
+                  Close
+                </IonButton>
+
+                <IonButton
+                  size="small"
+                  color="dark"
+                  onClick={() => void loadAttendanceHistory()}
+                >
+                  Load History
+                </IonButton>
+
+                <IonButton
+                  size="small"
+                  disabled={attendanceLoading}
+                  onClick={() => void handleAttendanceSave()}
+                >
+                  {attendanceLoading ? "Saving..." : "Save"}
+                </IonButton>
+              </div>
+
+              <div style={{ marginTop: 20 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>
+                  Recent Logs
+                </div>
+
+                {attendanceLogs.length === 0 ? (
+                  <div style={{ opacity: 0.75 }}>No logs found.</div>
+                ) : (
+                  <div
+                    style={{
+                      maxHeight: 280,
+                      overflowY: "auto",
+                      display: "grid",
+                      gap: 10,
+                    }}
+                  >
+                    {attendanceLogs.map((log) => (
+                      <div
+                        key={log.id}
+                        style={{
+                          border: "1px solid rgba(0,0,0,0.10)",
+                          borderRadius: 12,
+                          padding: 12,
+                          background: "#fff",
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                          {log.attendance_date}
+                        </div>
+                        <div>IN: {formatDateTime(log.in_at)}</div>
+                        <div>OUT: {formatDateTime(log.out_at)}</div>
+                        <div>Note: {log.note?.trim() ? log.note : "—"}</div>
+                        <div>Auto Closed: {log.auto_closed ? "Yes" : "No"}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </IonContent>
       </IonModal>

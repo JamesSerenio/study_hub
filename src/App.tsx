@@ -11,6 +11,7 @@ import Admin_menu from "./admin/Admin_menu";
 import Book_Add from "./pages/Book_Add";
 import Seat_Map from "./pages/Seat_Map";
 import Add_Ons from "./pages/Add_Ons";
+import Noisy from "./pages/Noisy";
 
 /* Components */
 import TimeAlertModal from "./components/TimeAlertModal";
@@ -662,6 +663,7 @@ const AppRoutes: React.FC = () => {
         <Route exact path="/staff-menu" component={Staff_menu} />
         <Route exact path="/admin-menu" component={Admin_menu} />
         <Route exact path="/home" component={Home} />
+        <Route exact path="/noisy" component={Noisy} />
 
         <Route exact path="/">
           <Redirect to="/book-add" />
