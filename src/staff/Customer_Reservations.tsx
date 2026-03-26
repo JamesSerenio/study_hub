@@ -272,7 +272,6 @@ type RawConsignmentOrderRow = {
 
 /* ---------- helpers ---------- */
 
-
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -640,6 +639,8 @@ const Customer_Reservations: React.FC = () => {
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [selectedOrderSession, setSelectedOrderSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [selectedAttendanceSession, setSelectedAttendanceSession] =
+  useState<CustomerSession | null>(null);
 
   const [activeView, setActiveView] = useState<CustomerViewRow | null>(null);
   const [viewBusy, setViewBusy] = useState<boolean>(false);
@@ -684,6 +685,7 @@ const Customer_Reservations: React.FC = () => {
   const [sessionOrders, setSessionOrders] = useState<SessionOrdersMap>({});
   const [orderPayments, setOrderPayments] = useState<Record<string, CustomerOrderPayment>>({});
   const [attendanceState, setAttendanceState] = useState<AttendanceStateMap>({});
+  const [attendanceLogsMap, setAttendanceLogsMap] = useState<Record<string, AttendanceLogRow[]>>({});
 
   useEffect(() => {
     void initLoad();
@@ -989,43 +991,46 @@ const filteredSessions = useMemo(() => {
     };
 
     const fetchAttendanceStateForSessions = async (
-    rows: CustomerSession[]
-  ): Promise<void> => {
-    const sessionIds = Array.from(
-      new Set(rows.map((s) => String(s.id)).filter((x) => x.length > 0))
-    );
+      rows: CustomerSession[]
+    ): Promise<void> => {
+      const sessionIds = Array.from(
+        new Set(rows.map((s) => String(s.id)).filter((x) => x.length > 0))
+      );
 
-    if (sessionIds.length === 0) {
-      setAttendanceState({});
-      return;
-    }
+      if (sessionIds.length === 0) {
+        setAttendanceState({});
+        setAttendanceLogsMap({});
+        return;
+      }
 
-    const { data, error } = await supabase
-      .from("customer_session_attendance")
-      .select("*")
-      .in("session_id", sessionIds)
-      .order("in_at", { ascending: false });
+      const { data, error } = await supabase
+        .from("customer_session_attendance")
+        .select("*")
+        .in("session_id", sessionIds)
+        .order("in_at", { ascending: false });
 
-    if (error) {
-      console.error("customer_session_attendance fetch error:", error);
-      setAttendanceState({});
-      return;
-    }
+      if (error) {
+        console.error("customer_session_attendance fetch error:", error);
+        setAttendanceState({});
+        setAttendanceLogsMap({});
+        return;
+      }
 
-    const logs = (data ?? []) as AttendanceLogRow[];
-    const nextMap: AttendanceStateMap = {};
+      const logs = (data ?? []) as AttendanceLogRow[];
+      const nextStateMap: AttendanceStateMap = {};
+      const nextLogsMap: Record<string, AttendanceLogRow[]> = {};
 
-    for (const s of rows) {
-      const sessionLogs = logs.filter((log) => log.session_id === s.id);
-      const openLog = sessionLogs.find((log) => !log.out_at) ?? null;
+      for (const s of rows) {
+        const sessionLogs = logs.filter((log) => log.session_id === s.id);
+        const openLog = sessionLogs.find((log) => !log.out_at) ?? null;
 
-      nextMap[s.id] = {
-        openLog,
-      };
-    }
+        nextStateMap[s.id] = { openLog };
+        nextLogsMap[s.id] = sessionLogs;
+      }
 
-    setAttendanceState(nextMap);
-  };
+      setAttendanceState(nextStateMap);
+      setAttendanceLogsMap(nextLogsMap);
+    };
 
   const readActiveCustomerView = async (): Promise<void> => {
     const { data, error } = await supabase
@@ -1114,6 +1119,22 @@ const refreshAll = async (): Promise<void> => {
     const end = new Date(s.time_ended);
     return end.getFullYear() >= 2999;
   };
+
+  const getAttendanceLogsForSession = (s: CustomerSession): AttendanceLogRow[] => {
+  return attendanceLogsMap[s.id] ?? [];
+};
+
+    const formatDateTimeText = (iso: string | null | undefined): string => {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (!Number.isFinite(d.getTime())) return "—";
+      return d.toLocaleString("en-PH");
+    };
+
+    const getAttendanceCountText = (s: CustomerSession): string => {
+      const logs = getAttendanceLogsForSession(s);
+      return `${logs.length} log${logs.length === 1 ? "" : "s"}`;
+    };
 
   const diffMinutes = (startIso: string, endIso: string): number => {
     const start = new Date(startIso).getTime();
@@ -1354,9 +1375,26 @@ const releaseSeatBlocksNow = async (
     });
   });
 
-  const matchedRows = rows.filter((r) =>
-    expectedKeys.has(`${String(r.seat_number).trim()}__${r.start_at}__${r.end_at}`)
-  );
+    const matchedRows = rows.filter((r) => {
+      const seat = String(r.seat_number).trim();
+
+      if (!seats.includes(seat)) return false;
+
+      const rStart = new Date(r.start_at).getTime();
+      const rEnd = new Date(r.end_at).getTime();
+
+      if (!Number.isFinite(rStart) || !Number.isFinite(rEnd)) return false;
+
+      return windows.some((w) => {
+        const wStart = new Date(w.startIso).getTime();
+        const wEnd = new Date(w.endIso).getTime();
+
+        if (!Number.isFinite(wStart) || !Number.isFinite(wEnd)) return false;
+
+        // ✅ overlap check (KEY FIX)
+        return rStart < wEnd && rEnd > wStart;
+      });
+    });
 
   if (matchedRows.length > 0) {
     const ids = matchedRows.map((r) => r.id);
@@ -2182,7 +2220,6 @@ const getUsedMinutesForReceipt = (s: CustomerSession): number => {
 
     const nowIso = new Date().toISOString();
     await releaseSeatBlocksNow(row, nowIso, "cancel");
-
       const { error: deleteErr } = await supabase
         .from("customer_sessions")
         .delete()
@@ -2411,6 +2448,7 @@ const getUsedMinutesForReceipt = (s: CustomerSession): number => {
                     <th>Order Payment</th>
                     <th>Paid?</th>
                     <th>Seat</th>
+                    <th>Attendance</th>
                     <th>Status</th>
                     <th>Action</th>
                   </tr>
@@ -2574,8 +2612,27 @@ const getUsedMinutesForReceipt = (s: CustomerSession): number => {
                           </button>
                         </td>
 
-                        <td>{session.seat_number}</td>
-                        <td>{renderStatus(session)}</td>
+                  <td>{session.seat_number}</td>
+
+                  <td>
+                    <div className="cell-stack cell-center">
+                      <span className="cell-strong">
+                        {isReservationCurrentlyIn(session) ? "IN" : "OUT"}
+                      </span>
+                      <span style={{ fontSize: 12, opacity: 0.85 }}>
+                        {getAttendanceCountText(session)}
+                      </span>
+                      <button
+                        className="receipt-btn"
+                        onClick={() => setSelectedAttendanceSession(session)}
+                        type="button"
+                      >
+                        View In/Out
+                      </button>
+                    </div>
+                  </td>
+
+                  <td>{renderStatus(session)}</td>
 
                         <td>
                           <div className="action-stack">
@@ -2590,13 +2647,14 @@ const getUsedMinutesForReceipt = (s: CustomerSession): number => {
                               </button>
                             )}
 
-                            <button
-                              className="receipt-btn"
-                              onClick={() => setSelectedSession(session)}
-                              type="button"
-                            >
-                              View Receipt
-                            </button>
+                              <button
+                                className="receipt-btn"
+                                onClick={() => setSelectedSession(session)}
+                                type="button"
+                                title="View receipt"
+                              >
+                                View Receipt
+                              </button>
 
                             <button
                               className="receipt-btn admin-danger"
@@ -2627,7 +2685,18 @@ const getUsedMinutesForReceipt = (s: CustomerSession): number => {
               className="receipt-overlay"
               onClick={() => setSelectedOrderSession(null)}
             >
-              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+              <div
+                  className="receipt-container"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    width: "100%",
+                    maxWidth: 560,
+                    background: "#f6efe2",
+                    borderRadius: 20,
+                    padding: 24,
+                    boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+                  }}
+                >
                 <h3 className="receipt-title">ORDER LIST</h3>
                 <p className="receipt-subtitle">{selectedOrderSession.full_name}</p>
 
@@ -3320,13 +3389,166 @@ const getUsedMinutesForReceipt = (s: CustomerSession): number => {
             </div>
           )}
 
+          {selectedAttendanceSession && (
+                <div
+                  className="receipt-overlay"
+                  onClick={() => setSelectedAttendanceSession(null)}
+                >
+                  <div
+                    className="receipt-container"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      maxWidth: 540,
+                      background: "#f6efe2",
+                      borderRadius: 20,
+                      padding: 24,
+                      boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+                    }}
+                  >
+                    <h3
+                      className="receipt-title"
+                      style={{
+                        textAlign: "center",
+                        marginBottom: 4,
+                        color: "#222",
+                        fontWeight: 900,
+                      }}
+                    >
+                      ATTENDANCE RECEIPT
+                    </h3>
+
+                    <p
+                      className="receipt-subtitle"
+                      style={{
+                        textAlign: "center",
+                        color: "#444",
+                        marginBottom: 16,
+                      }}
+                    >
+                      IN / OUT History
+                    </p>
+
+                    <div className="receipt-row">
+                      <span>Customer</span>
+                      <span>{selectedAttendanceSession.full_name}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Booking Code</span>
+                      <span>{selectedAttendanceSession.booking_code ?? "—"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Seat</span>
+                      <span>{selectedAttendanceSession.seat_number}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Status</span>
+                      <span>
+                        {isReservationCurrentlyIn(selectedAttendanceSession) ? "IN" : "OUT"}
+                      </span>
+                    </div>
+
+                    <hr />
+
+                    <div style={{ fontWeight: 800, marginBottom: 10 }}>RECENT LOGS</div>
+
+                    {getAttendanceLogsForSession(selectedAttendanceSession).length === 0 ? (
+                      <div style={{ opacity: 0.7, textAlign: "center", padding: "12px 0" }}>
+                        No attendance logs found.
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: 10,
+                          maxHeight: 320,
+                          overflowY: "auto",
+                          paddingRight: 4,
+                        }}
+                      >
+                        {getAttendanceLogsForSession(selectedAttendanceSession).map((log) => (
+                          <div
+                            key={log.id}
+                            style={{
+                              background: "#fffaf0",
+                              border: "1px solid rgba(0,0,0,0.08)",
+                              borderRadius: 14,
+                              padding: 12,
+                            }}
+                          >
+                            <div className="receipt-row">
+                              <span>Date</span>
+                              <span>{log.attendance_date || "—"}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>IN</span>
+                              <span>{formatDateTimeText(log.in_at)}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>OUT</span>
+                              <span>{formatDateTimeText(log.out_at)}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>Note</span>
+                              <span>{log.note?.trim() || "—"}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>Auto Closed</span>
+                              <span>{log.auto_closed ? "Yes" : "No"}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div
+                      className="modal-actions"
+                      style={{ marginTop: 18, display: "flex", justifyContent: "center" }}
+                    >
+                      <button
+                        className="close-btn"
+                        onClick={() => setSelectedAttendanceSession(null)}
+                        type="button"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+              <div style={{ textAlign: "center", marginBottom: 12 }}>
+                <img
+                  src={logo}
+                  alt="Me Tyme Lounge"
+                  className="receipt-logo"
+                  style={{ width: 70, height: 70, objectFit: "contain", marginBottom: 8 }}
+                />
 
-                <h3 className="receipt-title">ME TYME LOUNGE</h3>
-                <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
+                <h3
+                  className="receipt-title"
+                  style={{ margin: 0, color: "#222", fontWeight: 900 }}
+                >
+                  ME TYME LOUNGE
+                </h3>
+
+                <p
+                  className="receipt-subtitle"
+                  style={{ marginTop: 4, color: "#444" }}
+                >
+                  OFFICIAL RECEIPT
+                </p>
+              </div>
 
                 <hr />
 
@@ -3369,16 +3591,17 @@ const getUsedMinutesForReceipt = (s: CustomerSession): number => {
                   <span>{selectedSession.has_id ? "Yes" : "No"}</span>
                 </div>
 
-                <div className="receipt-row">
-                  <span>Seat</span>
-                  <span>{selectedSession.seat_number}</span>
+                  <div className="receipt-row">
+                    <span>Seat</span>
+                    <span>{selectedSession.seat_number}</span>
+                  </div>
+
                   {String(selectedSession.reservation).toLowerCase() === "yes" && (
                     <div className="receipt-row">
                       <span>Attendance</span>
                       <span>{isReservationCurrentlyIn(selectedSession) ? "IN" : "OUT"}</span>
                     </div>
                   )}
-                </div> 
 
                 <hr />
 
