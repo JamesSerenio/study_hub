@@ -69,6 +69,7 @@ interface CustomerSession {
   total_amount: number;
   reservation: string;
   reservation_date: string | null;
+  reservation_end_date?: string | null;
   id_number?: string | null;
   seat_number: string;
   promo_booking_id?: string | null;
