@@ -1854,6 +1854,7 @@ const filteredSessions = useMemo(() => {
 
         reservation: row.reservation ?? "yes",
         reservation_date: row.reservation_date ?? null,
+        reservation_end_date: row.reservation_end_date ?? null,
 
         id_number: row.id_number ?? null,
         seat_number: String(row.seat_number ?? "").trim() || "N/A",
@@ -2599,8 +2600,8 @@ const filteredSessions = useMemo(() => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Reservation Date</span>
-                  <span>{cancelTarget.reservation_date ?? "N/A"}</span>
+                  <span>Reservation Range</span>
+                  <span>{formatReservationRange(cancelTarget)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -3052,8 +3053,8 @@ const filteredSessions = useMemo(() => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Reservation Date</span>
-                  <span>{selectedSession.reservation_date ?? "N/A"}</span>
+                  <span>Reservation Range</span>
+                  <span>{formatReservationRange(selectedSession)}</span>
                 </div>
 
                 <div className="receipt-row">
