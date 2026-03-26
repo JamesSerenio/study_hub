@@ -1519,31 +1519,49 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                     border: "1px solid rgba(0,0,0,0.08)",
                   }}
                 >
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>Reservation Date Range</div>
-                    <div style={{ fontSize: 13, opacity: 0.75, marginTop: 4 }}>
-                      {form.reservation_date && form.reservation_end_date
-                        ? `${formatReservationDateOnly(form.reservation_date)} → ${formatReservationDateOnly(form.reservation_end_date)}`
-                        : "Tap two dates to create a range"}
-                    </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>Reservation Date Range</div>
+
+                  <div style={{ fontSize: 13, opacity: 0.85, marginTop: 4 }}>
+                    {form.reservation_date && form.reservation_end_date
+                      ? `${formatReservationDateOnly(form.reservation_date)} → ${formatReservationDateOnly(form.reservation_end_date)}`
+                      : "Tap two dates to create a range"}
                   </div>
 
-                  <IonDatetime
-                    presentation="date"
-                    preferWheel={false}
-                    showDefaultTitle={true}
-                    locale="en-PH"
-                    min={todayLocalYYYYMMDD()}
-                    multiple={true}
-                    value={
-                      form.reservation_date && form.reservation_end_date
-                        ? [form.reservation_date, form.reservation_end_date]
-                        : form.reservation_date
-                        ? [form.reservation_date]
-                        : []
-                    }
-                    onIonChange={(e) => applyPickedDateRange(e.detail.value)}
-                  />
+                  <div
+                    style={{
+                      marginTop: 8,
+                      display: "inline-block",
+                      padding: "6px 12px",
+                      borderRadius: 999,
+                      background: "#2f8f3f",
+                      color: "#fff",
+                      fontWeight: 700,
+                      fontSize: 13,
+                    }}
+                  >
+                    {reservationDates.length > 0
+                      ? `${reservationDates.length} day${reservationDates.length > 1 ? "s" : ""}`
+                      : "No range yet"}
+                  </div>
+                </div>
+
+                <IonDatetime
+                  presentation="date"
+                  preferWheel={false}
+                  showDefaultTitle={false}
+                  locale="en-PH"
+                  min={todayLocalYYYYMMDD()}
+                  multiple={true}
+                  value={
+                    form.reservation_date && form.reservation_end_date
+                      ? [form.reservation_date, form.reservation_end_date]
+                      : form.reservation_date
+                      ? [form.reservation_date]
+                      : []
+                  }
+                  onIonChange={(e) => applyPickedDateRange(e.detail.value)}
+                />
                 </div>
 
                 <IonItem className="form-item">
