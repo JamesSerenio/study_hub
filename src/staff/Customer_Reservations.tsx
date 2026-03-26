@@ -268,6 +268,39 @@ const formatDateDisplay = (dateStr: string | null | undefined): string => {
   return d.toLocaleDateString("en-GB");
 };
 
+const getReservationEndDate = (s: CustomerSession): string | null => {
+  const end = String(s.reservation_end_date ?? "").trim();
+  if (end) return end;
+
+  const start = String(s.reservation_date ?? "").trim();
+  return start || null;
+};
+
+const isDateWithinReservationRange = (
+  filterYmd: string,
+  startYmd: string | null | undefined,
+  endYmd: string | null | undefined
+): boolean => {
+  const start = String(startYmd ?? "").trim();
+  const end = String(endYmd ?? "").trim() || start;
+  const target = String(filterYmd ?? "").trim();
+
+  if (!target || !start) return false;
+  return target >= start && target <= end;
+};
+
+const formatReservationRange = (s: CustomerSession): string => {
+  const start = String(s.reservation_date ?? "").trim();
+  const end = String(s.reservation_end_date ?? "").trim();
+
+  if (!start && !end) return "—";
+  if (start && end && start !== end) {
+    return `${formatDateDisplay(start)} → ${formatDateDisplay(end)}`;
+  }
+
+  return formatDateDisplay(start || end);
+};
+
 const formatTimeText = (iso: string): string => {
   const dt = new Date(iso);
   if (!Number.isFinite(dt.getTime())) return "";
@@ -515,39 +548,42 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  const filteredSessions = useMemo(() => {
-    const q = searchName.trim().toLowerCase();
+const filteredSessions = useMemo(() => {
+  const q = searchName.trim().toLowerCase();
 
-    return sessions
-      .filter((s) => {
-        if (filterDate) {
-          if (dateFilterMode === "reserved_on") {
-            const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
-            if (createdLocalDate !== filterDate) return false;
-          } else {
-            const startDate = String(s.reservation_date ?? "").trim();
-            if (startDate !== filterDate) return false;
+  return sessions
+    .filter((s) => {
+      if (filterDate) {
+        if (dateFilterMode === "reserved_on") {
+          const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
+          if (createdLocalDate !== filterDate) return false;
+        } else {
+          const startDate = String(s.reservation_date ?? "").trim();
+          const endDate = getReservationEndDate(s);
+          if (!isDateWithinReservationRange(filterDate, startDate, endDate)) {
+            return false;
           }
         }
+      }
 
-        if (!q) return true;
-        const name = String(s.full_name ?? "").toLowerCase();
-        return name.includes(q);
-      })
-      .sort((a, b) => {
-        const aTime = new Date(a.time_started).getTime();
-        const bTime = new Date(b.time_started).getTime();
+      if (!q) return true;
+      const name = String(s.full_name ?? "").toLowerCase();
+      return name.includes(q);
+    })
+    .sort((a, b) => {
+      const aTime = new Date(a.time_started).getTime();
+      const bTime = new Date(b.time_started).getTime();
 
-        const aValid = Number.isFinite(aTime);
-        const bValid = Number.isFinite(bTime);
+      const aValid = Number.isFinite(aTime);
+      const bValid = Number.isFinite(bTime);
 
-        if (!aValid && !bValid) return 0;
-        if (!aValid) return 1;
-        if (!bValid) return -1;
+      if (!aValid && !bValid) return 0;
+      if (!aValid) return 1;
+      if (!bValid) return -1;
 
-        return aTime - bTime;
-      });
-  }, [sessions, filterDate, dateFilterMode, searchName]);
+      return aTime - bTime;
+    });
+}, [sessions, filterDate, dateFilterMode, searchName]);
 
   const fetchReservationSessions = async (): Promise<CustomerSession[]> => {
     const { data, error } = await supabase
@@ -2116,7 +2152,7 @@ const Customer_Reservations: React.FC = () => {
                             ? new Date(session.created_at).toLocaleString("en-PH")
                             : "—"}
                         </td>
-                        <td>{formatDateDisplay(session.reservation_date)}</td>
+                        <td>{formatReservationRange(session)}</td>
                         <td>{session.full_name}</td>
                         <td>{session.booking_code ?? "—"}</td>
                         <td>{phoneText(session)}</td>
