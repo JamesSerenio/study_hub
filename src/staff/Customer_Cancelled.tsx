@@ -120,7 +120,7 @@ type CancelledSessionDB = {
   created_at: string | null;
   staff_id: string | null;
 
-  date: string; // date
+  date: string;
   full_name: string;
   customer_type: string;
   customer_field: string | null;
@@ -131,13 +131,15 @@ type CancelledSessionDB = {
   total_time: number | string;
   total_amount: number | string;
 
-  reservation: string; // 'no' or 'yes'
+  reservation: string;
   reservation_date: string | null;
+  reservation_end_date?: string | null;
 
   id_number: string | null;
   seat_number: string;
 
   promo_booking_id: string | null;
+  booking_code?: string | null;
 
   discount_kind: DiscountKind | string;
   discount_value: number | string;
@@ -160,6 +162,7 @@ type CancelledSession = {
   date: string;
   reservation: "no" | "yes";
   reservation_date: string | null;
+  reservation_end_date?: string | null;
 
   full_name: string;
   phone_number: string | null;
@@ -168,6 +171,8 @@ type CancelledSession = {
   has_id: boolean;
   id_number: string | null;
   seat_number: string;
+
+  booking_code?: string | null;
 
   hour_avail: string;
   time_started: string;
@@ -351,6 +356,18 @@ const toNumber = (v: NumericLike | null | undefined): number => {
     return Number.isFinite(n) ? n : 0;
   }
   return 0;
+};
+
+const formatReservationRange = (
+  start: string | null | undefined,
+  end: string | null | undefined
+): string => {
+  const s = String(start ?? "").trim();
+  const e = String(end ?? "").trim();
+
+  if (!s && !e) return "-";
+  if (s && e && s !== e) return `${s} → ${e}`;
+  return s || e || "-";
 };
 
 const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
@@ -723,39 +740,41 @@ const Customer_Cancelled: React.FC = () => {
 
     const { data, error } = await supabase
       .from("customer_sessions_cancelled")
-      .select(
+        .select(
+          `
+          id,
+          cancelled_at,
+          cancel_reason,
+          created_at,
+          staff_id,
+          date,
+          full_name,
+          customer_type,
+          customer_field,
+          has_id,
+          hour_avail,
+          time_started,
+          time_ended,
+          total_time,
+          total_amount,
+          reservation,
+          reservation_date,
+          reservation_end_date,
+          id_number,
+          seat_number,
+          promo_booking_id,
+          booking_code,
+          discount_kind,
+          discount_value,
+          discount_reason,
+          gcash_amount,
+          cash_amount,
+          is_paid,
+          paid_at,
+          phone_number,
+          down_payment
         `
-        id,
-        cancelled_at,
-        cancel_reason,
-        created_at,
-        staff_id,
-        date,
-        full_name,
-        customer_type,
-        customer_field,
-        has_id,
-        hour_avail,
-        time_started,
-        time_ended,
-        total_time,
-        total_amount,
-        reservation,
-        reservation_date,
-        id_number,
-        seat_number,
-        promo_booking_id,
-        discount_kind,
-        discount_value,
-        discount_reason,
-        gcash_amount,
-        cash_amount,
-        is_paid,
-        paid_at,
-        phone_number,
-        down_payment
-      `
-      )
+        )
       .gte("cancelled_at", startIso)
       .lt("cancelled_at", endIso)
       .eq("reservation", reservation)
@@ -783,6 +802,7 @@ const Customer_Cancelled: React.FC = () => {
         date: String(r.date ?? ""),
         reservation: (String(r.reservation ?? "no") === "yes" ? "yes" : "no") as "no" | "yes",
         reservation_date: r.reservation_date ?? null,
+        reservation_end_date: r.reservation_end_date ?? null,
 
         full_name: String(r.full_name ?? "-"),
         phone_number: r.phone_number ?? null,
@@ -1307,7 +1327,7 @@ const Customer_Cancelled: React.FC = () => {
                       <tr>
                         <th>Cancelled At</th>
                         <th>Date</th>
-                        {tab === "reservation" && <th>Reservation Date</th>}
+                        {tab === "reservation" && <th>Reservation Range</th>}
                         <th>Full Name</th>
                         <th>Phone #</th>
                         <th>Seat</th>
@@ -1335,7 +1355,9 @@ const Customer_Cancelled: React.FC = () => {
                           <tr key={s.id}>
                             <td>{formatDateTime(s.cancelled_at)}</td>
                             <td>{s.date}</td>
-                            {tab === "reservation" && <td>{s.reservation_date ?? "-"}</td>}
+                            {tab === "reservation" && (
+                              <td>{formatReservationRange(s.reservation_date, s.reservation_end_date)}</td>
+                            )}
                             <td>{s.full_name}</td>
                             <td>{String(s.phone_number ?? "").trim() || "N/A"}</td>
                             <td>{s.seat_number}</td>
@@ -1393,12 +1415,17 @@ const Customer_Cancelled: React.FC = () => {
                       <span>{selectedSession.date}</span>
                     </div>
 
-                    {selectedSession.reservation === "yes" && (
-                      <div className="receipt-row">
-                        <span>Reservation Date</span>
-                        <span>{selectedSession.reservation_date ?? "-"}</span>
-                      </div>
-                    )}
+                      {selectedSession.reservation === "yes" && (
+                        <div className="receipt-row">
+                          <span>Reservation Range</span>
+                          <span>
+                            {formatReservationRange(
+                              selectedSession.reservation_date,
+                              selectedSession.reservation_end_date
+                            )}
+                          </span>
+                        </div>
+                      )}
 
                     <div className="receipt-row">
                       <span>Customer</span>

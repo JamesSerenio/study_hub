@@ -69,6 +69,7 @@ interface CustomerSession {
   total_amount: number;
   reservation: string;
   reservation_date: string | null;
+  reservation_end_date?: string | null;
   id_number?: string | null;
   seat_number: string;
   promo_booking_id?: string | null;
@@ -193,6 +194,24 @@ type SeatBlockedRow = {
   note: string | null;
 };
 
+type AttendanceLogRow = {
+  id: string;
+  session_id: string;
+  booking_code: string;
+  attendance_date: string;
+  in_at: string;
+  out_at: string | null;
+  note: string | null;
+  auto_closed: boolean;
+  created_at: string;
+};
+
+type AttendanceStateMap = Record<
+  string,
+  {
+    openLog: AttendanceLogRow | null;
+  }
+>;
 /* ---------- raw select row types for strict TS ---------- */
 
 type RawAddonCatalogMini = {
@@ -260,11 +279,147 @@ const yyyyMmDdLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
+const rangeDatesInclusive = (startYmd: string, endYmd: string): string[] => {
+  const start = new Date(`${startYmd}T00:00:00`);
+  const end = new Date(`${endYmd}T00:00:00`);
+
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return [];
+  if (start.getTime() > end.getTime()) return [];
+
+  const out: string[] = [];
+  const cur = new Date(start);
+
+  while (cur.getTime() <= end.getTime()) {
+    out.push(yyyyMmDdLocal(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  return out;
+};
+
+const getClockFromIso = (iso: string): { hours: number; minutes: number } => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return { hours: 0, minutes: 0 };
+  return {
+    hours: d.getHours(),
+    minutes: d.getMinutes(),
+  };
+};
+
+
+
+const endOfLocalDayIso = (yyyyMmDd: string): string => {
+  const m = yyyyMmDd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return new Date().toISOString();
+
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+
+  return new Date(y, mo, d, 23, 59, 59, 999).toISOString();
+};
+
+const addDurationToIso = (startIso: string, durationHHMM: string): string => {
+  const start = new Date(startIso);
+  if (!Number.isFinite(start.getTime())) return startIso;
+
+  const [hRaw, mRaw] = durationHHMM.split(":");
+  const dh = Number(hRaw);
+  const dm = Number(mRaw);
+
+  if (!Number.isFinite(dh) || !Number.isFinite(dm)) return startIso;
+
+  return new Date(start.getTime() + (dh * 60 + dm) * 60_000).toISOString();
+};
+
+const clampToReservationDay = (endIso: string, reservationDate?: string | null): string => {
+  if (!reservationDate) return endIso;
+
+  const eod = endOfLocalDayIso(reservationDate);
+  const endMs = new Date(endIso).getTime();
+  const eodMs = new Date(eod).getTime();
+
+  if (!Number.isFinite(endMs) || !Number.isFinite(eodMs)) return endIso;
+  return endMs > eodMs ? eod : endIso;
+};
+
+const buildReservationSeatWindowsFromSession = (
+  session: CustomerSession
+): Array<{ date: string; startIso: string; endIso: string }> => {
+  const startDate = String(session.reservation_date ?? "").trim();
+  const endDate = String(session.reservation_end_date ?? "").trim() || startDate;
+
+  if (!startDate || !endDate) return [];
+
+  const days = rangeDatesInclusive(startDate, endDate);
+  if (days.length === 0) return [];
+
+  const { hours, minutes } = getClockFromIso(session.time_started);
+  const openTime = String(session.hour_avail ?? "").trim().toUpperCase() === "OPEN";
+
+  return days.map((day) => {
+    const [y, m, d] = day.split("-").map(Number);
+    const startIso = new Date(y, (m ?? 1) - 1, d ?? 1, hours, minutes, 0, 0).toISOString();
+
+    if (openTime) {
+      return {
+        date: day,
+        startIso,
+        endIso: endOfLocalDayIso(day),
+      };
+    }
+
+    const endIso = clampToReservationDay(
+      addDurationToIso(startIso, String(session.hour_avail ?? "00:00")),
+      day
+    );
+
+    return {
+      date: day,
+      startIso,
+      endIso,
+    };
+  });
+};
+
 const formatDateDisplay = (dateStr: string | null | undefined): string => {
   if (!dateStr) return "—";
   const d = new Date(`${dateStr}T00:00:00`);
   if (!Number.isFinite(d.getTime())) return String(dateStr);
   return d.toLocaleDateString("en-GB");
+};
+
+const getReservationEndDate = (s: CustomerSession): string | null => {
+  const end = String(s.reservation_end_date ?? "").trim();
+  if (end) return end;
+
+  const start = String(s.reservation_date ?? "").trim();
+  return start || null;
+};
+
+const isDateWithinReservationRange = (
+  filterYmd: string,
+  startYmd: string | null | undefined,
+  endYmd: string | null | undefined
+): boolean => {
+  const start = String(startYmd ?? "").trim();
+  const end = String(endYmd ?? "").trim() || start;
+  const target = String(filterYmd ?? "").trim();
+
+  if (!target || !start) return false;
+  return target >= start && target <= end;
+};
+
+const formatReservationRange = (s: CustomerSession): string => {
+  const start = String(s.reservation_date ?? "").trim();
+  const end = String(s.reservation_end_date ?? "").trim();
+
+  if (!start && !end) return "—";
+  if (start && end && start !== end) {
+    return `${formatDateDisplay(start)} → ${formatDateDisplay(end)}`;
+  }
+
+  return formatDateDisplay(start || end);
 };
 
 const formatTimeText = (iso: string): string => {
@@ -441,9 +596,51 @@ const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
+    const getAttendanceOpenLog = (s: CustomerSession): AttendanceLogRow | null => {
+    return attendanceState[s.id]?.openLog ?? null;
+  };
+
+  const getReservationLiveMinutesFromAttendance = (s: CustomerSession): number => {
+    const openLog = getAttendanceOpenLog(s);
+    if (!openLog) return 0;
+
+    const start = new Date(openLog.in_at).getTime();
+    const now = Date.now();
+
+    if (!Number.isFinite(start) || now <= start) return 0;
+    return Math.floor((now - start) / (1000 * 60));
+  };
+
+  const getClosedMinutesFromSession = (s: CustomerSession): number => {
+    return Math.max(0, Math.floor(toMoney(s.total_time) * 60));
+  };
+
+  const getReservationTotalUsedMinutes = (s: CustomerSession): number => {
+    const closedMinutes = getClosedMinutesFromSession(s);
+    const liveMinutes = getReservationLiveMinutesFromAttendance(s);
+    return closedMinutes + liveMinutes;
+  };
+
+  const getReservationLiveCostFromAttendance = (s: CustomerSession): number => {
+    const liveMinutes = getReservationLiveMinutesFromAttendance(s);
+    const chargeMinutes = Math.max(0, liveMinutes - FREE_MINUTES);
+    const perMinute = HOURLY_RATE / 60;
+    return wholePeso(chargeMinutes * perMinute);
+  };
+
+  const getReservationAccumulatedCost = (s: CustomerSession): number => {
+    return wholePeso(Math.max(0, toMoney(s.total_amount)));
+  };
+
+  const isReservationCurrentlyIn = (s: CustomerSession): boolean => {
+    return getAttendanceOpenLog(s) !== null;
+  };
+
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [selectedOrderSession, setSelectedOrderSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [selectedAttendanceSession, setSelectedAttendanceSession] =
+  useState<CustomerSession | null>(null);
 
   const [activeView, setActiveView] = useState<CustomerViewRow | null>(null);
   const [viewBusy, setViewBusy] = useState<boolean>(false);
@@ -487,6 +684,8 @@ const Customer_Reservations: React.FC = () => {
 
   const [sessionOrders, setSessionOrders] = useState<SessionOrdersMap>({});
   const [orderPayments, setOrderPayments] = useState<Record<string, CustomerOrderPayment>>({});
+  const [attendanceState, setAttendanceState] = useState<AttendanceStateMap>({});
+  const [attendanceLogsMap, setAttendanceLogsMap] = useState<Record<string, AttendanceLogRow[]>>({});
 
   useEffect(() => {
     void initLoad();
@@ -502,51 +701,69 @@ const Customer_Reservations: React.FC = () => {
     };
   }, []);
 
-  const initLoad = async (): Promise<void> => {
-    setLoading(true);
-    try {
-      const loadedSessions = await fetchReservationSessions();
-      await fetchOrdersForSessions(loadedSessions);
-      await fetchOrderPayments(loadedSessions);
-      await syncSessionPaidStates(loadedSessions);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+  const hasOpenAttendance = sessions.some(
+    (s) => String(s.reservation).toLowerCase() === "yes" && isReservationCurrentlyIn(s)
+  );
 
-  const filteredSessions = useMemo(() => {
-    const q = searchName.trim().toLowerCase();
+  if (!hasOpenAttendance) return;
 
-    return sessions
-      .filter((s) => {
-        if (filterDate) {
-          if (dateFilterMode === "reserved_on") {
-            const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
-            if (createdLocalDate !== filterDate) return false;
-          } else {
-            const startDate = String(s.reservation_date ?? "").trim();
-            if (startDate !== filterDate) return false;
+  const timer = window.setInterval(() => {
+    setSessions((prev) => [...prev]);
+  }, 30000);
+
+  return () => window.clearInterval(timer);
+}, [sessions, attendanceState]);
+
+const initLoad = async (): Promise<void> => {
+  setLoading(true);
+  try {
+    const loadedSessions = await fetchReservationSessions();
+    await fetchOrdersForSessions(loadedSessions);
+    await fetchOrderPayments(loadedSessions);
+    await fetchAttendanceStateForSessions(loadedSessions);
+    await syncSessionPaidStates(loadedSessions);
+  } finally {
+    setLoading(false);
+  }
+};
+
+const filteredSessions = useMemo(() => {
+  const q = searchName.trim().toLowerCase();
+
+  return sessions
+    .filter((s) => {
+      if (filterDate) {
+        if (dateFilterMode === "reserved_on") {
+          const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
+          if (createdLocalDate !== filterDate) return false;
+        } else {
+          const startDate = String(s.reservation_date ?? "").trim();
+          const endDate = getReservationEndDate(s);
+          if (!isDateWithinReservationRange(filterDate, startDate, endDate)) {
+            return false;
           }
         }
+      }
 
-        if (!q) return true;
-        const name = String(s.full_name ?? "").toLowerCase();
-        return name.includes(q);
-      })
-      .sort((a, b) => {
-        const aTime = new Date(a.time_started).getTime();
-        const bTime = new Date(b.time_started).getTime();
+      if (!q) return true;
+      const name = String(s.full_name ?? "").toLowerCase();
+      return name.includes(q);
+    })
+    .sort((a, b) => {
+      const aTime = new Date(a.time_started).getTime();
+      const bTime = new Date(b.time_started).getTime();
 
-        const aValid = Number.isFinite(aTime);
-        const bValid = Number.isFinite(bTime);
+      const aValid = Number.isFinite(aTime);
+      const bValid = Number.isFinite(bTime);
 
-        if (!aValid && !bValid) return 0;
-        if (!aValid) return 1;
-        if (!bValid) return -1;
+      if (!aValid && !bValid) return 0;
+      if (!aValid) return 1;
+      if (!bValid) return -1;
 
-        return aTime - bTime;
-      });
-  }, [sessions, filterDate, dateFilterMode, searchName]);
+      return aTime - bTime;
+    });
+}, [sessions, filterDate, dateFilterMode, searchName]);
 
   const fetchReservationSessions = async (): Promise<CustomerSession[]> => {
     const { data, error } = await supabase
@@ -737,41 +954,83 @@ const Customer_Reservations: React.FC = () => {
     setSessionOrders(nextMap);
   };
 
-  const fetchOrderPayments = async (rows: CustomerSession[]): Promise<void> => {
-    const codes = Array.from(
-      new Set(
-        rows
-          .map((s) => String(s.booking_code ?? "").trim().toUpperCase())
-          .filter(Boolean)
-      )
-    );
+    const fetchOrderPayments = async (rows: CustomerSession[]): Promise<void> => {
+      const codes = Array.from(
+        new Set(
+          rows
+            .map((s) => String(s.booking_code ?? "").trim().toUpperCase())
+            .filter(Boolean)
+        )
+      );
 
-    if (codes.length === 0) {
-      setOrderPayments({});
-      return;
-    }
+      if (codes.length === 0) {
+        setOrderPayments({});
+        return;
+      }
 
-    const { data, error } = await supabase
-      .from("customer_order_payments")
-      .select("*")
-      .in("booking_code", codes);
+      const { data, error } = await supabase
+        .from("customer_order_payments")
+        .select("*")
+        .in("booking_code", codes);
 
-    if (error) {
-      console.error("customer_order_payments fetch error:", error);
-      setOrderPayments({});
-      return;
-    }
+      if (error) {
+        console.error("customer_order_payments fetch error:", error);
+        setOrderPayments({});
+        return;
+      }
 
-    const map: Record<string, CustomerOrderPayment> = {};
+      const map: Record<string, CustomerOrderPayment> = {};
 
-    for (const row of (data ?? []) as CustomerOrderPayment[]) {
-      const code = String(row.booking_code ?? "").trim().toUpperCase();
-      if (!code) continue;
-      map[code] = row;
-    }
+      for (const row of (data ?? []) as CustomerOrderPayment[]) {
+        const code = String(row.booking_code ?? "").trim().toUpperCase();
+        if (!code) continue;
+        map[code] = row;
+      }
 
-    setOrderPayments(map);
-  };
+      setOrderPayments(map);
+    };
+
+    const fetchAttendanceStateForSessions = async (
+      rows: CustomerSession[]
+    ): Promise<void> => {
+      const sessionIds = Array.from(
+        new Set(rows.map((s) => String(s.id)).filter((x) => x.length > 0))
+      );
+
+      if (sessionIds.length === 0) {
+        setAttendanceState({});
+        setAttendanceLogsMap({});
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("customer_session_attendance")
+        .select("*")
+        .in("session_id", sessionIds)
+        .order("in_at", { ascending: false });
+
+      if (error) {
+        console.error("customer_session_attendance fetch error:", error);
+        setAttendanceState({});
+        setAttendanceLogsMap({});
+        return;
+      }
+
+      const logs = (data ?? []) as AttendanceLogRow[];
+      const nextStateMap: AttendanceStateMap = {};
+      const nextLogsMap: Record<string, AttendanceLogRow[]> = {};
+
+      for (const s of rows) {
+        const sessionLogs = logs.filter((log) => log.session_id === s.id);
+        const openLog = sessionLogs.find((log) => !log.out_at) ?? null;
+
+        nextStateMap[s.id] = { openLog };
+        nextLogsMap[s.id] = sessionLogs;
+      }
+
+      setAttendanceState(nextStateMap);
+      setAttendanceLogsMap(nextLogsMap);
+    };
 
   const readActiveCustomerView = async (): Promise<void> => {
     const { data, error } = await supabase
@@ -825,20 +1084,21 @@ const Customer_Reservations: React.FC = () => {
     };
   };
 
-  const refreshAll = async (): Promise<void> => {
-    try {
-      setRefreshing(true);
-      const loadedSessions = await fetchReservationSessions();
-      await Promise.all([
-        fetchOrdersForSessions(loadedSessions),
-        fetchOrderPayments(loadedSessions),
-        readActiveCustomerView(),
-      ]);
-      await syncSessionPaidStates(loadedSessions);
-    } finally {
-      setRefreshing(false);
-    }
-  };
+const refreshAll = async (): Promise<void> => {
+  try {
+    setRefreshing(true);
+    const loadedSessions = await fetchReservationSessions();
+    await Promise.all([
+      fetchOrdersForSessions(loadedSessions),
+      fetchOrderPayments(loadedSessions),
+      fetchAttendanceStateForSessions(loadedSessions),
+      readActiveCustomerView(),
+    ]);
+    await syncSessionPaidStates(loadedSessions);
+  } finally {
+    setRefreshing(false);
+  }
+};
 
   const clearFilters = (): void => {
     setDateFilterMode("start_date");
@@ -859,6 +1119,22 @@ const Customer_Reservations: React.FC = () => {
     const end = new Date(s.time_ended);
     return end.getFullYear() >= 2999;
   };
+
+  const getAttendanceLogsForSession = (s: CustomerSession): AttendanceLogRow[] => {
+  return attendanceLogsMap[s.id] ?? [];
+};
+
+    const formatDateTimeText = (iso: string | null | undefined): string => {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (!Number.isFinite(d.getTime())) return "—";
+      return d.toLocaleString("en-PH");
+    };
+
+    const getAttendanceCountText = (s: CustomerSession): string => {
+      const logs = getAttendanceLogsForSession(s);
+      return `${logs.length} log${logs.length === 1 ? "" : "s"}`;
+    };
 
   const diffMinutes = (startIso: string, endIso: string): number => {
     const start = new Date(startIso).getTime();
@@ -887,9 +1163,15 @@ const Customer_Reservations: React.FC = () => {
     return computeCostWithFreeMinutes(s.time_started, nowIso);
   };
 
-  const getBaseSystemCost = (s: CustomerSession): number => {
-    return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
-  };
+const getBaseSystemCost = (s: CustomerSession): number => {
+  if (String(s.reservation).toLowerCase() === "yes") {
+    const accumulated = getReservationAccumulatedCost(s);
+    const live = getReservationLiveCostFromAttendance(s);
+    return wholePeso(accumulated + live);
+  }
+
+  return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
+};
 
   const getDiscountInfo = (
     s: CustomerSession
@@ -1053,51 +1335,122 @@ const Customer_Reservations: React.FC = () => {
     }
   };
 
-  const releaseSeatBlocksNow = async (
-    session: CustomerSession,
-    nowIso: string
-  ): Promise<void> => {
-    const seats = splitSeats(session.seat_number);
-    if (seats.length === 0) return;
+const releaseSeatBlocksNow = async (
+  session: CustomerSession,
+  nowIso: string,
+  mode: "stop" | "cancel" = "stop"
+): Promise<void> => {
+  const seats = splitSeats(session.seat_number);
+  if (seats.length === 0) return;
 
-    const { data, error } = await supabase
-      .from("seat_blocked_times")
-      .select("id, seat_number, start_at, end_at, source, note")
-      .in("seat_number", seats)
-      .eq("source", "reserved")
-      .eq("start_at", session.time_started)
-      .gt("end_at", nowIso);
+  const windows = buildReservationSeatWindowsFromSession(session);
 
-    if (error) {
-      console.warn("releaseSeatBlocksNow select:", error.message);
-      return;
-    }
+  if (windows.length === 0) {
+    console.warn("releaseSeatBlocksNow: no reservation windows built");
+    return;
+  }
 
-    const rows = (data ?? []) as SeatBlockedRow[];
-    if (rows.length === 0) {
+  const firstStart = windows[0].startIso;
+  const lastEnd = windows[windows.length - 1].endIso;
+
+  const { data, error } = await supabase
+    .from("seat_blocked_times")
+    .select("id, seat_number, start_at, end_at, source, note")
+    .in("seat_number", seats)
+    .eq("source", "reserved")
+    .gte("start_at", firstStart)
+    .lte("end_at", lastEnd);
+
+  if (error) {
+    console.warn("releaseSeatBlocksNow select:", error.message);
+    return;
+  }
+
+  const rows = (data ?? []) as SeatBlockedRow[];
+
+  const expectedKeys = new Set<string>();
+  windows.forEach((w) => {
+    seats.forEach((seat) => {
+      expectedKeys.add(`${seat}__${w.startIso}__${w.endIso}`);
+    });
+  });
+
+    const matchedRows = rows.filter((r) => {
+      const seat = String(r.seat_number).trim();
+
+      if (!seats.includes(seat)) return false;
+
+      const rStart = new Date(r.start_at).getTime();
+      const rEnd = new Date(r.end_at).getTime();
+
+      if (!Number.isFinite(rStart) || !Number.isFinite(rEnd)) return false;
+
+      return windows.some((w) => {
+        const wStart = new Date(w.startIso).getTime();
+        const wEnd = new Date(w.endIso).getTime();
+
+        if (!Number.isFinite(wStart) || !Number.isFinite(wEnd)) return false;
+
+        // ✅ overlap check (KEY FIX)
+        return rStart < wEnd && rEnd > wStart;
+      });
+    });
+
+  if (matchedRows.length > 0) {
+    const ids = matchedRows.map((r) => r.id);
+
+    if (mode === "cancel") {
+      const { error: delErr } = await supabase
+        .from("seat_blocked_times")
+        .delete()
+        .in("id", ids);
+
+      if (delErr) {
+        console.warn("releaseSeatBlocksNow delete:", delErr.message);
+      }
+    } else {
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
-        .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
-        .in("seat_number", seats)
-        .eq("source", "reserved")
+        .update({ end_at: nowIso, note: "stopped/cancelled" })
+        .in("id", ids)
         .gt("end_at", nowIso);
 
       if (upErr) {
-        console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
+        console.warn("releaseSeatBlocksNow update:", upErr.message);
       }
-      return;
     }
 
-    const ids = rows.map((r) => r.id);
-    const { error: upErr } = await supabase
+    return;
+  }
+
+  // fallback only if exact rows were not found
+  if (mode === "cancel") {
+    const { error: fallbackDelErr } = await supabase
       .from("seat_blocked_times")
-      .update({ end_at: nowIso, note: "stopped/cancelled" })
-      .in("id", ids);
+      .delete()
+      .in("seat_number", seats)
+      .eq("source", "reserved")
+      .gte("start_at", firstStart)
+      .lte("end_at", lastEnd);
 
-    if (upErr) {
-      console.warn("releaseSeatBlocksNow update:", upErr.message);
+    if (fallbackDelErr) {
+      console.warn("releaseSeatBlocksNow fallback delete:", fallbackDelErr.message);
     }
-  };
+  } else {
+    const { error: fallbackUpErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
+      .in("seat_number", seats)
+      .eq("source", "reserved")
+      .gte("start_at", firstStart)
+      .lte("end_at", lastEnd)
+      .gt("end_at", nowIso);
+
+    if (fallbackUpErr) {
+      console.warn("releaseSeatBlocksNow fallback update:", fallbackUpErr.message);
+    }
+  }
+};
 
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
@@ -1144,17 +1497,25 @@ const Customer_Reservations: React.FC = () => {
     return t || "—";
   };
 
-  const renderStatus = (s: CustomerSession): string => {
-    if (isOpenTimeSession(s)) return "Ongoing";
-    const end = new Date(s.time_ended);
-    if (!Number.isFinite(end.getTime())) return "Finished";
-    return new Date() > end ? "Finished" : "Ongoing";
-  };
+const renderStatus = (s: CustomerSession): string => {
+  if (String(s.reservation).toLowerCase() === "yes") {
+    return isReservationCurrentlyIn(s) ? "IN" : "OUT";
+  }
 
-  const getUsedMinutesForReceipt = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
-    return diffMinutes(s.time_started, s.time_ended);
-  };
+  if (isOpenTimeSession(s)) return "Ongoing";
+  const end = new Date(s.time_ended);
+  if (!Number.isFinite(end.getTime())) return "Finished";
+  return new Date() > end ? "Finished" : "Ongoing";
+};
+
+const getUsedMinutesForReceipt = (s: CustomerSession): number => {
+  if (String(s.reservation).toLowerCase() === "yes") {
+    return getReservationTotalUsedMinutes(s);
+  }
+
+  if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
+  return diffMinutes(s.time_started, s.time_ended);
+};
 
   const getChargeMinutesForReceipt = (s: CustomerSession): number => {
     const used = getUsedMinutesForReceipt(s);
@@ -1732,6 +2093,7 @@ const Customer_Reservations: React.FC = () => {
       const updatedSessions = await fetchReservationSessions();
       await fetchOrdersForSessions(updatedSessions);
       await fetchOrderPayments(updatedSessions);
+      await fetchAttendanceStateForSessions(updatedSessions);
 
       const freshSession = updatedSessions.find((s) => s.id === session.id) ?? session;
       await refreshOrderPaymentTotalForSession(freshSession);
@@ -1817,6 +2179,7 @@ const Customer_Reservations: React.FC = () => {
 
         reservation: row.reservation ?? "yes",
         reservation_date: row.reservation_date ?? null,
+        reservation_end_date: row.reservation_end_date ?? null,
 
         id_number: row.id_number ?? null,
         seat_number: String(row.seat_number ?? "").trim() || "N/A",
@@ -1855,9 +2218,8 @@ const Customer_Reservations: React.FC = () => {
           .eq("booking_code", bookingCode);
       }
 
-      const nowIso = new Date().toISOString();
-      await releaseSeatBlocksNow(row, nowIso);
-
+    const nowIso = new Date().toISOString();
+    await releaseSeatBlocksNow(row, nowIso, "cancel");
       const { error: deleteErr } = await supabase
         .from("customer_sessions")
         .delete()
@@ -2086,6 +2448,7 @@ const Customer_Reservations: React.FC = () => {
                     <th>Order Payment</th>
                     <th>Paid?</th>
                     <th>Seat</th>
+                    <th>Attendance</th>
                     <th>Status</th>
                     <th>Action</th>
                   </tr>
@@ -2115,7 +2478,7 @@ const Customer_Reservations: React.FC = () => {
                             ? new Date(session.created_at).toLocaleString("en-PH")
                             : "—"}
                         </td>
-                        <td>{formatDateDisplay(session.reservation_date)}</td>
+                        <td>{formatReservationRange(session)}</td>
                         <td>{session.full_name}</td>
                         <td>{session.booking_code ?? "—"}</td>
                         <td>{phoneText(session)}</td>
@@ -2249,8 +2612,27 @@ const Customer_Reservations: React.FC = () => {
                           </button>
                         </td>
 
-                        <td>{session.seat_number}</td>
-                        <td>{renderStatus(session)}</td>
+                  <td>{session.seat_number}</td>
+
+                  <td>
+                    <div className="cell-stack cell-center">
+                      <span className="cell-strong">
+                        {isReservationCurrentlyIn(session) ? "IN" : "OUT"}
+                      </span>
+                      <span style={{ fontSize: 12, opacity: 0.85 }}>
+                        {getAttendanceCountText(session)}
+                      </span>
+                      <button
+                        className="receipt-btn"
+                        onClick={() => setSelectedAttendanceSession(session)}
+                        type="button"
+                      >
+                        View In/Out
+                      </button>
+                    </div>
+                  </td>
+
+                  <td>{renderStatus(session)}</td>
 
                         <td>
                           <div className="action-stack">
@@ -2265,13 +2647,14 @@ const Customer_Reservations: React.FC = () => {
                               </button>
                             )}
 
-                            <button
-                              className="receipt-btn"
-                              onClick={() => setSelectedSession(session)}
-                              type="button"
-                            >
-                              View Receipt
-                            </button>
+                              <button
+                                className="receipt-btn"
+                                onClick={() => setSelectedSession(session)}
+                                type="button"
+                                title="View receipt"
+                              >
+                                View Receipt
+                              </button>
 
                             <button
                               className="receipt-btn admin-danger"
@@ -2302,7 +2685,18 @@ const Customer_Reservations: React.FC = () => {
               className="receipt-overlay"
               onClick={() => setSelectedOrderSession(null)}
             >
-              <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
+              <div
+                  className="receipt-container"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    width: "100%",
+                    maxWidth: 560,
+                    background: "#f6efe2",
+                    borderRadius: 20,
+                    padding: 24,
+                    boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+                  }}
+                >
                 <h3 className="receipt-title">ORDER LIST</h3>
                 <p className="receipt-subtitle">{selectedOrderSession.full_name}</p>
 
@@ -2562,8 +2956,8 @@ const Customer_Reservations: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Reservation Date</span>
-                  <span>{cancelTarget.reservation_date ?? "N/A"}</span>
+                  <span>Reservation Range</span>
+                  <span>{formatReservationRange(cancelTarget)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -2995,13 +3389,166 @@ const Customer_Reservations: React.FC = () => {
             </div>
           )}
 
+          {selectedAttendanceSession && (
+                <div
+                  className="receipt-overlay"
+                  onClick={() => setSelectedAttendanceSession(null)}
+                >
+                  <div
+                    className="receipt-container"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      maxWidth: 540,
+                      background: "#f6efe2",
+                      borderRadius: 20,
+                      padding: 24,
+                      boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+                    }}
+                  >
+                    <h3
+                      className="receipt-title"
+                      style={{
+                        textAlign: "center",
+                        marginBottom: 4,
+                        color: "#222",
+                        fontWeight: 900,
+                      }}
+                    >
+                      ATTENDANCE RECEIPT
+                    </h3>
+
+                    <p
+                      className="receipt-subtitle"
+                      style={{
+                        textAlign: "center",
+                        color: "#444",
+                        marginBottom: 16,
+                      }}
+                    >
+                      IN / OUT History
+                    </p>
+
+                    <div className="receipt-row">
+                      <span>Customer</span>
+                      <span>{selectedAttendanceSession.full_name}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Booking Code</span>
+                      <span>{selectedAttendanceSession.booking_code ?? "—"}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Seat</span>
+                      <span>{selectedAttendanceSession.seat_number}</span>
+                    </div>
+
+                    <div className="receipt-row">
+                      <span>Status</span>
+                      <span>
+                        {isReservationCurrentlyIn(selectedAttendanceSession) ? "IN" : "OUT"}
+                      </span>
+                    </div>
+
+                    <hr />
+
+                    <div style={{ fontWeight: 800, marginBottom: 10 }}>RECENT LOGS</div>
+
+                    {getAttendanceLogsForSession(selectedAttendanceSession).length === 0 ? (
+                      <div style={{ opacity: 0.7, textAlign: "center", padding: "12px 0" }}>
+                        No attendance logs found.
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: 10,
+                          maxHeight: 320,
+                          overflowY: "auto",
+                          paddingRight: 4,
+                        }}
+                      >
+                        {getAttendanceLogsForSession(selectedAttendanceSession).map((log) => (
+                          <div
+                            key={log.id}
+                            style={{
+                              background: "#fffaf0",
+                              border: "1px solid rgba(0,0,0,0.08)",
+                              borderRadius: 14,
+                              padding: 12,
+                            }}
+                          >
+                            <div className="receipt-row">
+                              <span>Date</span>
+                              <span>{log.attendance_date || "—"}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>IN</span>
+                              <span>{formatDateTimeText(log.in_at)}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>OUT</span>
+                              <span>{formatDateTimeText(log.out_at)}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>Note</span>
+                              <span>{log.note?.trim() || "—"}</span>
+                            </div>
+
+                            <div className="receipt-row">
+                              <span>Auto Closed</span>
+                              <span>{log.auto_closed ? "Yes" : "No"}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div
+                      className="modal-actions"
+                      style={{ marginTop: 18, display: "flex", justifyContent: "center" }}
+                    >
+                      <button
+                        className="close-btn"
+                        onClick={() => setSelectedAttendanceSession(null)}
+                        type="button"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => void closeReceipt()}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+              <div style={{ textAlign: "center", marginBottom: 12 }}>
+                <img
+                  src={logo}
+                  alt="Me Tyme Lounge"
+                  className="receipt-logo"
+                  style={{ width: 70, height: 70, objectFit: "contain", marginBottom: 8 }}
+                />
 
-                <h3 className="receipt-title">ME TYME LOUNGE</h3>
-                <p className="receipt-subtitle">OFFICIAL RECEIPT</p>
+                <h3
+                  className="receipt-title"
+                  style={{ margin: 0, color: "#222", fontWeight: 900 }}
+                >
+                  ME TYME LOUNGE
+                </h3>
+
+                <p
+                  className="receipt-subtitle"
+                  style={{ marginTop: 4, color: "#444" }}
+                >
+                  OFFICIAL RECEIPT
+                </p>
+              </div>
 
                 <hr />
 
@@ -3015,8 +3562,8 @@ const Customer_Reservations: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Reservation Date</span>
-                  <span>{selectedSession.reservation_date ?? "N/A"}</span>
+                  <span>Reservation Range</span>
+                  <span>{formatReservationRange(selectedSession)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -3044,10 +3591,17 @@ const Customer_Reservations: React.FC = () => {
                   <span>{selectedSession.has_id ? "Yes" : "No"}</span>
                 </div>
 
-                <div className="receipt-row">
-                  <span>Seat</span>
-                  <span>{selectedSession.seat_number}</span>
-                </div>
+                  <div className="receipt-row">
+                    <span>Seat</span>
+                    <span>{selectedSession.seat_number}</span>
+                  </div>
+
+                  {String(selectedSession.reservation).toLowerCase() === "yes" && (
+                    <div className="receipt-row">
+                      <span>Attendance</span>
+                      <span>{isReservationCurrentlyIn(selectedSession) ? "IN" : "OUT"}</span>
+                    </div>
+                  )}
 
                 <hr />
 

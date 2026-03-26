@@ -6,7 +6,7 @@
 // ✅ ONE dropdown to choose date basis:
 //    1) Reserved On  -> created_at
 //    2) Start Date   -> reservation_date coverage
-// ✅ Start Date filter supports reservation coverage
+// ✅ Start Date filter supports reservation coverage / range
 // ✅ Export EXCEL (.xlsx) exports CURRENT filtered rows
 // ✅ Delete button deletes CURRENT filtered rows + related seat_blocked_times
 // ✅ Total Amount shows ONLY ONE: Total Balance OR Total Change
@@ -63,6 +63,7 @@ interface CustomerSession {
 
   reservation: string;
   reservation_date: string | null;
+  reservation_end_date?: string | null;
   seat_number: string;
 
   id_number?: string | null;
@@ -70,6 +71,7 @@ interface CustomerSession {
   booking_code?: string | null;
 
   down_payment?: number | string | null;
+  expected_end_at?: string | null;
 
   discount_kind?: DiscountKind;
   discount_value?: number | string | null;
@@ -176,7 +178,24 @@ type SessionOrdersMap = Record<
     total: number;
   }
 >;
+type AttendanceLogRow = {
+  id: string;
+  session_id: string;
+  booking_code: string;
+  attendance_date: string;
+  in_at: string;
+  out_at: string | null;
+  note: string | null;
+  auto_closed: boolean;
+  created_at: string;
+};
 
+type AttendanceStateMap = Record<
+  string,
+  {
+    openLog: AttendanceLogRow | null;
+  }
+>;
 
 type SeatBlockedRow = {
   id: string;
@@ -250,17 +269,6 @@ const yyyyMmDdLocal = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-const parseYmd = (ymd: string): Date => {
-  const [yS, mS, dS] = String(ymd ?? "").split("-");
-  const y = Number(yS);
-  const m = Number(mS);
-  const d = Number(dS);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
-    return new Date();
-  }
-  return new Date(y, m - 1, d, 0, 0, 0, 0);
-};
-
 const formatDateDisplay = (dateStr: string | null | undefined): string => {
   if (!dateStr) return "—";
   const d = new Date(`${dateStr}T00:00:00`);
@@ -307,12 +315,16 @@ const toBool = (v: unknown): boolean => {
   return false;
 };
 
-const normalizeSingleRelation = <T,>(value: T | T[] | null | undefined): T | null => {
+const normalizeSingleRelation = <T,>(
+  value: T | T[] | null | undefined
+): T | null => {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
 };
 
-const toAddonCatalogMini = (raw: RawAddonCatalogMini | null | undefined): AddonCatalogMini | null => {
+const toAddonCatalogMini = (
+  raw: RawAddonCatalogMini | null | undefined
+): AddonCatalogMini | null => {
   if (!raw) return null;
   return {
     id: toText(raw.id),
@@ -350,7 +362,9 @@ const toAddonOrderItemRow = (raw: RawAddonOrderItemRow): AddonOrderItemRow => {
   };
 };
 
-const toConsignmentOrderItemRow = (raw: RawConsignmentOrderItemRow): ConsignmentOrderItemRow => {
+const toConsignmentOrderItemRow = (
+  raw: RawConsignmentOrderItemRow
+): ConsignmentOrderItemRow => {
   const catalog = normalizeSingleRelation(raw.consignment);
   return {
     id: toText(raw.id),
@@ -383,13 +397,19 @@ const applyDiscount = (
     const pct = clamp(v, 0, 100);
     const discRaw = (cost * pct) / 100;
     const finalRaw = Math.max(0, cost - discRaw);
-    return { discountedCost: wholePeso(finalRaw), discountAmount: wholePeso(discRaw) };
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
   if (kind === "amount") {
     const discRaw = Math.min(cost, v);
     const finalRaw = Math.max(0, cost - discRaw);
-    return { discountedCost: wholePeso(finalRaw), discountAmount: wholePeso(discRaw) };
+    return {
+      discountedCost: wholePeso(finalRaw),
+      discountAmount: wholePeso(discRaw),
+    };
   }
 
   return { discountedCost: wholePeso(cost), discountAmount: 0 };
@@ -402,59 +422,149 @@ const splitSeats = (seatStr: string): string[] => {
     .filter((s) => s.length > 0 && s.toUpperCase() !== "N/A");
 };
 
-const getCoverageEndDate = (
-  reservationDate: string | null,
-  hourAvail: string | null | undefined
-): string => {
-  const startYmd = String(reservationDate ?? "").trim();
-  if (!startYmd) return "";
+const rangeDatesInclusive = (startYmd: string, endYmd: string): string[] => {
+  const start = new Date(`${startYmd}T00:00:00`);
+  const end = new Date(`${endYmd}T00:00:00`);
 
-  const text = String(hourAvail ?? "").trim().toLowerCase();
-  const start = parseYmd(startYmd);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return [];
+  if (start.getTime() > end.getTime()) return [];
 
-  if (!text || text === "open" || text === "closed") {
-    return startYmd;
+  const out: string[] = [];
+  const cur = new Date(start);
+
+  while (cur.getTime() <= end.getTime()) {
+    out.push(yyyyMmDdLocal(cur));
+    cur.setDate(cur.getDate() + 1);
   }
 
-  const numMatch = text.match(/(\d+(?:\.\d+)?)/);
-  const qtyRaw = numMatch ? Number(numMatch[1]) : 0;
-  const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 0;
-
-  if (qty <= 0) return startYmd;
-
-  if (text.includes("month")) {
-    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-    end.setMonth(end.getMonth() + Math.floor(qty));
-    end.setDate(end.getDate() - 1);
-    return yyyyMmDdLocal(end);
-  }
-
-  if (text.includes("week")) {
-    const days = Math.max(1, Math.ceil(qty * 7));
-    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-    end.setDate(end.getDate() + (days - 1));
-    return yyyyMmDdLocal(end);
-  }
-
-  if (text.includes("day")) {
-    const days = Math.max(1, Math.ceil(qty));
-    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-    end.setDate(end.getDate() + (days - 1));
-    return yyyyMmDdLocal(end);
-  }
-
-  return startYmd;
+  return out;
 };
 
-const isDateWithinCoverage = (
-  selectedYmd: string,
-  reservationDate: string | null,
-  hourAvail: string | null | undefined
+const getClockFromIso = (iso: string): { hours: number; minutes: number } => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return { hours: 0, minutes: 0 };
+  return {
+    hours: d.getHours(),
+    minutes: d.getMinutes(),
+  };
+};
+
+const endOfLocalDayIso = (yyyyMmDd: string): string => {
+  const m = yyyyMmDd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return new Date().toISOString();
+
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+
+  return new Date(y, mo, d, 23, 59, 59, 999).toISOString();
+};
+
+const addDurationToIso = (startIso: string, durationHHMM: string): string => {
+  const start = new Date(startIso);
+  if (!Number.isFinite(start.getTime())) return startIso;
+
+  const [hRaw, mRaw] = durationHHMM.split(":");
+  const dh = Number(hRaw);
+  const dm = Number(mRaw);
+
+  if (!Number.isFinite(dh) || !Number.isFinite(dm)) return startIso;
+
+  return new Date(start.getTime() + (dh * 60 + dm) * 60_000).toISOString();
+};
+
+const clampToReservationDay = (
+  endIso: string,
+  reservationDate?: string | null
+): string => {
+  if (!reservationDate) return endIso;
+
+  const eod = endOfLocalDayIso(reservationDate);
+  const endMs = new Date(endIso).getTime();
+  const eodMs = new Date(eod).getTime();
+
+  if (!Number.isFinite(endMs) || !Number.isFinite(eodMs)) return endIso;
+  return endMs > eodMs ? eod : endIso;
+};
+
+const buildReservationSeatWindowsFromSession = (
+  session: CustomerSession
+): Array<{ date: string; startIso: string; endIso: string }> => {
+  const startDate = String(session.reservation_date ?? "").trim();
+  const endDate = String(session.reservation_end_date ?? "").trim() || startDate;
+
+  if (!startDate || !endDate) return [];
+
+  const days = rangeDatesInclusive(startDate, endDate);
+  if (days.length === 0) return [];
+
+  const { hours, minutes } = getClockFromIso(session.time_started);
+  const openTime = String(session.hour_avail ?? "").trim().toUpperCase() === "OPEN";
+
+  return days.map((day) => {
+    const [y, m, d] = day.split("-").map(Number);
+    const startIso = new Date(
+      y,
+      (m ?? 1) - 1,
+      d ?? 1,
+      hours,
+      minutes,
+      0,
+      0
+    ).toISOString();
+
+    if (openTime) {
+      return {
+        date: day,
+        startIso,
+        endIso: endOfLocalDayIso(day),
+      };
+    }
+
+    const endIso = clampToReservationDay(
+      addDurationToIso(startIso, String(session.hour_avail ?? "00:00")),
+      day
+    );
+
+    return {
+      date: day,
+      startIso,
+      endIso,
+    };
+  });
+};
+
+const getReservationEndDate = (s: CustomerSession): string | null => {
+  const end = String(s.reservation_end_date ?? "").trim();
+  if (end) return end;
+
+  const start = String(s.reservation_date ?? "").trim();
+  return start || null;
+};
+
+const isDateWithinReservationRange = (
+  filterYmd: string,
+  startYmd: string | null | undefined,
+  endYmd: string | null | undefined
 ): boolean => {
-  const start = String(reservationDate ?? "").trim();
-  if (!start || !selectedYmd) return false;
-  const end = getCoverageEndDate(reservationDate, hourAvail);
-  return selectedYmd >= start && selectedYmd <= end;
+  const start = String(startYmd ?? "").trim();
+  const end = String(endYmd ?? "").trim() || start;
+  const target = String(filterYmd ?? "").trim();
+
+  if (!target || !start) return false;
+  return target >= start && target <= end;
+};
+
+const formatReservationRange = (s: CustomerSession): string => {
+  const start = String(s.reservation_date ?? "").trim();
+  const end = String(s.reservation_end_date ?? "").trim();
+
+  if (!start && !end) return "—";
+  if (start && end && start !== end) {
+    return `${formatDateDisplay(start)} → ${formatDateDisplay(end)}`;
+  }
+
+  return formatDateDisplay(start || end);
 };
 
 const fetchAsArrayBuffer = async (url: string): Promise<ArrayBuffer | null> => {
@@ -529,30 +639,61 @@ const Admin_customer_reservation: React.FC = () => {
   const [sessionOrders, setSessionOrders] = useState<SessionOrdersMap>({});
   const [orderPayments, setOrderPayments] = useState<Record<string, CustomerOrderPayment>>({});
 
+  const [selectedAttendanceSession, setSelectedAttendanceSession] =
+  useState<CustomerSession | null>(null);
+
+  const [attendanceState, setAttendanceState] = useState<AttendanceStateMap>({});
+  const [attendanceLogsMap, setAttendanceLogsMap] = useState<Record<string, AttendanceLogRow[]>>({});
+
   useEffect(() => {
     void initLoad();
   }, []);
+
+  const getAttendanceOpenLog = (s: CustomerSession): AttendanceLogRow | null => {
+  return attendanceState[s.id]?.openLog ?? null;
+};
+
+const isReservationCurrentlyIn = (s: CustomerSession): boolean => {
+  return getAttendanceOpenLog(s) !== null;
+};
+
+const getAttendanceLogsForSession = (s: CustomerSession): AttendanceLogRow[] => {
+  return attendanceLogsMap[s.id] ?? [];
+};
+
+const formatDateTimeText = (iso: string | null | undefined): string => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "—";
+  return d.toLocaleString("en-PH");
+};
+
+const getAttendanceCountText = (s: CustomerSession): string => {
+  const logs = getAttendanceLogsForSession(s);
+  return `${logs.length} log${logs.length === 1 ? "" : "s"}`;
+};
 
   useEffect(() => {
     const t = window.setInterval(() => setNowTick(Date.now()), 10000);
     return () => window.clearInterval(t);
   }, []);
 
-  const initLoad = async (): Promise<void> => {
-    setLoading(true);
-    try {
-      const loadedSessions = await fetchReservations();
-      await fetchOrdersForSessions(loadedSessions);
-      await fetchOrderPayments(loadedSessions);
-      await syncSessionPaidStates(loadedSessions);
-    } finally {
-      setLoading(false);
-    }
-  };
+const initLoad = async (): Promise<void> => {
+  setLoading(true);
+  try {
+    const loadedSessions = await fetchReservations();
+    await fetchOrdersForSessions(loadedSessions);
+    await fetchOrderPayments(loadedSessions);
+    await fetchAttendanceStateForSessions(loadedSessions);
+    await syncSessionPaidStates(loadedSessions);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const clearFilters = (): void => {
     setDateFilterMode("start_date");
-    setFilterDate(yyyyMmDdLocal(new Date()));
+    setFilterDate("");
     setSearchText("");
   };
 
@@ -661,29 +802,31 @@ const Admin_customer_reservation: React.FC = () => {
     if (addonRes.error) console.error("addon_orders fetch error:", addonRes.error);
     if (consignmentRes.error) console.error("consignment_orders fetch error:", consignmentRes.error);
 
-    const addonOrders: AddonOrderRow[] = ((addonRes.data ?? []) as RawAddonOrderRow[]).map((raw) => ({
-      id: toText(raw.id),
-      booking_code: toText(raw.booking_code).trim().toUpperCase(),
-      full_name: toText(raw.full_name),
-      seat_number: toText(raw.seat_number),
-      total_amount: toMoney(raw.total_amount),
-      addon_order_items: Array.isArray(raw.addon_order_items)
-        ? raw.addon_order_items.map(toAddonOrderItemRow)
-        : [],
-    }));
-
-    const consignmentOrders: ConsignmentOrderRow[] = ((consignmentRes.data ?? []) as RawConsignmentOrderRow[]).map(
+    const addonOrders: AddonOrderRow[] = ((addonRes.data ?? []) as RawAddonOrderRow[]).map(
       (raw) => ({
         id: toText(raw.id),
         booking_code: toText(raw.booking_code).trim().toUpperCase(),
         full_name: toText(raw.full_name),
         seat_number: toText(raw.seat_number),
         total_amount: toMoney(raw.total_amount),
-        consignment_order_items: Array.isArray(raw.consignment_order_items)
-          ? raw.consignment_order_items.map(toConsignmentOrderItemRow)
+        addon_order_items: Array.isArray(raw.addon_order_items)
+          ? raw.addon_order_items.map(toAddonOrderItemRow)
           : [],
       })
     );
+
+    const consignmentOrders: ConsignmentOrderRow[] = (
+      (consignmentRes.data ?? []) as RawConsignmentOrderRow[]
+    ).map((raw) => ({
+      id: toText(raw.id),
+      booking_code: toText(raw.booking_code).trim().toUpperCase(),
+      full_name: toText(raw.full_name),
+      seat_number: toText(raw.seat_number),
+      total_amount: toMoney(raw.total_amount),
+      consignment_order_items: Array.isArray(raw.consignment_order_items)
+        ? raw.consignment_order_items.map(toConsignmentOrderItemRow)
+        : [],
+    }));
 
     const nextMap: SessionOrdersMap = {};
 
@@ -739,8 +882,14 @@ const Admin_customer_reservation: React.FC = () => {
         }
       }
 
-      const totalAddon = aOrders.reduce((sum, o) => sum + wholePeso(toMoney(o.total_amount)), 0);
-      const totalConsignment = cOrders.reduce((sum, o) => sum + wholePeso(toMoney(o.total_amount)), 0);
+      const totalAddon = aOrders.reduce(
+        (sum, o) => sum + wholePeso(toMoney(o.total_amount)),
+        0
+      );
+      const totalConsignment = cOrders.reduce(
+        (sum, o) => sum + wholePeso(toMoney(o.total_amount)),
+        0
+      );
 
       nextMap[code] = {
         addonOrders: aOrders,
@@ -787,22 +936,65 @@ const Admin_customer_reservation: React.FC = () => {
     setOrderPayments(map);
   };
 
-  const refreshAll = async (): Promise<void> => {
-    try {
-      setRefreshing(true);
-      const loadedSessions = await fetchReservations();
-      await Promise.all([
-        fetchOrdersForSessions(loadedSessions),
-        fetchOrderPayments(loadedSessions),
-      ]);
-      await syncSessionPaidStates(loadedSessions);
-    } catch (e) {
-      console.error(e);
-      alert("Refresh failed.");
-    } finally {
-      setRefreshing(false);
-    }
-  };
+  const fetchAttendanceStateForSessions = async (
+  rows: CustomerSession[]
+): Promise<void> => {
+  const sessionIds = Array.from(
+    new Set(rows.map((s) => String(s.id)).filter((x) => x.length > 0))
+  );
+
+  if (sessionIds.length === 0) {
+    setAttendanceState({});
+    setAttendanceLogsMap({});
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("customer_session_attendance")
+    .select("*")
+    .in("session_id", sessionIds)
+    .order("in_at", { ascending: false });
+
+  if (error) {
+    console.error("customer_session_attendance fetch error:", error);
+    setAttendanceState({});
+    setAttendanceLogsMap({});
+    return;
+  }
+
+  const logs = (data ?? []) as AttendanceLogRow[];
+  const nextStateMap: AttendanceStateMap = {};
+  const nextLogsMap: Record<string, AttendanceLogRow[]> = {};
+
+  for (const s of rows) {
+    const sessionLogs = logs.filter((log) => log.session_id === s.id);
+    const openLog = sessionLogs.find((log) => !log.out_at) ?? null;
+
+    nextStateMap[s.id] = { openLog };
+    nextLogsMap[s.id] = sessionLogs;
+  }
+
+  setAttendanceState(nextStateMap);
+  setAttendanceLogsMap(nextLogsMap);
+};
+
+const refreshAll = async (): Promise<void> => {
+  try {
+    setRefreshing(true);
+    const loadedSessions = await fetchReservations();
+    await Promise.all([
+      fetchOrdersForSessions(loadedSessions),
+      fetchOrderPayments(loadedSessions),
+      fetchAttendanceStateForSessions(loadedSessions),
+    ]);
+    await syncSessionPaidStates(loadedSessions);
+  } catch (e) {
+    console.error(e);
+    alert("Refresh failed.");
+  } finally {
+    setRefreshing(false);
+  }
+};
 
   const filteredSessions = useMemo(() => {
     const q = searchText.trim().toLowerCase();
@@ -813,8 +1005,12 @@ const Admin_customer_reservation: React.FC = () => {
           if (dateFilterMode === "reserved_on") {
             const createdLocalDate = getLocalDateFromIso(s.created_at ?? "");
             if (createdLocalDate !== filterDate) return false;
-          } else if (!isDateWithinCoverage(filterDate, s.reservation_date, s.hour_avail)) {
-            return false;
+          } else {
+            const startDate = String(s.reservation_date ?? "").trim();
+            const endDate = getReservationEndDate(s);
+            if (!isDateWithinReservationRange(filterDate, startDate, endDate)) {
+              return false;
+            }
           }
         }
 
@@ -887,15 +1083,9 @@ const Admin_customer_reservation: React.FC = () => {
     return start;
   };
 
-  const getStatus = (session: CustomerSession): string => {
-    const now = new Date(nowTick);
-    const start = getScheduledStartDateTime(session);
-    const end = new Date(session.time_ended);
-
-    if (now < start) return "Upcoming";
-    if (now >= start && now <= end) return "Ongoing";
-    return "Finished";
-  };
+const getStatus = (session: CustomerSession): string => {
+  return isReservationCurrentlyIn(session) ? "IN" : "OUT";
+};
 
   const canShowStopButton = (session: CustomerSession): boolean => {
     if (!isOpenTimeSession(session)) return false;
@@ -905,7 +1095,9 @@ const Admin_customer_reservation: React.FC = () => {
   };
 
   const getDisplayedTotalMinutes = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date(nowTick).toISOString());
+    if (isOpenTimeSession(s)) {
+      return diffMinutes(s.time_started, new Date(nowTick).toISOString());
+    }
     return wholePeso(toMoney(s.total_time));
   };
 
@@ -916,7 +1108,9 @@ const Admin_customer_reservation: React.FC = () => {
     return wholePeso(toMoney(s.total_amount));
   };
 
-  const getDiscountInfo = (s: CustomerSession): { kind: DiscountKind; value: number; reason: string } => {
+  const getDiscountInfo = (
+    s: CustomerSession
+  ): { kind: DiscountKind; value: number; reason: string } => {
     const kind = (s.discount_kind ?? "none") as DiscountKind;
     const value = toMoney(s.discount_value ?? 0);
     const reason = String(s.discount_reason ?? "").trim();
@@ -952,7 +1146,9 @@ const Admin_customer_reservation: React.FC = () => {
 
   const hasOrders = (s: CustomerSession): boolean => getOrdersTotal(s) > 0;
 
-  const getSystemPaymentInfo = (s: CustomerSession): { gcash: number; cash: number; totalPaid: number } => {
+  const getSystemPaymentInfo = (
+    s: CustomerSession
+  ): { gcash: number; cash: number; totalPaid: number } => {
     const gcash = wholePeso(Math.max(0, toMoney(s.gcash_amount ?? 0)));
     const cash = wholePeso(Math.max(0, toMoney(s.cash_amount ?? 0)));
     const totalPaid = wholePeso(gcash + cash);
@@ -1012,7 +1208,9 @@ const Admin_customer_reservation: React.FC = () => {
     return wholePeso(Math.max(0, dp - grandDue));
   };
 
-  const getDisplayAmount = (s: CustomerSession): { label: "Total Balance" | "Total Change"; value: number } => {
+  const getDisplayAmount = (
+    s: CustomerSession
+  ): { label: "Total Balance" | "Total Change"; value: number } => {
     const bal = getSessionBalanceAfterDP(s);
     if (bal > 0) return { label: "Total Balance", value: bal };
     return { label: "Total Change", value: getSessionChangeAfterDP(s) };
@@ -1073,17 +1271,31 @@ const Admin_customer_reservation: React.FC = () => {
   const renderTimeOut = (s: CustomerSession): string =>
     isOpenTimeSession(s) ? "OPEN" : formatTimeText(s.time_ended);
 
-  const releaseSeatBlocksNow = async (session: CustomerSession, nowIso: string): Promise<void> => {
+  const releaseSeatBlocksNow = async (
+    session: CustomerSession,
+    nowIso: string,
+    mode: "stop" | "cancel" = "stop"
+  ): Promise<void> => {
     const seats = splitSeats(session.seat_number);
     if (seats.length === 0) return;
+
+    const windows = buildReservationSeatWindowsFromSession(session);
+
+    if (windows.length === 0) {
+      console.warn("releaseSeatBlocksNow: no reservation windows built");
+      return;
+    }
+
+    const firstStart = windows[0].startIso;
+    const lastEnd = windows[windows.length - 1].endIso;
 
     const { data, error } = await supabase
       .from("seat_blocked_times")
       .select("id, seat_number, start_at, end_at, source, note")
       .in("seat_number", seats)
       .eq("source", "reserved")
-      .eq("start_at", session.time_started)
-      .gt("end_at", nowIso);
+      .gte("start_at", firstStart)
+      .lte("end_at", lastEnd);
 
     if (error) {
       console.warn("releaseSeatBlocksNow select:", error.message);
@@ -1092,42 +1304,79 @@ const Admin_customer_reservation: React.FC = () => {
 
     const rows = (data ?? []) as SeatBlockedRow[];
 
-    if (rows.length === 0) {
-      const { error: upErr } = await supabase
+    const matchedRows = rows.filter((r) => {
+      const seat = String(r.seat_number).trim();
+      if (!seats.includes(seat)) return false;
+
+      const rStart = new Date(r.start_at).getTime();
+      const rEnd = new Date(r.end_at).getTime();
+
+      if (!Number.isFinite(rStart) || !Number.isFinite(rEnd)) return false;
+
+      return windows.some((w) => {
+        const wStart = new Date(w.startIso).getTime();
+        const wEnd = new Date(w.endIso).getTime();
+
+        if (!Number.isFinite(wStart) || !Number.isFinite(wEnd)) return false;
+
+        return rStart < wEnd && rEnd > wStart;
+      });
+    });
+
+    if (matchedRows.length > 0) {
+      const ids = matchedRows.map((r) => r.id);
+
+      if (mode === "cancel") {
+        const { error: delErr } = await supabase
+          .from("seat_blocked_times")
+          .delete()
+          .in("id", ids);
+
+        if (delErr) console.warn("releaseSeatBlocksNow delete:", delErr.message);
+      } else {
+        const { error: upErr } = await supabase
+          .from("seat_blocked_times")
+          .update({ end_at: nowIso, note: "stopped/cancelled" })
+          .in("id", ids)
+          .gt("end_at", nowIso);
+
+        if (upErr) console.warn("releaseSeatBlocksNow update:", upErr.message);
+      }
+
+      return;
+    }
+
+    if (mode === "cancel") {
+      const { error: fallbackDelErr } = await supabase
+        .from("seat_blocked_times")
+        .delete()
+        .in("seat_number", seats)
+        .eq("source", "reserved")
+        .gte("start_at", firstStart)
+        .lte("end_at", lastEnd);
+
+      if (fallbackDelErr) {
+        console.warn("releaseSeatBlocksNow fallback delete:", fallbackDelErr.message);
+      }
+    } else {
+      const { error: fallbackUpErr } = await supabase
         .from("seat_blocked_times")
         .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
         .in("seat_number", seats)
         .eq("source", "reserved")
+        .gte("start_at", firstStart)
+        .lte("end_at", lastEnd)
         .gt("end_at", nowIso);
 
-      if (upErr) console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
-      return;
+      if (fallbackUpErr) {
+        console.warn("releaseSeatBlocksNow fallback update:", fallbackUpErr.message);
+      }
     }
-
-    const ids = rows.map((r) => r.id);
-
-    const { error: upErr } = await supabase
-      .from("seat_blocked_times")
-      .update({ end_at: nowIso, note: "stopped/cancelled" })
-      .in("id", ids);
-
-    if (upErr) console.warn("releaseSeatBlocksNow update:", upErr.message);
   };
 
   const deleteSeatBlocksForSession = async (session: CustomerSession): Promise<void> => {
-    const seats = splitSeats(session.seat_number);
-    if (seats.length === 0) return;
-
-    const { error } = await supabase
-      .from("seat_blocked_times")
-      .delete()
-      .in("seat_number", seats)
-      .eq("source", "reserved")
-      .eq("start_at", session.time_started);
-
-    if (error) {
-      console.warn("deleteSeatBlocksForSession error:", error.message);
-    }
+    const nowIso = new Date().toISOString();
+    await releaseSeatBlocksNow(session, nowIso, "cancel");
   };
 
   const deleteSeatBlocksForList = async (list: CustomerSession[]): Promise<void> => {
@@ -1184,7 +1433,7 @@ const Admin_customer_reservation: React.FC = () => {
     const ok = window.confirm(
       `Delete this reservation record?\n\n${session.full_name}\nPhone: ${safePhone(
         session.phone_number
-      )}\nReservation Date: ${session.reservation_date ?? "N/A"}`
+      )}\nReservation Date: ${formatReservationRange(session)}`
     );
     if (!ok) return;
 
@@ -1239,7 +1488,7 @@ const Admin_customer_reservation: React.FC = () => {
     const label =
       dateFilterMode === "reserved_on"
         ? `Reserved On: ${filterDate || "All"}`
-        : `Start Date coverage: ${filterDate || "All"}`;
+        : `Start Date coverage/range: ${filterDate || "All"}`;
 
     const ok = window.confirm(
       `Delete ALL filtered reservation records?\n\n${label}\n\nThis will delete ${filteredSessions.length} record(s) from the database.\n\n⚠️ This also deletes related seat_blocked_times and customer_order_payments.`
@@ -1557,7 +1806,11 @@ const Admin_customer_reservation: React.FC = () => {
         .single();
 
       if (updErr || !updatedSession) {
-        alert(`Order payment saved, but session paid sync failed: ${updErr?.message ?? "Unknown error"}`);
+        alert(
+          `Order payment saved, but session paid sync failed: ${
+            updErr?.message ?? "Unknown error"
+          }`
+        );
         return;
       }
 
@@ -1607,7 +1860,7 @@ const Admin_customer_reservation: React.FC = () => {
     }
   };
 
-    const openCancelModal = (session: CustomerSession): void => {
+  const openCancelModal = (session: CustomerSession): void => {
     setCancelTarget(session);
     setCancelReason("");
   };
@@ -1673,7 +1926,9 @@ const Admin_customer_reservation: React.FC = () => {
         .eq("id", freshRow.id);
 
       if (deleteErr) {
-        alert(`Reservation moved to cancelled table, but failed to delete original row: ${deleteErr.message}`);
+        alert(
+          `Reservation moved to cancelled table, but failed to delete original row: ${deleteErr.message}`
+        );
         return;
       }
 
@@ -1730,7 +1985,7 @@ const Admin_customer_reservation: React.FC = () => {
 
       ws.columns = [
         { header: "Reserved On", key: "created_at", width: 22 },
-        { header: "Reservation Date", key: "reservation_date", width: 16 },
+        { header: "Reservation Date", key: "reservation_date", width: 22 },
         { header: "Coverage End", key: "coverage_end", width: 16 },
         { header: "Full Name", key: "full_name", width: 26 },
         { header: "Booking Code", key: "booking_code", width: 18 },
@@ -1851,8 +2106,8 @@ const Admin_customer_reservation: React.FC = () => {
 
         const row = ws.addRow({
           created_at: s.created_at ? new Date(s.created_at).toLocaleString("en-PH") : "",
-          reservation_date: String(s.reservation_date ?? ""),
-          coverage_end: getCoverageEndDate(s.reservation_date, s.hour_avail),
+          reservation_date: formatReservationRange(s),
+          coverage_end: getReservationEndDate(s) ?? "",
           full_name: s.full_name,
           booking_code: s.booking_code ?? "—",
           phone_number: safePhone(s.phone_number),
@@ -1876,7 +2131,7 @@ const Admin_customer_reservation: React.FC = () => {
           order_paid: orderPay.totalPaid,
           system_remaining: getSystemRemaining(s),
           order_remaining: getOrderRemaining(s),
-          paid: toBool(s.is_paid) ? "PAID" : "UNPAID",
+          paid: getFinalPaidStatus(s) ? "PAID" : "UNPAID",
           seat: s.seat_number,
           status,
         });
@@ -1885,7 +2140,11 @@ const Admin_customer_reservation: React.FC = () => {
         ws.getRow(rowIndex).height = 18;
 
         row.eachCell((cell, colNumber) => {
-          cell.alignment = { vertical: "middle", horizontal: colNumber === 4 ? "left" : "center", wrapText: true };
+          cell.alignment = {
+            vertical: "middle",
+            horizontal: colNumber === 4 ? "left" : "center",
+            wrapText: true,
+          };
           cell.border = {
             top: { style: "thin", color: { argb: "FFE5E7EB" } },
             left: { style: "thin", color: { argb: "FFE5E7EB" } },
@@ -1937,7 +2196,7 @@ const Admin_customer_reservation: React.FC = () => {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
-      saveAs(blob, `admin-reservations-${dateFilterMode}-${filterDate}.xlsx`);
+      saveAs(blob, `admin-reservations-${dateFilterMode}-${filterDate || "all"}.xlsx`);
     } catch (e) {
       console.error(e);
       alert("Export failed.");
@@ -2057,7 +2316,11 @@ const Admin_customer_reservation: React.FC = () => {
                   className="receipt-btn"
                   onClick={() => void exportToExcel()}
                   disabled={filteredSessions.length === 0 || exporting}
-                  title={filteredSessions.length === 0 ? "No data to export" : "Export current filtered rows"}
+                  title={
+                    filteredSessions.length === 0
+                      ? "No data to export"
+                      : "Export current filtered rows"
+                  }
                   type="button"
                 >
                   {exporting ? "Exporting..." : "Export to Excel"}
@@ -2067,7 +2330,11 @@ const Admin_customer_reservation: React.FC = () => {
                   className="receipt-btn admin-danger"
                   onClick={() => void deleteByFilter()}
                   disabled={deletingRange || filteredSessions.length === 0}
-                  title={filteredSessions.length === 0 ? "No data to delete" : "Delete current filtered rows"}
+                  title={
+                    filteredSessions.length === 0
+                      ? "No data to delete"
+                      : "Delete current filtered rows"
+                  }
                   type="button"
                 >
                   {deletingRange ? "Deleting..." : "Delete"}
@@ -2111,6 +2378,7 @@ const Admin_customer_reservation: React.FC = () => {
                     <th>Order Payment</th>
                     <th>Paid?</th>
                     <th>Seat</th>
+                    <th>Attendance</th>
                     <th>Status</th>
                     <th>Action</th>
                   </tr>
@@ -2141,7 +2409,7 @@ const Admin_customer_reservation: React.FC = () => {
                             ? new Date(session.created_at).toLocaleString("en-PH")
                             : "—"}
                         </td>
-                        <td>{formatDateDisplay(session.reservation_date)}</td>
+                        <td>{formatReservationRange(session)}</td>
                         <td>{session.full_name}</td>
                         <td>{session.booking_code ?? "—"}</td>
                         <td>{safePhone(session.phone_number)}</td>
@@ -2161,6 +2429,7 @@ const Admin_customer_reservation: React.FC = () => {
                             <button
                               className="receipt-btn"
                               onClick={() => setSelectedOrderSession(session)}
+                              disabled={orderBundle.items.length === 0}
                               type="button"
                             >
                               View Order
@@ -2208,16 +2477,18 @@ const Admin_customer_reservation: React.FC = () => {
                             </span>
 
                             <span style={{ fontSize: 12, opacity: 0.85 }}>
-                              {systemRemaining > 0
-                                ? `Remaining ₱${systemRemaining}`
-                                : "Paid"}
+                              {systemRemaining > 0 ? `Remaining ₱${systemRemaining}` : "Paid"}
                             </span>
 
                             <button
                               className="receipt-btn"
                               onClick={() => openPaymentModal(session)}
                               disabled={systemCost <= 0}
-                              title={systemCost <= 0 ? "No balance due" : "Set Cash & GCash freely (no limit)"}
+                              title={
+                                systemCost <= 0
+                                  ? "No balance due"
+                                  : "Set Cash & GCash freely (no limit)"
+                              }
                               type="button"
                             >
                               System Payment
@@ -2254,26 +2525,51 @@ const Admin_customer_reservation: React.FC = () => {
                         <td>
                           <button
                             className={`receipt-btn pay-badge ${
-                              toBool(session.is_paid) ? "pay-badge--paid" : "pay-badge--unpaid"
+                              getFinalPaidStatus(session)
+                                ? "pay-badge--paid"
+                                : "pay-badge--unpaid"
                             }`}
                             onClick={() => void togglePaid(session)}
                             disabled={togglingPaidId === session.id}
-                            title={toBool(session.is_paid) ? "Tap to set UNPAID" : "Tap to set PAID"}
+                            title={
+                              getFinalPaidStatus(session)
+                                ? "Tap to set UNPAID"
+                                : "Tap to set PAID"
+                            }
                             type="button"
                           >
                             {togglingPaidId === session.id
                               ? "Updating..."
-                              : toBool(session.is_paid)
+                              : getFinalPaidStatus(session)
                               ? "PAID"
                               : "UNPAID"}
                           </button>
                         </td>
 
-                        <td>{session.seat_number}</td>
-                        <td>{getStatus(session)}</td>
+                    <td>{session.seat_number}</td>
 
-                        <td>
-                          <div className="action-stack">
+                    <td>
+                      <div className="cell-stack cell-center">
+                        <span className="cell-strong">
+                          {isReservationCurrentlyIn(session) ? "IN" : "OUT"}
+                        </span>
+                        <span style={{ fontSize: 12, opacity: 0.85 }}>
+                          {getAttendanceCountText(session)}
+                        </span>
+                        <button
+                          className="receipt-btn"
+                          onClick={() => setSelectedAttendanceSession(session)}
+                          type="button"
+                        >
+                          View In/Out
+                        </button>
+                      </div>
+                    </td>
+
+                    <td>{getStatus(session)}</td>
+
+                    <td>
+                      <div className="action-stack">
                             {showStop && (
                               <button
                                 className="receipt-btn"
@@ -2321,10 +2617,7 @@ const Admin_customer_reservation: React.FC = () => {
           )}
 
           {selectedOrderSession && (
-            <div
-              className="receipt-overlay"
-              onClick={() => setSelectedOrderSession(null)}
-            >
+            <div className="receipt-overlay" onClick={() => setSelectedOrderSession(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
                 <h3 className="receipt-title">ORDER LIST</h3>
                 <p className="receipt-subtitle">{selectedOrderSession.full_name}</p>
@@ -2475,8 +2768,8 @@ const Admin_customer_reservation: React.FC = () => {
                 <hr />
 
                 <div className="receipt-row">
-                  <span>Reservation Date</span>
-                  <span>{cancelTarget.reservation_date ?? "N/A"}</span>
+                  <span>Reservation Range</span>
+                  <span>{formatReservationRange(cancelTarget)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -2498,7 +2791,8 @@ const Admin_customer_reservation: React.FC = () => {
                     disabled={cancellingBusy}
                   />
                   <div style={{ fontSize: 12, opacity: 0.85 }}>
-                    ⚠️ This record will be moved to <strong>customer_sessions_cancelled</strong>.
+                    ⚠️ This record will be moved to{" "}
+                    <strong>customer_sessions_cancelled</strong>.
                   </div>
                 </div>
 
@@ -2595,7 +2889,11 @@ const Admin_customer_reservation: React.FC = () => {
                   <span>Value</span>
                   <div className="inline-input">
                     <span className="inline-input-prefix">
-                      {discountKind === "percent" ? "%" : discountKind === "amount" ? "₱" : ""}
+                      {discountKind === "percent"
+                        ? "%"
+                        : discountKind === "amount"
+                        ? "₱"
+                        : ""}
                     </span>
                     <input
                       className="small-input"
@@ -2634,9 +2932,7 @@ const Admin_customer_reservation: React.FC = () => {
                     appliedVal
                   );
                   const orderTotal = getOrderDue(discountTarget);
-                  const dueForPayment = wholePeso(
-                    Math.max(0, discountedCost + orderTotal)
-                  );
+                  const dueForPayment = wholePeso(Math.max(0, discountedCost + orderTotal));
                   const prevPay = getSystemPaymentInfo(discountTarget);
 
                   return (
@@ -2770,7 +3066,9 @@ const Admin_customer_reservation: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>System Status</span>
-                        <span className="receipt-status">{autoPaid ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">
+                          {autoPaid ? "PAID" : "UNPAID"}
+                        </span>
                       </div>
 
                       <div className="modal-actions">
@@ -2863,7 +3161,9 @@ const Admin_customer_reservation: React.FC = () => {
 
                       <div className="receipt-row">
                         <span>Order Status</span>
-                        <span className="receipt-status">{autoPaid ? "PAID" : "UNPAID"}</span>
+                        <span className="receipt-status">
+                          {autoPaid ? "PAID" : "UNPAID"}
+                        </span>
                       </div>
 
                       <div className="modal-actions">
@@ -2891,14 +3191,164 @@ const Admin_customer_reservation: React.FC = () => {
             </div>
           )}
 
+          {selectedAttendanceSession && (
+            <div
+              className="receipt-overlay"
+              onClick={() => setSelectedAttendanceSession(null)}
+            >
+              <div
+                className="receipt-container"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: "100%",
+                  maxWidth: 540,
+                  background: "#f6efe2",
+                  borderRadius: 20,
+                  padding: 24,
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+                }}
+              >
+                <h3
+                  className="receipt-title"
+                  style={{
+                    textAlign: "center",
+                    marginBottom: 4,
+                    color: "#222",
+                    fontWeight: 900,
+                  }}
+                >
+                  ATTENDANCE RECEIPT
+                </h3>
+
+                <p
+                  className="receipt-subtitle"
+                  style={{
+                    textAlign: "center",
+                    color: "#444",
+                    marginBottom: 16,
+                  }}
+                >
+                  IN / OUT History
+                </p>
+
+                <div className="receipt-row">
+                  <span>Customer</span>
+                  <span>{selectedAttendanceSession.full_name}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Booking Code</span>
+                  <span>{selectedAttendanceSession.booking_code ?? "—"}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Seat</span>
+                  <span>{selectedAttendanceSession.seat_number}</span>
+                </div>
+
+                <div className="receipt-row">
+                  <span>Status</span>
+                  <span>{isReservationCurrentlyIn(selectedAttendanceSession) ? "IN" : "OUT"}</span>
+                </div>
+
+                <hr />
+
+                <div style={{ fontWeight: 800, marginBottom: 10 }}>RECENT LOGS</div>
+
+                {getAttendanceLogsForSession(selectedAttendanceSession).length === 0 ? (
+                  <div style={{ opacity: 0.7, textAlign: "center", padding: "12px 0" }}>
+                    No attendance logs found.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 10,
+                      maxHeight: 320,
+                      overflowY: "auto",
+                      paddingRight: 4,
+                    }}
+                  >
+                    {getAttendanceLogsForSession(selectedAttendanceSession).map((log) => (
+                      <div
+                        key={log.id}
+                        style={{
+                          background: "#fffaf0",
+                          border: "1px solid rgba(0,0,0,0.08)",
+                          borderRadius: 14,
+                          padding: 12,
+                        }}
+                      >
+                        <div className="receipt-row">
+                          <span>Date</span>
+                          <span>{log.attendance_date || "—"}</span>
+                        </div>
+
+                        <div className="receipt-row">
+                          <span>IN</span>
+                          <span>{formatDateTimeText(log.in_at)}</span>
+                        </div>
+
+                        <div className="receipt-row">
+                          <span>OUT</span>
+                          <span>{formatDateTimeText(log.out_at)}</span>
+                        </div>
+
+                        <div className="receipt-row">
+                          <span>Note</span>
+                          <span>{log.note?.trim() || "—"}</span>
+                        </div>
+
+                        <div className="receipt-row">
+                          <span>Auto Closed</span>
+                          <span>{log.auto_closed ? "Yes" : "No"}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div
+                  className="modal-actions"
+                  style={{ marginTop: 18, display: "flex", justifyContent: "center" }}
+                >
+                  <button
+                    className="close-btn"
+                    onClick={() => setSelectedAttendanceSession(null)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {selectedSession && (
             <div className="receipt-overlay" onClick={() => setSelectedSession(null)}>
               <div className="receipt-container" onClick={(e) => e.stopPropagation()}>
-                <img src={logo} alt="Me Tyme Lounge" className="receipt-logo" />
+                <div style={{ textAlign: "center", marginBottom: 12 }}>
+                  <img
+                    src={logo}
+                    alt="Me Tyme Lounge"
+                    className="receipt-logo"
+                    style={{ width: 70, height: 70, objectFit: "contain", marginBottom: 8 }}
+                  />
 
-                <h3 className="receipt-title">ME TYME LOUNGE</h3>
-                <p className="receipt-subtitle">RESERVATION RECEIPT</p>
+                  <h3
+                    className="receipt-title"
+                    style={{ margin: 0, color: "#222", fontWeight: 900 }}
+                  >
+                    ME TYME LOUNGE
+                  </h3>
 
+                  <p
+                    className="receipt-subtitle"
+                    style={{ marginTop: 4, color: "#444" }}
+                  >
+                    OFFICIAL RECEIPT
+                  </p>
+                </div>
                 <hr />
 
                 <div className="receipt-row">
@@ -2911,17 +3361,8 @@ const Admin_customer_reservation: React.FC = () => {
                 </div>
 
                 <div className="receipt-row">
-                  <span>Reservation Date</span>
-                  <span>{selectedSession.reservation_date ?? "N/A"}</span>
-                </div>
-
-                <div className="receipt-row">
-                  <span>Coverage End</span>
-                  <span>
-                    {formatDateDisplay(
-                      getCoverageEndDate(selectedSession.reservation_date, selectedSession.hour_avail)
-                    )}
-                  </span>
+                  <span>Reservation Range</span>
+                  <span>{formatReservationRange(selectedSession)}</span>
                 </div>
 
                 <div className="receipt-row">
@@ -2944,12 +3385,17 @@ const Admin_customer_reservation: React.FC = () => {
                   <span>{selectedSession.has_id ? "Yes" : "No"}</span>
                 </div>
 
-                <div className="receipt-row">
-                  <span>Seat</span>
-                  <span>{selectedSession.seat_number}</span>
-                </div>
+                  <div className="receipt-row">
+                    <span>Seat</span>
+                    <span>{selectedSession.seat_number}</span>
+                  </div>
 
-                <hr />
+                  <div className="receipt-row">
+                    <span>Attendance</span>
+                    <span>{isReservationCurrentlyIn(selectedSession) ? "IN" : "OUT"}</span>
+                  </div>
+
+                  <hr />
 
                 <div className="receipt-row">
                   <span>Time In</span>
@@ -2974,7 +3420,9 @@ const Admin_customer_reservation: React.FC = () => {
                       onClick={() => void stopReservationTime(selectedSession)}
                       type="button"
                     >
-                      {stoppingId === selectedSession.id ? "Stopping..." : "Stop Time (Set Time Out Now)"}
+                      {stoppingId === selectedSession.id
+                        ? "Stopping..."
+                        : "Stop Time (Set Time Out Now)"}
                     </button>
                   </div>
                 )}
@@ -3092,7 +3540,7 @@ const Admin_customer_reservation: React.FC = () => {
                       <div className="receipt-row">
                         <span>Status</span>
                         <span className="receipt-status">
-                          {toBool(selectedSession.is_paid) ? "PAID" : "UNPAID"}
+                          {getFinalPaidStatus(selectedSession) ? "PAID" : "UNPAID"}
                         </span>
                       </div>
 
@@ -3109,7 +3557,11 @@ const Admin_customer_reservation: React.FC = () => {
                   <strong>Me Tyme Lounge</strong>
                 </p>
 
-                <button className="close-btn" onClick={() => setSelectedSession(null)} type="button">
+                <button
+                  className="close-btn"
+                  onClick={() => setSelectedSession(null)}
+                  type="button"
+                >
                   Close
                 </button>
               </div>
