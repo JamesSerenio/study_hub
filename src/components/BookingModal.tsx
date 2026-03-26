@@ -1862,29 +1862,73 @@ export default function BookingModal({ isOpen, onClose, onSaved, seatGroups }: P
                 </div>
               </div>
 
-              <IonItem lines="none" style={{ "--background": "transparent" } as React.CSSProperties}>
-                <IonLabel position="stacked">Reservation Code</IonLabel>
-                <IonInput
-                  value={attendanceCode}
-                  placeholder="e.g. AB23"
-                  onIonChange={(e) => setAttendanceCode((e.detail.value ?? "").toUpperCase())}
-                />
-              </IonItem>
+            <IonItem
+              lines="none"
+              style={
+                {
+                  "--background": "transparent",
+                  marginTop: 10,
+                  paddingTop: 6,
+                } as React.CSSProperties
+              }
+            >
+              <IonLabel
+                position="stacked"
+                style={{
+                  marginBottom: 4,
+                }}
+              >
+                Reservation Code
+              </IonLabel>
 
-              <IonItem lines="none" style={{ "--background": "transparent" } as React.CSSProperties}>
-                <IonLabel position="stacked">Action</IonLabel>
-                <IonSelect
-                  value={attendanceAction}
-                  interface="popover"
-                  onIonChange={(e) => {
-                    const v = e.detail.value;
-                    setAttendanceAction(v === "OUT" ? "OUT" : "IN");
-                  }}
-                >
-                  <IonSelectOption value="IN">IN</IonSelectOption>
-                  <IonSelectOption value="OUT">OUT</IonSelectOption>
-                </IonSelect>
-              </IonItem>
+              <IonInput
+                value={attendanceCode}
+                placeholder="e.g. AB23"
+                onIonChange={(e) => setAttendanceCode((e.detail.value ?? "").toUpperCase())}
+                style={
+                  {
+                    marginTop: 4,
+                  } as React.CSSProperties
+                }
+              />
+            </IonItem>
+
+            <IonItem
+              lines="none"
+              style={
+                {
+                  "--background": "transparent",
+                  marginTop: 10,
+                  paddingTop: 6,
+                } as React.CSSProperties
+              }
+            >
+              <IonLabel
+                position="stacked"
+                style={{
+                  marginBottom: 4,
+                }}
+              >
+                Action
+              </IonLabel>
+
+              <IonSelect
+                value={attendanceAction}
+                interface="popover"
+                onIonChange={(e) => {
+                  const v = e.detail.value;
+                  setAttendanceAction(v === "OUT" ? "OUT" : "IN");
+                }}
+                style={
+                  {
+                    marginTop: 4,
+                  } as React.CSSProperties
+                }
+              >
+                <IonSelectOption value="IN">IN</IonSelectOption>
+                <IonSelectOption value="OUT">OUT</IonSelectOption>
+              </IonSelect>
+            </IonItem>
 
               <IonItem lines="none" style={{ "--background": "transparent" } as React.CSSProperties}>
                 <IonLabel position="stacked">Note</IonLabel>

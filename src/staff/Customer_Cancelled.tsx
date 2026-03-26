@@ -1327,7 +1327,7 @@ const Customer_Cancelled: React.FC = () => {
                       <tr>
                         <th>Cancelled At</th>
                         <th>Date</th>
-                        {tab === "reservation" && <th>Reservation Date</th>}
+                        {tab === "reservation" && <th>Reservation Range</th>}
                         <th>Full Name</th>
                         <th>Phone #</th>
                         <th>Seat</th>
@@ -1355,7 +1355,9 @@ const Customer_Cancelled: React.FC = () => {
                           <tr key={s.id}>
                             <td>{formatDateTime(s.cancelled_at)}</td>
                             <td>{s.date}</td>
-                            {tab === "reservation" && <td>{s.reservation_date ?? "-"}</td>}
+                            {tab === "reservation" && (
+                              <td>{formatReservationRange(s.reservation_date, s.reservation_end_date)}</td>
+                            )}
                             <td>{s.full_name}</td>
                             <td>{String(s.phone_number ?? "").trim() || "N/A"}</td>
                             <td>{s.seat_number}</td>
@@ -1413,12 +1415,17 @@ const Customer_Cancelled: React.FC = () => {
                       <span>{selectedSession.date}</span>
                     </div>
 
-                    {selectedSession.reservation === "yes" && (
-                      <div className="receipt-row">
-                        <span>Reservation Date</span>
-                        <span>{selectedSession.reservation_date ?? "-"}</span>
-                      </div>
-                    )}
+                      {selectedSession.reservation === "yes" && (
+                        <div className="receipt-row">
+                          <span>Reservation Range</span>
+                          <span>
+                            {formatReservationRange(
+                              selectedSession.reservation_date,
+                              selectedSession.reservation_end_date
+                            )}
+                          </span>
+                        </div>
+                      )}
 
                     <div className="receipt-row">
                       <span>Customer</span>
