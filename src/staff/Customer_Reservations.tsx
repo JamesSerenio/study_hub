@@ -194,6 +194,24 @@ type SeatBlockedRow = {
   note: string | null;
 };
 
+type AttendanceLogRow = {
+  id: string;
+  session_id: string;
+  booking_code: string;
+  attendance_date: string;
+  in_at: string;
+  out_at: string | null;
+  note: string | null;
+  auto_closed: boolean;
+  created_at: string;
+};
+
+type AttendanceStateMap = Record<
+  string,
+  {
+    openLog: AttendanceLogRow | null;
+  }
+>;
 /* ---------- raw select row types for strict TS ---------- */
 
 type RawAddonCatalogMini = {
@@ -254,11 +272,115 @@ type RawConsignmentOrderRow = {
 
 /* ---------- helpers ---------- */
 
+
 const yyyyMmDdLocal = (d: Date): string => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+};
+
+const rangeDatesInclusive = (startYmd: string, endYmd: string): string[] => {
+  const start = new Date(`${startYmd}T00:00:00`);
+  const end = new Date(`${endYmd}T00:00:00`);
+
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return [];
+  if (start.getTime() > end.getTime()) return [];
+
+  const out: string[] = [];
+  const cur = new Date(start);
+
+  while (cur.getTime() <= end.getTime()) {
+    out.push(yyyyMmDdLocal(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  return out;
+};
+
+const getClockFromIso = (iso: string): { hours: number; minutes: number } => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return { hours: 0, minutes: 0 };
+  return {
+    hours: d.getHours(),
+    minutes: d.getMinutes(),
+  };
+};
+
+
+
+const endOfLocalDayIso = (yyyyMmDd: string): string => {
+  const m = yyyyMmDd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return new Date().toISOString();
+
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+
+  return new Date(y, mo, d, 23, 59, 59, 999).toISOString();
+};
+
+const addDurationToIso = (startIso: string, durationHHMM: string): string => {
+  const start = new Date(startIso);
+  if (!Number.isFinite(start.getTime())) return startIso;
+
+  const [hRaw, mRaw] = durationHHMM.split(":");
+  const dh = Number(hRaw);
+  const dm = Number(mRaw);
+
+  if (!Number.isFinite(dh) || !Number.isFinite(dm)) return startIso;
+
+  return new Date(start.getTime() + (dh * 60 + dm) * 60_000).toISOString();
+};
+
+const clampToReservationDay = (endIso: string, reservationDate?: string | null): string => {
+  if (!reservationDate) return endIso;
+
+  const eod = endOfLocalDayIso(reservationDate);
+  const endMs = new Date(endIso).getTime();
+  const eodMs = new Date(eod).getTime();
+
+  if (!Number.isFinite(endMs) || !Number.isFinite(eodMs)) return endIso;
+  return endMs > eodMs ? eod : endIso;
+};
+
+const buildReservationSeatWindowsFromSession = (
+  session: CustomerSession
+): Array<{ date: string; startIso: string; endIso: string }> => {
+  const startDate = String(session.reservation_date ?? "").trim();
+  const endDate = String(session.reservation_end_date ?? "").trim() || startDate;
+
+  if (!startDate || !endDate) return [];
+
+  const days = rangeDatesInclusive(startDate, endDate);
+  if (days.length === 0) return [];
+
+  const { hours, minutes } = getClockFromIso(session.time_started);
+  const openTime = String(session.hour_avail ?? "").trim().toUpperCase() === "OPEN";
+
+  return days.map((day) => {
+    const [y, m, d] = day.split("-").map(Number);
+    const startIso = new Date(y, (m ?? 1) - 1, d ?? 1, hours, minutes, 0, 0).toISOString();
+
+    if (openTime) {
+      return {
+        date: day,
+        startIso,
+        endIso: endOfLocalDayIso(day),
+      };
+    }
+
+    const endIso = clampToReservationDay(
+      addDurationToIso(startIso, String(session.hour_avail ?? "00:00")),
+      day
+    );
+
+    return {
+      date: day,
+      startIso,
+      endIso,
+    };
+  });
 };
 
 const formatDateDisplay = (dateStr: string | null | undefined): string => {
@@ -475,6 +597,46 @@ const Customer_Reservations: React.FC = () => {
   const [sessions, setSessions] = useState<CustomerSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
+    const getAttendanceOpenLog = (s: CustomerSession): AttendanceLogRow | null => {
+    return attendanceState[s.id]?.openLog ?? null;
+  };
+
+  const getReservationLiveMinutesFromAttendance = (s: CustomerSession): number => {
+    const openLog = getAttendanceOpenLog(s);
+    if (!openLog) return 0;
+
+    const start = new Date(openLog.in_at).getTime();
+    const now = Date.now();
+
+    if (!Number.isFinite(start) || now <= start) return 0;
+    return Math.floor((now - start) / (1000 * 60));
+  };
+
+  const getClosedMinutesFromSession = (s: CustomerSession): number => {
+    return Math.max(0, Math.floor(toMoney(s.total_time) * 60));
+  };
+
+  const getReservationTotalUsedMinutes = (s: CustomerSession): number => {
+    const closedMinutes = getClosedMinutesFromSession(s);
+    const liveMinutes = getReservationLiveMinutesFromAttendance(s);
+    return closedMinutes + liveMinutes;
+  };
+
+  const getReservationLiveCostFromAttendance = (s: CustomerSession): number => {
+    const liveMinutes = getReservationLiveMinutesFromAttendance(s);
+    const chargeMinutes = Math.max(0, liveMinutes - FREE_MINUTES);
+    const perMinute = HOURLY_RATE / 60;
+    return wholePeso(chargeMinutes * perMinute);
+  };
+
+  const getReservationAccumulatedCost = (s: CustomerSession): number => {
+    return wholePeso(Math.max(0, toMoney(s.total_amount)));
+  };
+
+  const isReservationCurrentlyIn = (s: CustomerSession): boolean => {
+    return getAttendanceOpenLog(s) !== null;
+  };
+
   const [selectedSession, setSelectedSession] = useState<CustomerSession | null>(null);
   const [selectedOrderSession, setSelectedOrderSession] = useState<CustomerSession | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
@@ -521,6 +683,7 @@ const Customer_Reservations: React.FC = () => {
 
   const [sessionOrders, setSessionOrders] = useState<SessionOrdersMap>({});
   const [orderPayments, setOrderPayments] = useState<Record<string, CustomerOrderPayment>>({});
+  const [attendanceState, setAttendanceState] = useState<AttendanceStateMap>({});
 
   useEffect(() => {
     void initLoad();
@@ -536,17 +699,32 @@ const Customer_Reservations: React.FC = () => {
     };
   }, []);
 
-  const initLoad = async (): Promise<void> => {
-    setLoading(true);
-    try {
-      const loadedSessions = await fetchReservationSessions();
-      await fetchOrdersForSessions(loadedSessions);
-      await fetchOrderPayments(loadedSessions);
-      await syncSessionPaidStates(loadedSessions);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+  const hasOpenAttendance = sessions.some(
+    (s) => String(s.reservation).toLowerCase() === "yes" && isReservationCurrentlyIn(s)
+  );
+
+  if (!hasOpenAttendance) return;
+
+  const timer = window.setInterval(() => {
+    setSessions((prev) => [...prev]);
+  }, 30000);
+
+  return () => window.clearInterval(timer);
+}, [sessions, attendanceState]);
+
+const initLoad = async (): Promise<void> => {
+  setLoading(true);
+  try {
+    const loadedSessions = await fetchReservationSessions();
+    await fetchOrdersForSessions(loadedSessions);
+    await fetchOrderPayments(loadedSessions);
+    await fetchAttendanceStateForSessions(loadedSessions);
+    await syncSessionPaidStates(loadedSessions);
+  } finally {
+    setLoading(false);
+  }
+};
 
 const filteredSessions = useMemo(() => {
   const q = searchName.trim().toLowerCase();
@@ -774,40 +952,79 @@ const filteredSessions = useMemo(() => {
     setSessionOrders(nextMap);
   };
 
-  const fetchOrderPayments = async (rows: CustomerSession[]): Promise<void> => {
-    const codes = Array.from(
-      new Set(
-        rows
-          .map((s) => String(s.booking_code ?? "").trim().toUpperCase())
-          .filter(Boolean)
-      )
+    const fetchOrderPayments = async (rows: CustomerSession[]): Promise<void> => {
+      const codes = Array.from(
+        new Set(
+          rows
+            .map((s) => String(s.booking_code ?? "").trim().toUpperCase())
+            .filter(Boolean)
+        )
+      );
+
+      if (codes.length === 0) {
+        setOrderPayments({});
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("customer_order_payments")
+        .select("*")
+        .in("booking_code", codes);
+
+      if (error) {
+        console.error("customer_order_payments fetch error:", error);
+        setOrderPayments({});
+        return;
+      }
+
+      const map: Record<string, CustomerOrderPayment> = {};
+
+      for (const row of (data ?? []) as CustomerOrderPayment[]) {
+        const code = String(row.booking_code ?? "").trim().toUpperCase();
+        if (!code) continue;
+        map[code] = row;
+      }
+
+      setOrderPayments(map);
+    };
+
+    const fetchAttendanceStateForSessions = async (
+    rows: CustomerSession[]
+  ): Promise<void> => {
+    const sessionIds = Array.from(
+      new Set(rows.map((s) => String(s.id)).filter((x) => x.length > 0))
     );
 
-    if (codes.length === 0) {
-      setOrderPayments({});
+    if (sessionIds.length === 0) {
+      setAttendanceState({});
       return;
     }
 
     const { data, error } = await supabase
-      .from("customer_order_payments")
+      .from("customer_session_attendance")
       .select("*")
-      .in("booking_code", codes);
+      .in("session_id", sessionIds)
+      .order("in_at", { ascending: false });
 
     if (error) {
-      console.error("customer_order_payments fetch error:", error);
-      setOrderPayments({});
+      console.error("customer_session_attendance fetch error:", error);
+      setAttendanceState({});
       return;
     }
 
-    const map: Record<string, CustomerOrderPayment> = {};
+    const logs = (data ?? []) as AttendanceLogRow[];
+    const nextMap: AttendanceStateMap = {};
 
-    for (const row of (data ?? []) as CustomerOrderPayment[]) {
-      const code = String(row.booking_code ?? "").trim().toUpperCase();
-      if (!code) continue;
-      map[code] = row;
+    for (const s of rows) {
+      const sessionLogs = logs.filter((log) => log.session_id === s.id);
+      const openLog = sessionLogs.find((log) => !log.out_at) ?? null;
+
+      nextMap[s.id] = {
+        openLog,
+      };
     }
 
-    setOrderPayments(map);
+    setAttendanceState(nextMap);
   };
 
   const readActiveCustomerView = async (): Promise<void> => {
@@ -862,20 +1079,21 @@ const filteredSessions = useMemo(() => {
     };
   };
 
-  const refreshAll = async (): Promise<void> => {
-    try {
-      setRefreshing(true);
-      const loadedSessions = await fetchReservationSessions();
-      await Promise.all([
-        fetchOrdersForSessions(loadedSessions),
-        fetchOrderPayments(loadedSessions),
-        readActiveCustomerView(),
-      ]);
-      await syncSessionPaidStates(loadedSessions);
-    } finally {
-      setRefreshing(false);
-    }
-  };
+const refreshAll = async (): Promise<void> => {
+  try {
+    setRefreshing(true);
+    const loadedSessions = await fetchReservationSessions();
+    await Promise.all([
+      fetchOrdersForSessions(loadedSessions),
+      fetchOrderPayments(loadedSessions),
+      fetchAttendanceStateForSessions(loadedSessions),
+      readActiveCustomerView(),
+    ]);
+    await syncSessionPaidStates(loadedSessions);
+  } finally {
+    setRefreshing(false);
+  }
+};
 
   const clearFilters = (): void => {
     setDateFilterMode("start_date");
@@ -924,9 +1142,15 @@ const filteredSessions = useMemo(() => {
     return computeCostWithFreeMinutes(s.time_started, nowIso);
   };
 
-  const getBaseSystemCost = (s: CustomerSession): number => {
-    return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
-  };
+const getBaseSystemCost = (s: CustomerSession): number => {
+  if (String(s.reservation).toLowerCase() === "yes") {
+    const accumulated = getReservationAccumulatedCost(s);
+    const live = getReservationLiveCostFromAttendance(s);
+    return wholePeso(accumulated + live);
+  }
+
+  return isOpenTimeSession(s) ? getLiveTotalCost(s) : wholePeso(toMoney(s.total_amount));
+};
 
   const getDiscountInfo = (
     s: CustomerSession
@@ -1090,51 +1314,105 @@ const filteredSessions = useMemo(() => {
     }
   };
 
-  const releaseSeatBlocksNow = async (
-    session: CustomerSession,
-    nowIso: string
-  ): Promise<void> => {
-    const seats = splitSeats(session.seat_number);
-    if (seats.length === 0) return;
+const releaseSeatBlocksNow = async (
+  session: CustomerSession,
+  nowIso: string,
+  mode: "stop" | "cancel" = "stop"
+): Promise<void> => {
+  const seats = splitSeats(session.seat_number);
+  if (seats.length === 0) return;
 
-    const { data, error } = await supabase
-      .from("seat_blocked_times")
-      .select("id, seat_number, start_at, end_at, source, note")
-      .in("seat_number", seats)
-      .eq("source", "reserved")
-      .eq("start_at", session.time_started)
-      .gt("end_at", nowIso);
+  const windows = buildReservationSeatWindowsFromSession(session);
 
-    if (error) {
-      console.warn("releaseSeatBlocksNow select:", error.message);
-      return;
-    }
+  if (windows.length === 0) {
+    console.warn("releaseSeatBlocksNow: no reservation windows built");
+    return;
+  }
 
-    const rows = (data ?? []) as SeatBlockedRow[];
-    if (rows.length === 0) {
+  const firstStart = windows[0].startIso;
+  const lastEnd = windows[windows.length - 1].endIso;
+
+  const { data, error } = await supabase
+    .from("seat_blocked_times")
+    .select("id, seat_number, start_at, end_at, source, note")
+    .in("seat_number", seats)
+    .eq("source", "reserved")
+    .gte("start_at", firstStart)
+    .lte("end_at", lastEnd);
+
+  if (error) {
+    console.warn("releaseSeatBlocksNow select:", error.message);
+    return;
+  }
+
+  const rows = (data ?? []) as SeatBlockedRow[];
+
+  const expectedKeys = new Set<string>();
+  windows.forEach((w) => {
+    seats.forEach((seat) => {
+      expectedKeys.add(`${seat}__${w.startIso}__${w.endIso}`);
+    });
+  });
+
+  const matchedRows = rows.filter((r) =>
+    expectedKeys.has(`${String(r.seat_number).trim()}__${r.start_at}__${r.end_at}`)
+  );
+
+  if (matchedRows.length > 0) {
+    const ids = matchedRows.map((r) => r.id);
+
+    if (mode === "cancel") {
+      const { error: delErr } = await supabase
+        .from("seat_blocked_times")
+        .delete()
+        .in("id", ids);
+
+      if (delErr) {
+        console.warn("releaseSeatBlocksNow delete:", delErr.message);
+      }
+    } else {
       const { error: upErr } = await supabase
         .from("seat_blocked_times")
-        .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
-        .in("seat_number", seats)
-        .eq("source", "reserved")
+        .update({ end_at: nowIso, note: "stopped/cancelled" })
+        .in("id", ids)
         .gt("end_at", nowIso);
 
       if (upErr) {
-        console.warn("releaseSeatBlocksNow fallback update:", upErr.message);
+        console.warn("releaseSeatBlocksNow update:", upErr.message);
       }
-      return;
     }
 
-    const ids = rows.map((r) => r.id);
-    const { error: upErr } = await supabase
+    return;
+  }
+
+  // fallback only if exact rows were not found
+  if (mode === "cancel") {
+    const { error: fallbackDelErr } = await supabase
       .from("seat_blocked_times")
-      .update({ end_at: nowIso, note: "stopped/cancelled" })
-      .in("id", ids);
+      .delete()
+      .in("seat_number", seats)
+      .eq("source", "reserved")
+      .gte("start_at", firstStart)
+      .lte("end_at", lastEnd);
 
-    if (upErr) {
-      console.warn("releaseSeatBlocksNow update:", upErr.message);
+    if (fallbackDelErr) {
+      console.warn("releaseSeatBlocksNow fallback delete:", fallbackDelErr.message);
     }
-  };
+  } else {
+    const { error: fallbackUpErr } = await supabase
+      .from("seat_blocked_times")
+      .update({ end_at: nowIso, note: "stopped/cancelled (fallback)" })
+      .in("seat_number", seats)
+      .eq("source", "reserved")
+      .gte("start_at", firstStart)
+      .lte("end_at", lastEnd)
+      .gt("end_at", nowIso);
+
+    if (fallbackUpErr) {
+      console.warn("releaseSeatBlocksNow fallback update:", fallbackUpErr.message);
+    }
+  }
+};
 
   const stopOpenTime = async (session: CustomerSession): Promise<void> => {
     try {
@@ -1181,17 +1459,25 @@ const filteredSessions = useMemo(() => {
     return t || "—";
   };
 
-  const renderStatus = (s: CustomerSession): string => {
-    if (isOpenTimeSession(s)) return "Ongoing";
-    const end = new Date(s.time_ended);
-    if (!Number.isFinite(end.getTime())) return "Finished";
-    return new Date() > end ? "Finished" : "Ongoing";
-  };
+const renderStatus = (s: CustomerSession): string => {
+  if (String(s.reservation).toLowerCase() === "yes") {
+    return isReservationCurrentlyIn(s) ? "IN" : "OUT";
+  }
 
-  const getUsedMinutesForReceipt = (s: CustomerSession): number => {
-    if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
-    return diffMinutes(s.time_started, s.time_ended);
-  };
+  if (isOpenTimeSession(s)) return "Ongoing";
+  const end = new Date(s.time_ended);
+  if (!Number.isFinite(end.getTime())) return "Finished";
+  return new Date() > end ? "Finished" : "Ongoing";
+};
+
+const getUsedMinutesForReceipt = (s: CustomerSession): number => {
+  if (String(s.reservation).toLowerCase() === "yes") {
+    return getReservationTotalUsedMinutes(s);
+  }
+
+  if (isOpenTimeSession(s)) return diffMinutes(s.time_started, new Date().toISOString());
+  return diffMinutes(s.time_started, s.time_ended);
+};
 
   const getChargeMinutesForReceipt = (s: CustomerSession): number => {
     const used = getUsedMinutesForReceipt(s);
@@ -1769,6 +2055,7 @@ const filteredSessions = useMemo(() => {
       const updatedSessions = await fetchReservationSessions();
       await fetchOrdersForSessions(updatedSessions);
       await fetchOrderPayments(updatedSessions);
+      await fetchAttendanceStateForSessions(updatedSessions);
 
       const freshSession = updatedSessions.find((s) => s.id === session.id) ?? session;
       await refreshOrderPaymentTotalForSession(freshSession);
@@ -1893,8 +2180,8 @@ const filteredSessions = useMemo(() => {
           .eq("booking_code", bookingCode);
       }
 
-      const nowIso = new Date().toISOString();
-      await releaseSeatBlocksNow(row, nowIso);
+    const nowIso = new Date().toISOString();
+    await releaseSeatBlocksNow(row, nowIso, "cancel");
 
       const { error: deleteErr } = await supabase
         .from("customer_sessions")
@@ -3085,7 +3372,13 @@ const filteredSessions = useMemo(() => {
                 <div className="receipt-row">
                   <span>Seat</span>
                   <span>{selectedSession.seat_number}</span>
-                </div>
+                  {String(selectedSession.reservation).toLowerCase() === "yes" && (
+                    <div className="receipt-row">
+                      <span>Attendance</span>
+                      <span>{isReservationCurrentlyIn(selectedSession) ? "IN" : "OUT"}</span>
+                    </div>
+                  )}
+                </div> 
 
                 <hr />
 
