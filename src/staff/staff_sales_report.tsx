@@ -894,6 +894,7 @@ const StaffSalesReport: React.FC = () => {
   const loadReservationTimeAndDiscount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setReservationTimeBase(0);
+      setReservationDiscountAmount(0);
       return;
     }
 
@@ -909,6 +910,7 @@ const StaffSalesReport: React.FC = () => {
     if (res.error) {
       console.error("reservation time query error:", res.error.message);
       setReservationTimeBase(0);
+      setReservationDiscountAmount(0);
       return;
     }
 
@@ -939,8 +941,55 @@ const StaffSalesReport: React.FC = () => {
     }
 
     setReservationTimeBase(round2(timeSum));
-    setDiscountPaid((prev) => round2(prev + discountSum));
+    setReservationDiscountAmount(round2(discountSum));
   };
+
+  const loadPromoDiscountAmount = async (dateYMD: string): Promise<void> => {
+  if (!isYMD(dateYMD)) {
+    setPromoDiscountAmount(0);
+    return;
+  }
+
+  const start = new Date(`${dateYMD}T00:00:00+08:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+  const res = await supabase
+    .from("promo_bookings")
+    .select("paid_at, is_paid, price, discount_kind, discount_value")
+    .gte("paid_at", start.toISOString())
+    .lt("paid_at", end.toISOString());
+
+  if (res.error) {
+    console.error("promo discount query error:", res.error.message);
+    setPromoDiscountAmount(0);
+    return;
+  }
+
+  const rows = (res.data ?? []) as Array<{
+    paid_at: string | null;
+    is_paid: boolean | number | string | null;
+    price: number | string | null;
+    discount_kind: string | null;
+    discount_value: number | string | null;
+  }>;
+
+  let discountSum = 0;
+
+  for (const row of rows) {
+    if (!toBool(row.is_paid) || !row.paid_at) continue;
+
+    const base = Math.max(0, toNumber(row.price));
+    const dAmt = computeDiscountAmountFromBaseCost(
+      base,
+      row.discount_kind,
+      row.discount_value
+    );
+
+    discountSum += dAmt;
+  }
+
+  setPromoDiscountAmount(round2(discountSum));
+};
 
   const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -1202,16 +1251,16 @@ const StaffSalesReport: React.FC = () => {
       if (isSubmitted) {
         resetComputed();
       } else {
-
-        void loadConsignment(selectedDate);
-        void loadAddonsPaidBase(selectedDate);
-        void loadCustomerOrderPaid(selectedDate);
-        void loadReservationPaymentPlacement(selectedDate);
-        void loadPromoPaymentPlacement(selectedDate);
-        void loadWalkinSystemPaidAndDiscount(selectedDate);
-        void loadReservationTimeAndDiscount(selectedDate);
-        void loadCashOutsTotal(selectedDate);
-        void loadInventoryLossAmount(selectedDate);
+    void loadConsignment(selectedDate);
+    void loadAddonsPaidBase(selectedDate);
+    void loadCustomerOrderPaid(selectedDate);
+    void loadReservationPaymentPlacement(selectedDate);
+    void loadPromoPaymentPlacement(selectedDate);
+    void loadWalkinSystemPaidAndDiscount(selectedDate);
+    void loadReservationTimeAndDiscount(selectedDate);
+    void loadPromoDiscountAmount(selectedDate);
+    void loadCashOutsTotal(selectedDate);
+    void loadInventoryLossAmount(selectedDate);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1277,6 +1326,12 @@ const StaffSalesReport: React.FC = () => {
 
   const addonsPaid = round2(addonsPaidBase + customerOrderPaid);
   const totalTimeAmount = round2(walkinSystemPaid + reservationTimeBase);
+
+    const discountPaid = round2(
+    walkinDiscountAmount +
+      reservationDiscountAmount +
+      promoDiscountAmount
+  );
 
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 

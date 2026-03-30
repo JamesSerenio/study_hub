@@ -1,11 +1,14 @@
 // src/pages/Admin_Sales_Report.tsx
 // ✅ STRICT TS, NO any
-// ✅ Admin matches Staff logic
-// ✅ Promo payments (promo_bookings) are ADDED into "Total Time" amount
-// ✅ Customer List PAID system cost is also ADDED into "Total Time"
-// ✅ Customer List PAID order payment is also ADDED into "Add-ons"
-// ✅ Sales System / Total Cost reflects updated Add-ons + Total Time + Consignment - Discount
-// ✅ PDF + Excel exports reflect the updated computed totals
+// ✅ Admin now matches latest Staff logic
+// ✅ Actual System = Total Payment Collections - Starting Balance
+// ✅ Payment breakdown rows added
+// ✅ Total Time = Walk-in system paid + Reservation time only
+// ✅ Promo REMOVED from Total Time
+// ✅ Discount = Walk-in + Reservation + Promo discount
+// ✅ Add-ons (Paid) = customer_session_add_ons + customer_order_payments
+// ✅ Keeps Consignment Sales + Consignment 15% + Consignment Net
+// ✅ PDF + Excel updated
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -32,12 +35,23 @@ import {
   IonDatetime,
   IonAlert,
 } from "@ionic/react";
-import { calendarOutline, closeOutline, downloadOutline, trashOutline } from "ionicons/icons";
+import {
+  calendarOutline,
+  closeOutline,
+  downloadOutline,
+  trashOutline,
+} from "ionicons/icons";
 import { supabase } from "../utils/supabaseClient";
 
-// ✅ EXCEL
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
+
+/* =========================
+   PRICING
+========================= */
+
+const HOURLY_RATE = 20;
+const FREE_MINUTES = 0;
 
 /* =========================
    TYPES
@@ -49,11 +63,10 @@ type DiscountKind = "none" | "percent" | "amount";
 
 interface DailyReportRow {
   id: string;
-  report_date: string; // YYYY-MM-DD
+  report_date: string;
   starting_cash: number | string;
   starting_gcash: number | string;
   bilin_amount: number | string;
-
   is_submitted?: boolean;
   submitted_at?: string | null;
 }
@@ -75,33 +88,23 @@ interface CashLine {
 interface SalesTotalsRow {
   id: string;
   report_date: string;
-
   starting_cash: number | string;
   starting_gcash: number | string;
   bilin_amount: number | string;
-
   coh_total: number | string;
   expenses_amount: number | string;
-
   paid_reservation_cash: number | string;
   paid_reservation_gcash: number | string;
-
   advance_cash: number | string;
   advance_gcash: number | string;
-
   walkin_cash: number | string;
   walkin_gcash: number | string;
-
   total_time: number | string;
-
   addons_total: number | string;
   discount_total: number | string;
-
   cash_sales: number | string;
   gcash_sales: number | string;
-
   system_sale: number | string;
-
   sales_collected: number | string;
   net_collected: number | string;
 }
@@ -118,7 +121,6 @@ type ConsignmentRpcRow = {
   net: number | string | null;
 };
 
-// ✅ for Add-ons payment grouping (avoid double counting)
 type AddOnPaymentRow = {
   created_at: string;
   full_name: string;
@@ -127,7 +129,40 @@ type AddOnPaymentRow = {
   cash_amount: number | string | null;
 };
 
-// ✅ for inventory loss sum
+type CustomerOrderPaymentRow = {
+  paid_at: string | null;
+  is_paid: boolean | number | string | null;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
+
+type WalkinSystemPaidRow = {
+  paid_at: string | null;
+  is_paid: boolean | number | string | null;
+  reservation: string | null;
+  total_amount: number | string | null;
+  discount_kind?: DiscountKind | null;
+  discount_value?: number | string | null;
+};
+
+type ReservationForTimeRow = {
+  reservation_date: string | null;
+  time_started: string | null;
+  time_ended: string | null;
+  hour_avail: string | null;
+  is_paid: boolean | null;
+  discount_kind: string | null;
+  discount_value: number | string | null;
+};
+
+type ReservationPaymentPlacementRow = {
+  paid_at: string | null;
+  is_paid: boolean | number | string | null;
+  reservation_date: string | null;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
+
 type AddOnExpenseRow = {
   created_at: string;
   expense_type: string;
@@ -135,32 +170,20 @@ type AddOnExpenseRow = {
   voided: boolean | null;
 };
 
-// ✅ promo booking payments
 type PromoPaymentRow = {
   paid_at: string | null;
   is_paid: boolean | number | string | null;
+  start_at: string | null;
   gcash_amount: number | string | null;
   cash_amount: number | string | null;
 };
 
-// ✅ customer list paid system cost rows
-type PaidCustomerListSessionRow = {
+type PromoDiscountRow = {
   paid_at: string | null;
   is_paid: boolean | number | string | null;
-  reservation: string | null;
-
-  total_amount: number | string | null;
-  discount_kind?: DiscountKind | null;
-  discount_value?: number | string | null;
-};
-
-// ✅ customer list order payment rows
-type PaidCustomerOrderRow = {
-  paid_at: string | null;
-  is_paid: boolean | number | string | null;
-  gcash_amount: number | string | null;
-  cash_amount: number | string | null;
-  order_total?: number | string | null;
+  price: number | string | null;
+  discount_kind: string | null;
+  discount_value: number | string | null;
 };
 
 /* =========================
@@ -169,6 +192,11 @@ type PaidCustomerOrderRow = {
 
 const CASH_DENOMS: number[] = [1000, 500, 200, 100, 50];
 const COIN_DENOMS: number[] = [20, 10, 5, 1];
+const GROUP_WINDOW_MS = 10_000;
+
+/* =========================
+   HELPERS
+========================= */
 
 const toNumber = (v: string | number | null | undefined): number => {
   if (v === null || v === undefined) return 0;
@@ -177,7 +205,8 @@ const toNumber = (v: string | number | null | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const round2 = (n: number): number => Number((Number.isFinite(n) ? n : 0).toFixed(2));
+const round2 = (n: number): number =>
+  Number((Number.isFinite(n) ? n : 0).toFixed(2));
 
 const clamp = (n: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, n));
@@ -202,6 +231,19 @@ const applyDiscountToBase = (
   return cost;
 };
 
+const computeDiscountAmountFromBaseCost = (
+  baseCost: number,
+  kindRaw: string | null | undefined,
+  valueRaw: number | string | null | undefined
+): number => {
+  const kind = (kindRaw ?? "none").toLowerCase().trim();
+  const v = Math.max(0, toNumber(valueRaw));
+
+  if (kind === "amount") return round2(Math.min(baseCost, v));
+  if (kind === "percent") return round2(baseCost * (Math.min(100, v) / 100));
+  return 0;
+};
+
 const todayYMD = (): string => {
   const d = new Date();
   const y = d.getFullYear();
@@ -213,11 +255,10 @@ const todayYMD = (): string => {
 const isYMD = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 const peso = (n: number): string =>
-  `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-/* =========================
-   SAFE EVENT VALUE HELPERS (NO any)
-========================= */
+  `₱${n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 
 const getDetailValue = (ev: unknown): unknown => {
   if (!ev || typeof ev !== "object") return null;
@@ -247,10 +288,6 @@ const valueToNonNegMoney = (v: unknown): number => {
   return n;
 };
 
-/* =========================
-   DATE HELPERS
-========================= */
-
 const isoToYMD = (iso: string): string => {
   const raw = iso.trim();
   if (!raw) return todayYMD();
@@ -258,7 +295,16 @@ const isoToYMD = (iso: string): string => {
   return isYMD(ymd) ? ymd : todayYMD();
 };
 
-// ✅ Manila day range from YYYY-MM-DD (correct for Supabase timestamptz)
+const isoToLocalYMD = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return todayYMD();
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
 const manilaDayRange = (yyyyMmDd: string): { startIso: string; endIso: string } => {
   const start = new Date(`${yyyyMmDd}T00:00:00+08:00`);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
@@ -270,7 +316,8 @@ const ms = (iso: string): number => {
   return Number.isFinite(t) ? t : 0;
 };
 
-const norm = (s: string | null | undefined): string => (s ?? "").trim().toLowerCase();
+const norm = (s: string | null | undefined): string =>
+  (s ?? "").trim().toLowerCase();
 
 const buildZeroLines = (reportId: string): CashLine[] => {
   const merged: CashLine[] = [];
@@ -293,24 +340,16 @@ const toBool = (v: unknown): boolean => {
   return false;
 };
 
-/* =========================
-   ADD-ONS PAYMENT GROUPING
-========================= */
-
-const GROUP_WINDOW_MS = 10_000;
-
 const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
   if (rows.length === 0) return 0;
 
   const sorted = [...rows].sort((a, b) => ms(a.created_at) - ms(b.created_at));
 
   let total = 0;
-
   let curName = "";
   let curSeat = "";
-  let curStart = 0;
   let curLast = 0;
-
+  let started = false;
   let maxG = 0;
   let maxC = 0;
 
@@ -322,24 +361,23 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
 
   for (const r of sorted) {
     const t = ms(r.created_at);
+    const name = norm(r.full_name);
+    const seat = norm(r.seat_number);
     const g = Math.max(0, toNumber(r.gcash_amount));
     const c = Math.max(0, toNumber(r.cash_amount));
 
-    const isFirst = curStart === 0;
     const startNew =
-      isFirst ||
-      norm(r.full_name) !== curName ||
-      norm(r.seat_number) !== curSeat ||
+      !started ||
+      name !== curName ||
+      seat !== curSeat ||
       Math.abs(t - curLast) > GROUP_WINDOW_MS;
 
     if (startNew) {
-      if (!isFirst) flush();
-
-      curName = norm(r.full_name);
-      curSeat = norm(r.seat_number);
-      curStart = t;
+      if (started) flush();
+      started = true;
+      curName = name;
+      curSeat = seat;
       curLast = t;
-
       maxG = g;
       maxC = c;
       continue;
@@ -350,8 +388,34 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
     maxC = Math.max(maxC, c);
   }
 
-  flush();
-  return total;
+  if (started) flush();
+
+  return round2(total);
+};
+
+const isOpenTimeSession = (
+  hourAvail: string | null | undefined,
+  timeEnded: string | null | undefined
+): boolean => {
+  if ((hourAvail ?? "").toUpperCase() === "OPEN") return true;
+  if (!timeEnded) return true;
+  const end = new Date(timeEnded);
+  if (!Number.isFinite(end.getTime())) return true;
+  return end.getFullYear() >= 2999;
+};
+
+const diffMinutes = (startIso: string, endIso: string): number => {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return Math.floor((end - start) / (1000 * 60));
+};
+
+const computeCostWithFreeMinutes = (startIso: string, endIso: string): number => {
+  const minutesUsed = diffMinutes(startIso, endIso);
+  const chargeMinutes = Math.max(0, minutesUsed - FREE_MINUTES);
+  const perMinute = HOURLY_RATE / 60;
+  return round2(chargeMinutes * perMinute);
 };
 
 /* =========================
@@ -361,7 +425,6 @@ const computeAddonsPaidFromPayments = (rows: AddOnPaymentRow[]): number => {
 const AdminSalesReport: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>(() => todayYMD());
   const [datePickerOpen, setDatePickerOpen] = useState(false);
-
   const [loading, setLoading] = useState<boolean>(true);
 
   const [report, setReport] = useState<DailyReportRow | null>(null);
@@ -373,22 +436,28 @@ const AdminSalesReport: React.FC = () => {
     fee15: 0,
     net: 0,
   });
-  const [addonsPaid, setAddonsPaid] = useState<number>(0);
 
-  // ✅ promo paid sum (added into Total Time)
-  const [promoPaid, setPromoPaid] = useState<number>(0);
+  const [addonsPaidBase, setAddonsPaidBase] = useState<number>(0);
+  const [customerOrderPaid, setCustomerOrderPaid] = useState<number>(0);
+  const [walkinSystemPaid, setWalkinSystemPaid] = useState<number>(0);
+  const [reservationTimeBase, setReservationTimeBase] = useState<number>(0);
 
-  // ✅ customer list paid system cost (added into Total Time)
-  const [customerListSystemPaid, setCustomerListSystemPaid] = useState<number>(0);
+  const [reservationDownCash, setReservationDownCash] = useState<number>(0);
+  const [reservationDownGcash, setReservationDownGcash] = useState<number>(0);
+  const [reservationAdvanceCash, setReservationAdvanceCash] = useState<number>(0);
+  const [reservationAdvanceGcash, setReservationAdvanceGcash] = useState<number>(0);
 
-  // ✅ customer list paid order payment (added into Add-ons)
-  const [customerListOrderPaid, setCustomerListOrderPaid] = useState<number>(0);
+  const [promoTodayCash, setPromoTodayCash] = useState<number>(0);
+  const [promoTodayGcash, setPromoTodayGcash] = useState<number>(0);
+  const [promoAdvanceCash, setPromoAdvanceCash] = useState<number>(0);
+  const [promoAdvanceGcash, setPromoAdvanceGcash] = useState<number>(0);
 
-  // ✅ CASH OUTS split (cashout_date)
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
-  // ✅ Inventory Loss amount (from add_on_expenses)
+  const [walkinDiscountAmount, setWalkinDiscountAmount] = useState<number>(0);
+  const [reservationDiscountAmount, setReservationDiscountAmount] = useState<number>(0);
+  const [promoDiscountAmount, setPromoDiscountAmount] = useState<number>(0);
   const [inventoryLossAmount, setInventoryLossAmount] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
@@ -422,12 +491,28 @@ const AdminSalesReport: React.FC = () => {
     setLines([]);
     setTotals(null);
     setConsignment({ gross: 0, fee15: 0, net: 0 });
-    setAddonsPaid(0);
-    setPromoPaid(0);
-    setCustomerListSystemPaid(0);
-    setCustomerListOrderPaid(0);
+
+    setAddonsPaidBase(0);
+    setCustomerOrderPaid(0);
+    setWalkinSystemPaid(0);
+    setReservationTimeBase(0);
+
+    setReservationDownCash(0);
+    setReservationDownGcash(0);
+    setReservationAdvanceCash(0);
+    setReservationAdvanceGcash(0);
+
+    setPromoTodayCash(0);
+    setPromoTodayGcash(0);
+    setPromoAdvanceCash(0);
+    setPromoAdvanceGcash(0);
+
     setCashOutsCash(0);
     setCashOutsGcash(0);
+
+    setWalkinDiscountAmount(0);
+    setReservationDiscountAmount(0);
+    setPromoDiscountAmount(0);
     setInventoryLossAmount(0);
   };
 
@@ -522,7 +607,6 @@ const AdminSalesReport: React.FC = () => {
     setTotals(res.data);
   };
 
-  // ✅ CONSIGNMENT (RPC FIX)
   const loadConsignment = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setConsignment({ gross: 0, fee15: 0, net: 0 });
@@ -550,12 +634,6 @@ const AdminSalesReport: React.FC = () => {
     });
   };
 
-  /**
-   * ✅ INVENTORY LOSS (FIXED)
-   * - Sum add_on_expenses.expense_amount for expense_type='inventory_loss'
-   * - Manila day range
-   * - NOT voided
-   */
   const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setInventoryLossAmount(0);
@@ -586,12 +664,9 @@ const AdminSalesReport: React.FC = () => {
     setInventoryLossAmount(round2(sum));
   };
 
-  /**
-   * ✅ ADD-ONS (PAID) — FIXED
-   */
-  const loadAddonsPaid = async (dateYMD: string): Promise<void> => {
+  const loadAddonsPaidBase = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
-      setAddonsPaid(0);
+      setAddonsPaidBase(0);
       return;
     }
 
@@ -605,7 +680,7 @@ const AdminSalesReport: React.FC = () => {
 
     if (res.error) {
       console.error("addonsPaid(payment) query error:", res.error.message);
-      setAddonsPaid(0);
+      setAddonsPaidBase(0);
       return;
     }
 
@@ -614,98 +689,12 @@ const AdminSalesReport: React.FC = () => {
       (r) => toNumber(r.gcash_amount) > 0 || toNumber(r.cash_amount) > 0
     );
 
-    setAddonsPaid(computeAddonsPaidFromPayments(onlyWithAnyPayment));
+    setAddonsPaidBase(computeAddonsPaidFromPayments(onlyWithAnyPayment));
   };
 
-  /**
-   * ✅ PROMO PAYMENTS (PAID ONLY) — ADDED to "Total Time"
-   */
-  const loadPromoPaid = async (dateYMD: string): Promise<void> => {
+  const loadCustomerOrderPaid = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
-      setPromoPaid(0);
-      return;
-    }
-
-    const { startIso, endIso } = manilaDayRange(dateYMD);
-
-    const res = await supabase
-      .from("promo_bookings")
-      .select("paid_at, is_paid, gcash_amount, cash_amount")
-      .gte("paid_at", startIso)
-      .lt("paid_at", endIso);
-
-    if (res.error) {
-      console.error("promo_bookings promoPaid query error:", res.error.message);
-      setPromoPaid(0);
-      return;
-    }
-
-    const rows = (res.data ?? []) as PromoPaymentRow[];
-    const sum = rows
-      .filter((r) => toBool(r.is_paid) && !!r.paid_at)
-      .reduce(
-        (acc, r) =>
-          acc +
-          Math.max(0, toNumber(r.gcash_amount)) +
-          Math.max(0, toNumber(r.cash_amount)),
-        0
-      );
-
-    setPromoPaid(round2(sum));
-  };
-
-  /**
-   * ✅ CUSTOMER LIST SYSTEM COST (PAID ONLY) — ADDED to "Total Time"
-   */
-  const loadCustomerListSystemPaid = async (dateYMD: string): Promise<void> => {
-    if (!isYMD(dateYMD)) {
-      setCustomerListSystemPaid(0);
-      return;
-    }
-
-    const { startIso, endIso } = manilaDayRange(dateYMD);
-
-    const res = await supabase
-      .from("customer_sessions")
-      .select(`
-        paid_at,
-        is_paid,
-        reservation,
-        total_amount,
-        discount_kind,
-        discount_value
-      `)
-      .eq("reservation", "no")
-      .gte("paid_at", startIso)
-      .lt("paid_at", endIso);
-
-    if (res.error) {
-      console.error("customer_sessions paid system query error:", res.error.message);
-      setCustomerListSystemPaid(0);
-      return;
-    }
-
-    const rows = (res.data ?? []) as PaidCustomerListSessionRow[];
-
-    const total = rows
-      .filter((r) => toBool(r.is_paid) && !!r.paid_at)
-      .reduce((sum, r) => {
-        const base = Math.max(0, toNumber(r.total_amount));
-        const kind = (r.discount_kind ?? "none") as DiscountKind;
-        const value = Math.max(0, toNumber(r.discount_value));
-        const finalSystemCost = applyDiscountToBase(base, kind, value);
-        return sum + finalSystemCost;
-      }, 0);
-
-    setCustomerListSystemPaid(round2(total));
-  };
-
-  /**
-   * ✅ CUSTOMER LIST ORDER PAYMENT (PAID ONLY) — ADDED to "Add-ons"
-   */
-  const loadCustomerListOrderPaid = async (dateYMD: string): Promise<void> => {
-    if (!isYMD(dateYMD)) {
-      setCustomerListOrderPaid(0);
+      setCustomerOrderPaid(0);
       return;
     }
 
@@ -713,33 +702,281 @@ const AdminSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("customer_order_payments")
-      .select("paid_at, is_paid, gcash_amount, cash_amount, order_total")
+      .select("paid_at, is_paid, gcash_amount, cash_amount")
       .gte("paid_at", startIso)
       .lt("paid_at", endIso);
 
     if (res.error) {
       console.error("customer_order_payments query error:", res.error.message);
-      setCustomerListOrderPaid(0);
+      setCustomerOrderPaid(0);
       return;
     }
 
-    const rows = (res.data ?? []) as PaidCustomerOrderRow[];
+    const rows = (res.data ?? []) as CustomerOrderPaymentRow[];
 
     const total = rows
       .filter((r) => toBool(r.is_paid) && !!r.paid_at)
-      .reduce((sum, r) => {
-        const paid =
+      .reduce(
+        (sum, r) =>
+          sum +
           Math.max(0, toNumber(r.gcash_amount)) +
-          Math.max(0, toNumber(r.cash_amount));
-        return sum + paid;
-      }, 0);
+          Math.max(0, toNumber(r.cash_amount)),
+        0
+      );
 
-    setCustomerListOrderPaid(round2(total));
+    setCustomerOrderPaid(round2(total));
   };
 
-  /**
-   * ✅ CASH OUTS (ADMIN split CASH/GCASH like STAFF)
-   */
+  const loadReservationPaymentPlacement = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setReservationDownCash(0);
+      setReservationDownGcash(0);
+      setReservationAdvanceCash(0);
+      setReservationAdvanceGcash(0);
+      return;
+    }
+
+    const { startIso, endIso } = manilaDayRange(dateYMD);
+
+    const res = await supabase
+      .from("customer_sessions")
+      .select("paid_at, is_paid, reservation_date, gcash_amount, cash_amount")
+      .eq("reservation", "yes")
+      .gte("paid_at", startIso)
+      .lt("paid_at", endIso);
+
+    if (res.error) {
+      console.error("reservation payment placement query error:", res.error.message);
+      setReservationDownCash(0);
+      setReservationDownGcash(0);
+      setReservationAdvanceCash(0);
+      setReservationAdvanceGcash(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as ReservationPaymentPlacementRow[];
+
+    let todayCash = 0;
+    let todayGcash = 0;
+    let advanceCash = 0;
+    let advanceGcash = 0;
+
+    for (const r of rows) {
+      if (!toBool(r.is_paid) || !r.paid_at) continue;
+
+      const reservationYMD = String(r.reservation_date ?? "").trim();
+      const cash = Math.max(0, toNumber(r.cash_amount));
+      const gcash = Math.max(0, toNumber(r.gcash_amount));
+
+      if (reservationYMD === dateYMD) {
+        todayCash += cash;
+        todayGcash += gcash;
+      } else if (reservationYMD > dateYMD) {
+        advanceCash += cash;
+        advanceGcash += gcash;
+      }
+    }
+
+    setReservationDownCash(round2(todayCash));
+    setReservationDownGcash(round2(todayGcash));
+    setReservationAdvanceCash(round2(advanceCash));
+    setReservationAdvanceGcash(round2(advanceGcash));
+  };
+
+  const loadPromoPaymentPlacement = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setPromoTodayCash(0);
+      setPromoTodayGcash(0);
+      setPromoAdvanceCash(0);
+      setPromoAdvanceGcash(0);
+      return;
+    }
+
+    const { startIso, endIso } = manilaDayRange(dateYMD);
+
+    const res = await supabase
+      .from("promo_bookings")
+      .select("paid_at, is_paid, start_at, gcash_amount, cash_amount")
+      .gte("paid_at", startIso)
+      .lt("paid_at", endIso);
+
+    if (res.error) {
+      console.error("promo payment placement query error:", res.error.message);
+      setPromoTodayCash(0);
+      setPromoTodayGcash(0);
+      setPromoAdvanceCash(0);
+      setPromoAdvanceGcash(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as PromoPaymentRow[];
+
+    let todayCash = 0;
+    let todayGcash = 0;
+    let advanceCash = 0;
+    let advanceGcash = 0;
+
+    for (const r of rows) {
+      if (!toBool(r.is_paid) || !r.paid_at) continue;
+
+      const availYMD = r.start_at ? isoToLocalYMD(r.start_at) : "";
+      const cash = Math.max(0, toNumber(r.cash_amount));
+      const gcash = Math.max(0, toNumber(r.gcash_amount));
+
+      if (availYMD === dateYMD) {
+        todayCash += cash;
+        todayGcash += gcash;
+      } else if (availYMD > dateYMD) {
+        advanceCash += cash;
+        advanceGcash += gcash;
+      }
+    }
+
+    setPromoTodayCash(round2(todayCash));
+    setPromoTodayGcash(round2(todayGcash));
+    setPromoAdvanceCash(round2(advanceCash));
+    setPromoAdvanceGcash(round2(advanceGcash));
+  };
+
+  const loadWalkinSystemPaidAndDiscount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setWalkinSystemPaid(0);
+      setWalkinDiscountAmount(0);
+      return;
+    }
+
+    const { startIso, endIso } = manilaDayRange(dateYMD);
+
+    const res = await supabase
+      .from("customer_sessions")
+      .select("paid_at, is_paid, reservation, total_amount, discount_kind, discount_value")
+      .eq("reservation", "no")
+      .gte("paid_at", startIso)
+      .lt("paid_at", endIso);
+
+    if (res.error) {
+      console.error("walkin system paid query error:", res.error.message);
+      setWalkinSystemPaid(0);
+      setWalkinDiscountAmount(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as WalkinSystemPaidRow[];
+
+    let systemSum = 0;
+    let discountSum = 0;
+
+    for (const r of rows) {
+      if (!toBool(r.is_paid) || !r.paid_at) continue;
+
+      const base = Math.max(0, toNumber(r.total_amount));
+      const kind = (r.discount_kind ?? "none") as DiscountKind;
+      const value = Math.max(0, toNumber(r.discount_value));
+
+      const discountAmt = computeDiscountAmountFromBaseCost(base, kind, value);
+      const finalSystemCost = applyDiscountToBase(base, kind, value);
+
+      systemSum += finalSystemCost;
+      discountSum += discountAmt;
+    }
+
+    setWalkinSystemPaid(round2(systemSum));
+    setWalkinDiscountAmount(round2(discountSum));
+  };
+
+  const loadReservationTimeAndDiscount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setReservationTimeBase(0);
+      setReservationDiscountAmount(0);
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const res = await supabase
+      .from("customer_sessions")
+      .select("reservation_date, time_started, time_ended, hour_avail, is_paid, discount_kind, discount_value")
+      .eq("reservation", "yes")
+      .eq("reservation_date", dateYMD)
+      .eq("is_paid", true);
+
+    if (res.error) {
+      console.error("reservation time query error:", res.error.message);
+      setReservationTimeBase(0);
+      setReservationDiscountAmount(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as ReservationForTimeRow[];
+
+    let timeSum = 0;
+    let discountSum = 0;
+
+    for (const s of rows) {
+      if (!s.is_paid) continue;
+
+      const startIso = String(s.time_started ?? "").trim();
+      if (!startIso) continue;
+
+      const open = isOpenTimeSession(s.hour_avail, s.time_ended);
+      const endIso = open ? nowIso : String(s.time_ended ?? "").trim();
+      if (!endIso) continue;
+
+      const baseCost = computeCostWithFreeMinutes(startIso, endIso);
+      timeSum += baseCost;
+
+      const dAmt = computeDiscountAmountFromBaseCost(
+        baseCost,
+        s.discount_kind,
+        s.discount_value
+      );
+      discountSum += dAmt;
+    }
+
+    setReservationTimeBase(round2(timeSum));
+    setReservationDiscountAmount(round2(discountSum));
+  };
+
+  const loadPromoDiscountAmount = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setPromoDiscountAmount(0);
+      return;
+    }
+
+    const { startIso, endIso } = manilaDayRange(dateYMD);
+
+    const res = await supabase
+      .from("promo_bookings")
+      .select("paid_at, is_paid, price, discount_kind, discount_value")
+      .gte("paid_at", startIso)
+      .lt("paid_at", endIso);
+
+    if (res.error) {
+      console.error("promo discount query error:", res.error.message);
+      setPromoDiscountAmount(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as PromoDiscountRow[];
+
+    let discountSum = 0;
+
+    for (const row of rows) {
+      if (!toBool(row.is_paid) || !row.paid_at) continue;
+
+      const base = Math.max(0, toNumber(row.price));
+      const dAmt = computeDiscountAmountFromBaseCost(
+        base,
+        row.discount_kind,
+        row.discount_value
+      );
+
+      discountSum += dAmt;
+    }
+
+    setPromoDiscountAmount(round2(discountSum));
+  };
+
   const loadCashOutsTotal = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setCashOutsCash(0);
@@ -767,7 +1004,7 @@ const AdminSalesReport: React.FC = () => {
 
       const rows = (fallback.data ?? []) as Array<{ amount: number | string | null }>;
       const total = rows.reduce((sum, r) => sum + toNumber(r.amount), 0);
-      setCashOutsCash(total);
+      setCashOutsCash(round2(total));
       setCashOutsGcash(0);
       return;
     }
@@ -785,8 +1022,8 @@ const AdminSalesReport: React.FC = () => {
       .filter((r) => (r.payment_method ?? "cash") === "gcash")
       .reduce((sum, r) => sum + toNumber(r.amount), 0);
 
-    setCashOutsCash(cash);
-    setCashOutsGcash(gcash);
+    setCashOutsCash(round2(cash));
+    setCashOutsGcash(round2(gcash));
   };
 
   const upsertQty = async (line: CashLine, qty: number): Promise<void> => {
@@ -841,8 +1078,23 @@ const AdminSalesReport: React.FC = () => {
   };
 
   /* =========================
-     ADMIN: SAVE / UPDATE
+     ADMIN SAVE / UPDATE
   ========================= */
+
+  const reloadEverything = async (): Promise<void> => {
+    await loadReport(selectedDate);
+    await loadTotals(selectedDate);
+    await loadConsignment(selectedDate);
+    await loadAddonsPaidBase(selectedDate);
+    await loadCustomerOrderPaid(selectedDate);
+    await loadReservationPaymentPlacement(selectedDate);
+    await loadPromoPaymentPlacement(selectedDate);
+    await loadWalkinSystemPaidAndDiscount(selectedDate);
+    await loadReservationTimeAndDiscount(selectedDate);
+    await loadPromoDiscountAmount(selectedDate);
+    await loadCashOutsTotal(selectedDate);
+    await loadInventoryLossAmount(selectedDate);
+  };
 
   const onSubmitDone = async (): Promise<void> => {
     if (!report) return;
@@ -899,22 +1151,14 @@ const AdminSalesReport: React.FC = () => {
       return;
     }
 
-    await loadReport(selectedDate);
-    await loadTotals(selectedDate);
-    await loadConsignment(selectedDate);
-    await loadAddonsPaid(selectedDate);
-    await loadPromoPaid(selectedDate);
-    await loadCustomerListSystemPaid(selectedDate);
-    await loadCustomerListOrderPaid(selectedDate);
-    await loadCashOutsTotal(selectedDate);
-    await loadInventoryLossAmount(selectedDate);
+    await reloadEverything();
 
     setToast({ open: true, msg: `Saved for ${selectedDate}.`, color: "success" });
     setSubmitting(false);
   };
 
   /* =========================
-     ADMIN: DELETE BY DATE
+     DELETE BY DATE
   ========================= */
 
   const deleteByDate = async (): Promise<void> => {
@@ -959,210 +1203,428 @@ const AdminSalesReport: React.FC = () => {
     }
 
     setToast({ open: true, msg: `Deleted report for ${selectedDate}.`, color: "success" });
-
-    await loadReport(selectedDate);
-    await loadTotals(selectedDate);
-    await loadConsignment(selectedDate);
-    await loadAddonsPaid(selectedDate);
-    await loadPromoPaid(selectedDate);
-    await loadCustomerListSystemPaid(selectedDate);
-    await loadCustomerListOrderPaid(selectedDate);
-    await loadCashOutsTotal(selectedDate);
-    await loadInventoryLossAmount(selectedDate);
-
+    await reloadEverything();
     setSubmitting(false);
   };
 
   /* =========================
-     EXPORT TO PDF (Print)
+     COMPUTED
   ========================= */
 
-  const exportToPDF = (): void => {
-    if (!report || !isYMD(selectedDate)) {
-      setToast({ open: true, msg: "Pick a valid date first.", color: "danger" });
-      return;
-    }
+  const cashTotal = useMemo(() => {
+    return lines
+      .filter((l) => l.money_kind === "cash")
+      .reduce((sum, l) => sum + l.denomination * l.qty, 0);
+  }, [lines]);
 
-    const cashLines = lines.filter((x) => x.money_kind === "cash");
-    const coinLines = lines.filter((x) => x.money_kind === "coin");
+  const coinTotal = useMemo(() => {
+    return lines
+      .filter((l) => l.money_kind === "coin")
+      .reduce((sum, l) => sum + l.denomination * l.qty, 0);
+  }, [lines]);
 
-    const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
-    const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
+  const cashSales = totals ? toNumber(totals.cash_sales) : 0;
+  const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
 
-    const inventoryLossLocal = inventoryLossAmount;
-    const cashSalesLocal = totals ? toNumber(totals.cash_sales) : 0;
-    const gcashSalesLocal = totals ? toNumber(totals.gcash_sales) : 0;
+  const cohCash = cashTotal + coinTotal;
+  const cohGcash = gcashSales;
 
-    const paidResCashLocal = totals ? toNumber(totals.paid_reservation_cash) : 0;
-    const paidResGcashLocal = totals ? toNumber(totals.paid_reservation_gcash) : 0;
+  const walkinPaymentCash = totals ? toNumber(totals.walkin_cash) : 0;
+  const walkinPaymentGcash = totals ? toNumber(totals.walkin_gcash) : 0;
 
-    const advCashLocal = totals ? toNumber(totals.advance_cash) : 0;
-    const advGcashLocal = totals ? toNumber(totals.advance_gcash) : 0;
+  const totalPaymentCash = round2(
+    walkinPaymentCash +
+      reservationDownCash +
+      reservationAdvanceCash +
+      promoTodayCash +
+      promoAdvanceCash
+  );
 
-    const walkCashLocal = totals ? toNumber(totals.walkin_cash) : 0;
-    const walkGcashLocal = totals ? toNumber(totals.walkin_gcash) : 0;
+  const totalPaymentGcash = round2(
+    walkinPaymentGcash +
+      reservationDownGcash +
+      reservationAdvanceGcash +
+      promoTodayGcash +
+      promoAdvanceGcash
+  );
 
-    const startingCashLocal = toNumber(report.starting_cash);
-    const startingGcashLocal = toNumber(report.starting_gcash);
-    const bilinLocal = toNumber(report.bilin_amount);
+  const startingCash = report ? toNumber(report.starting_cash) : 0;
+  const startingGcash = report ? toNumber(report.starting_gcash) : 0;
 
-    const cohCashLocal = cashTotalLocal + coinTotalLocal;
-    const cohGcashLocal = gcashSalesLocal;
+  const addonsTotalWithCustomerOrders = round2(addonsPaidBase + customerOrderPaid);
+  const totalTimeAmount = round2(walkinSystemPaid + reservationTimeBase);
 
-    const actualSystemLocal =
-      cohCashLocal +
-      cohGcashLocal +
-      paidResCashLocal +
-      advCashLocal +
-      walkCashLocal -
-      (startingCashLocal + startingGcashLocal);
+  const discount = round2(
+    walkinDiscountAmount + reservationDiscountAmount + promoDiscountAmount
+  );
 
-    const salesCollectedDisplayLocal = actualSystemLocal - bilinLocal;
+  const bilin = report ? toNumber(report.bilin_amount) : 0;
 
-    const addons = round2(addonsPaid + customerListOrderPaid);
-    const discount = totals ? toNumber(totals.discount_total) : 0;
+  const actualSystem = round2(
+    (totalPaymentCash + totalPaymentGcash) - (startingCash + startingGcash)
+  );
 
-    const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
-    const totalTimeAmount = round2(
-      baseTotalTimeAmount + promoPaid + customerListSystemPaid
-    );
+  const salesSystemComputed = round2(
+    addonsTotalWithCustomerOrders + totalTimeAmount + consignment.net - discount
+  );
 
-    const salesSystemComputed = round2(
-      addons + totalTimeAmount + consignment.gross - discount
-    );
+  const salesCollectedDisplay = round2(actualSystem - bilin);
 
-    const maxLen = Math.max(cashLines.length, coinLines.length);
-    const rowsHtml = Array.from({ length: maxLen })
-      .map((_, i) => {
-        const c = cashLines[i];
-        const k = coinLines[i];
+  /* =========================
+     EXPORT PDF
+  ========================= */
 
-        const cashDen = c ? c.denomination : "";
-        const cashQty = c ? c.qty : "";
-        const cashAmt = c ? peso(c.denomination * c.qty) : "";
+const exportToPDF = (): void => {
+  if (!report || !isYMD(selectedDate)) {
+    setToast({ open: true, msg: "Pick a valid date first.", color: "danger" });
+    return;
+  }
 
-        const coinDen = k ? k.denomination : "";
-        const coinQty = k ? k.qty : "";
-        const coinAmt = k ? peso(k.denomination * k.qty) : "";
+  const cashLines = lines.filter((x) => x.money_kind === "cash");
+  const coinLines = lines.filter((x) => x.money_kind === "coin");
 
-        return `
-        <tr>
-          <td class="t-center">${cashDen}</td>
-          <td class="t-center">${cashQty}</td>
-          <td class="t-right">${cashAmt}</td>
-          <td class="gap"></td>
-          <td class="t-center">${coinDen}</td>
-          <td class="t-center">${coinQty}</td>
-          <td class="t-right">${coinAmt}</td>
-        </tr>
-      `;
-      })
-      .join("");
+  const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
+  const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
 
-    const html = `
+  const cohCashLocal = cashTotalLocal + coinTotalLocal;
+  const cohGcashLocal = gcashSales;
+
+  const startingCashLocal = toNumber(report.starting_cash);
+  const startingGcashLocal = toNumber(report.starting_gcash);
+  const bilinLocal = toNumber(report.bilin_amount);
+
+  const paymentRowsHtml = `
+    <tr><td>Walk-in Payments</td><td class="num">${peso(walkinPaymentCash)}</td><td class="num">${peso(walkinPaymentGcash)}</td></tr>
+    <tr><td>Reservation Payments (Same Day)</td><td class="num">${peso(reservationDownCash)}</td><td class="num">${peso(reservationDownGcash)}</td></tr>
+    <tr><td>Reservation Advance Payments</td><td class="num">${peso(reservationAdvanceCash)}</td><td class="num">${peso(reservationAdvanceGcash)}</td></tr>
+    <tr><td>Promo Payments (Same Day)</td><td class="num">${peso(promoTodayCash)}</td><td class="num">${peso(promoTodayGcash)}</td></tr>
+    <tr><td>Promo Advance Payments</td><td class="num">${peso(promoAdvanceCash)}</td><td class="num">${peso(promoAdvanceGcash)}</td></tr>
+    <tr class="grand-row"><td>Total Payment Collections</td><td class="num">${peso(totalPaymentCash)}</td><td class="num">${peso(totalPaymentGcash)}</td></tr>
+  `;
+
+  const cashCountRowsHtml = [
+    ...cashLines.map(
+      (l) => `
+      <tr>
+        <td>CASH</td>
+        <td class="center">${l.denomination}</td>
+        <td class="center">${l.qty}</td>
+        <td class="num">${peso(l.denomination * l.qty)}</td>
+      </tr>`
+    ),
+    ...coinLines.map(
+      (l) => `
+      <tr>
+        <td>COIN</td>
+        <td class="center">${l.denomination}</td>
+        <td class="center">${l.qty}</td>
+        <td class="num">${peso(l.denomination * l.qty)}</td>
+      </tr>`
+    ),
+  ].join("");
+
+  const html = `
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>Daily Sales Report ${selectedDate}</title>
+<title>Metyme LOUNGE Daily Sales Report ${selectedDate}</title>
 <style>
-  @page { size: A4; margin: 14mm; }
-  body { font-family: Arial, sans-serif; color:#111; }
-  .title { font-size:18px; font-weight:800; margin:0 0 8px; }
-  .meta { font-size:12px; margin:0 0 10px; }
-  .grid { display:flex; gap:14px; }
-  .box { border:1px solid #222; border-radius:10px; padding:10px; flex:1; }
-  .box h3 { margin:0 0 8px; font-size:12px; letter-spacing:.5px; }
-  table { width:100%; border-collapse:collapse; font-size:12px; }
-  th, td { border:1px solid #222; padding:6px 8px; }
-  th { background:#f2d0a7; }
-  .t-right { text-align:right; }
-  .t-center { text-align:center; }
-  .gap { border:none; width:10px; }
-  .summary { display:flex; gap:14px; margin-top:10px; }
-  .chip { border:1px solid #222; border-radius:10px; padding:10px; flex:1; }
-  .row { display:flex; justify-content:space-between; padding:4px 0; font-size:12px; }
-  .row b { font-weight:800; }
-  .note { font-size:11px; opacity:.85; margin-top:6px; }
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    background: #f6f1e7;
+    color: #2c2418;
+  }
+
+  .page {
+    width: 100%;
+  }
+
+  .hero {
+    background: linear-gradient(135deg, #6f8f6b, #9bb48f);
+    color: white;
+    border-radius: 18px;
+    padding: 22px 24px;
+    margin-bottom: 16px;
+  }
+
+  .hero-title {
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    margin: 0 0 6px;
+  }
+
+  .hero-sub {
+    font-size: 13px;
+    opacity: 0.95;
+    margin: 0;
+  }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .meta-card {
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 14px;
+    padding: 10px 12px;
+  }
+
+  .meta-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    opacity: 0.85;
+    margin-bottom: 4px;
+  }
+
+  .meta-value {
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 14px;
+  }
+
+  .card {
+    background: #fffaf0;
+    border: 1px solid #e5d8bf;
+    border-radius: 18px;
+    padding: 14px;
+    margin-bottom: 14px;
+    box-shadow: 0 6px 16px rgba(80, 62, 31, 0.08);
+  }
+
+  .card-title {
+    font-size: 15px;
+    font-weight: 800;
+    color: #5a4a2f;
+    margin: 0 0 10px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #eadfc9;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  th {
+    background: #efe1c6;
+    color: #4c3d25;
+    padding: 9px 10px;
+    text-align: left;
+    border-bottom: 1px solid #d8c7a6;
+  }
+
+  td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #eee3cf;
+    vertical-align: middle;
+  }
+
+  tr:nth-child(even) td {
+    background: #fffdf8;
+  }
+
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  .center {
+    text-align: center;
+  }
+
+  .grand-row td {
+    background: #e5efd9 !important;
+    font-weight: 800;
+    color: #314126;
+  }
+
+  .mini-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .mini-box {
+    background: #f8f2e6;
+    border: 1px solid #e6d8bb;
+    border-radius: 14px;
+    padding: 12px;
+  }
+
+  .mini-label {
+    font-size: 11px;
+    color: #7a694a;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+  }
+
+  .mini-value {
+    font-size: 20px;
+    font-weight: 800;
+    color: #3d3220;
+  }
+
+  .summary-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    background: #fcf7ee;
+    border: 1px solid #ebdec6;
+    border-radius: 12px;
+    font-size: 12px;
+  }
+
+  .summary-row b {
+    font-size: 13px;
+  }
+
+  .footer-note {
+    margin-top: 12px;
+    text-align: right;
+    font-size: 11px;
+    color: #7d7059;
+  }
 </style>
 </head>
 <body>
-  <div class="title">DAILY SALES REPORT</div>
-  <div class="meta">
-    <div><b>Report Date:</b> ${selectedDate}</div>
-    <div><b>Status:</b> ${report.is_submitted ? "SUBMITTED" : "DRAFT"}</div>
-    <div><b>Submitted At:</b> ${
-      report.submitted_at ? new Date(report.submitted_at).toLocaleString() : "-"
-    }</div>
-  </div>
+  <div class="page">
+    <div class="hero">
+      <div class="hero-title">Metyme LOUNGE Daily Sales Report</div>
+      <p class="hero-sub">Clean summary of payments, sales, cash count, and totals</p>
 
-  <div class="grid">
-    <div class="box">
-      <h3>CATEGORY</h3>
-      <table>
-        <thead>
-          <tr><th>CATEGORY</th><th>CASH</th><th>GCASH</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Starting Balance</td><td class="t-right">${peso(startingCashLocal)}</td><td class="t-right">${peso(startingGcashLocal)}</td></tr>
-          <tr><td>COH / Total of the Day</td><td class="t-right">${peso(cohCashLocal)}</td><td class="t-right">${peso(cohGcashLocal)}</td></tr>
-          <tr><td>Cash Outs</td><td class="t-right">${peso(cashOutsCash)}</td><td class="t-right">${peso(cashOutsGcash)}</td></tr>
-          <tr><td>Paid reservations for today</td><td class="t-right">${peso(paidResCashLocal)}</td><td class="t-right">${peso(paidResGcashLocal)}</td></tr>
-          <tr><td>New Advance Payments</td><td class="t-right">${peso(advCashLocal)}</td><td class="t-right">${peso(advGcashLocal)}</td></tr>
-          <tr><td>Down payments within this day only</td><td class="t-right">${peso(walkCashLocal)}</td><td class="t-right">${peso(walkGcashLocal)}</td></tr>
-          <tr><td><b>Actual System</b></td><td class="t-right" colspan="2"><b>${peso(actualSystemLocal)}</b></td></tr>
-          <tr><td><b>Sales System / Total Cost (computed)</b></td><td class="t-right" colspan="2"><b>${peso(salesSystemComputed)}</b></td></tr>
-        </tbody>
-      </table>
-
-      <div class="summary">
-        <div class="chip">
-          <div class="row"><span>Consignment Net</span><b>${peso(consignment.net)}</b></div>
-          <div class="row"><span>Inventory Loss</span><b>${peso(inventoryLossLocal)}</b></div>
+      <div class="meta-grid">
+        <div class="meta-card">
+          <div class="meta-label">Report Date</div>
+          <div class="meta-value">${selectedDate}</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Status</div>
+          <div class="meta-value">${report.is_submitted ? "SUBMITTED" : "DRAFT"}</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Submitted At</div>
+          <div class="meta-value">${
+            report.submitted_at ? new Date(report.submitted_at).toLocaleString() : "-"
+          }</div>
         </div>
       </div>
     </div>
 
-    <div class="box">
-      <h3>CASH COUNT</h3>
-      <table>
-        <thead>
-          <tr><th colspan="3">CASH</th><th class="gap"></th><th colspan="3">COINS</th></tr>
-          <tr><th>DENOM</th><th>QTY</th><th>AMOUNT</th><th class="gap"></th><th>DENOM</th><th>QTY</th><th>AMOUNT</th></tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-          <tr>
-            <td colspan="2"><b>TOTAL CASH</b></td><td class="t-right"><b>${peso(cashTotalLocal)}</b></td>
-            <td class="gap"></td>
-            <td colspan="2"><b>TOTAL COINS</b></td><td class="t-right"><b>${peso(coinTotalLocal)}</b></td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="mini-grid" style="margin-bottom:14px;">
+      <div class="mini-box">
+        <div class="mini-label">Actual System</div>
+        <div class="mini-value">${peso(actualSystem)}</div>
+      </div>
+      <div class="mini-box">
+        <div class="mini-label">Sales Collected</div>
+        <div class="mini-value">${peso(salesCollectedDisplay)}</div>
+      </div>
+    </div>
 
-      <div class="summary">
-        <div class="chip">
-          <div class="row"><span>Cash Sales</span><b>${peso(cashSalesLocal)}</b></div>
-          <div class="row"><span>GCash Sales</span><b>${peso(gcashSalesLocal)}</b></div>
-          <div class="row"><span>Bilin</span><b>${peso(Math.max(0, bilinLocal))}</b></div>
-          <div class="row"><span>Sales Collected</span><b>${peso(salesCollectedDisplayLocal)}</b></div>
+    <div class="grid">
+      <div>
+        <div class="card">
+          <div class="card-title">Category Summary</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Cash</th>
+                <th>GCash</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Starting Balance</td><td class="num">${peso(startingCashLocal)}</td><td class="num">${peso(startingGcashLocal)}</td></tr>
+              <tr><td>COH / Total of the Day</td><td class="num">${peso(cohCashLocal)}</td><td class="num">${peso(cohGcashLocal)}</td></tr>
+              <tr><td>Cash Outs</td><td class="num">${peso(cashOutsCash)}</td><td class="num">${peso(cashOutsGcash)}</td></tr>
+              ${paymentRowsHtml}
+            </tbody>
+          </table>
         </div>
 
-        <div class="chip">
-          <div class="row"><span>Total Time</span><b>${peso(totalTimeAmount)}</b></div>
-          <div class="note">Includes Promo Payments: ${peso(promoPaid)}</div>
-          <div class="note">Includes Customer List System Cost (Paid): ${peso(customerListSystemPaid)}</div>
-
-          <div class="row"><span>Add-ons (Payments)</span><b>${peso(addons)}</b></div>
-          <div class="note">Includes Customer List Order Payment (Paid): ${peso(customerListOrderPaid)}</div>
-
-          <div class="row"><span>Discounts</span><b>${peso(discount)}</b></div>
-          <div class="row"><span>Consignment Sales</span><b>${peso(consignment.gross)}</b></div>
-          <div class="row"><span>Consignment 15%</span><b>${peso(consignment.fee15)}</b></div>
-          <div class="row"><span>Cash Outs (Cash)</span><b>${peso(cashOutsCash)}</b></div>
-          <div class="row"><span>Cash Outs (GCash)</span><b>${peso(cashOutsGcash)}</b></div>
+        <div class="card">
+          <div class="card-title">Other Totals</div>
+          <div class="summary-list">
+            <div class="summary-row"><span>Add-ons (Paid)</span><b>${peso(addonsTotalWithCustomerOrders)}</b></div>
+            <div class="summary-row"><span>Discount (Amount)</span><b>${peso(discount)}</b></div>
+            <div class="summary-row"><span>Total Time</span><b>${peso(totalTimeAmount)}</b></div>
+            <div class="summary-row"><span>Consignment Sales</span><b>${peso(consignment.gross)}</b></div>
+            <div class="summary-row"><span>Consignment 15%</span><b>${peso(consignment.fee15)}</b></div>
+            <div class="summary-row"><span>Consignment Net</span><b>${peso(consignment.net)}</b></div>
+            <div class="summary-row"><span>Inventory Loss</span><b>${peso(inventoryLossAmount)}</b></div>
+            <div class="summary-row"><span>Bilin</span><b>${peso(bilinLocal)}</b></div>
+          </div>
         </div>
       </div>
+
+      <div>
+        <div class="card">
+          <div class="card-title">Cash Count</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Denomination</th>
+                <th>Qty</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${cashCountRowsHtml}
+              <tr class="grand-row">
+                <td colspan="3">Total Cash</td>
+                <td class="num">${peso(cashTotalLocal)}</td>
+              </tr>
+              <tr class="grand-row">
+                <td colspan="3">Total Coins</td>
+                <td class="num">${peso(coinTotalLocal)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Sales Snapshot</div>
+          <div class="summary-list">
+            <div class="summary-row"><span>Cash Sales</span><b>${peso(cashSales)}</b></div>
+            <div class="summary-row"><span>GCash Sales</span><b>${peso(gcashSales)}</b></div>
+            <div class="summary-row"><span>Sales System / Total Cost</span><b>${peso(salesSystemComputed)}</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      Generated automatically from Admin Sales Report
     </div>
   </div>
 
@@ -1191,145 +1653,276 @@ const AdminSalesReport: React.FC = () => {
   };
 
   /* =========================
-     EXPORT TO EXCEL (.xlsx)
+     EXPORT EXCEL
   ========================= */
 
-  const exportToExcel = async (): Promise<void> => {
-    if (!report || !isYMD(selectedDate)) {
-      setToast({ open: true, msg: "Pick a valid date first.", color: "danger" });
-      return;
-    }
+const exportToExcel = async (): Promise<void> => {
+  if (!report || !isYMD(selectedDate)) {
+    setToast({ open: true, msg: "Pick a valid date first.", color: "danger" });
+    return;
+  }
 
-    const cashLines = lines.filter((x) => x.money_kind === "cash");
-    const coinLines = lines.filter((x) => x.money_kind === "coin");
+  const cashLines = lines.filter((x) => x.money_kind === "cash");
+  const coinLines = lines.filter((x) => x.money_kind === "coin");
 
-    const cashTotalLocal = cashLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
-    const coinTotalLocal = coinLines.reduce((sum, l) => sum + l.denomination * l.qty, 0);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Admin Sales Report", {
+    views: [{ state: "frozen", ySplit: 4 }],
+  });
 
-    const inventoryLossLocal = inventoryLossAmount;
-    const cashSalesLocal = totals ? toNumber(totals.cash_sales) : 0;
-    const gcashSalesLocal = totals ? toNumber(totals.gcash_sales) : 0;
+  ws.properties.defaultRowHeight = 22;
 
-    const paidResCashLocal = totals ? toNumber(totals.paid_reservation_cash) : 0;
-    const paidResGcashLocal = totals ? toNumber(totals.paid_reservation_gcash) : 0;
-
-    const advCashLocal = totals ? toNumber(totals.advance_cash) : 0;
-    const advGcashLocal = totals ? toNumber(totals.advance_gcash) : 0;
-
-    const walkCashLocal = totals ? toNumber(totals.walkin_cash) : 0;
-    const walkGcashLocal = totals ? toNumber(totals.walkin_gcash) : 0;
-
-    const startingCashLocal = toNumber(report.starting_cash);
-    const startingGcashLocal = toNumber(report.starting_gcash);
-    const bilinLocal = toNumber(report.bilin_amount);
-
-    const cohCashLocal = cashTotalLocal + coinTotalLocal;
-    const cohGcashLocal = gcashSalesLocal;
-
-    const actualSystemLocal =
-      cohCashLocal +
-      cohGcashLocal +
-      paidResCashLocal +
-      advCashLocal +
-      walkCashLocal -
-      (startingCashLocal + startingGcashLocal);
-
-    const salesCollectedDisplayLocal = actualSystemLocal - bilinLocal;
-
-    const addons = round2(addonsPaid + customerListOrderPaid);
-    const discount = totals ? toNumber(totals.discount_total) : 0;
-
-    const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
-    const totalTimeAmount = round2(
-      baseTotalTimeAmount + promoPaid + customerListSystemPaid
-    );
-
-    const salesSystemComputed = round2(
-      addons + totalTimeAmount + consignment.gross - discount
-    );
-
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Report");
-
-    ws.addRow(["DAILY SALES REPORT"]);
-    ws.addRow(["Report Date", selectedDate]);
-    ws.addRow(["Status", report.is_submitted ? "SUBMITTED" : "DRAFT"]);
-    ws.addRow([
-      "Submitted At",
-      report.submitted_at ? new Date(report.submitted_at).toLocaleString() : "-",
-    ]);
-    ws.addRow([]);
-
-    ws.addRow(["CATEGORY", "CASH", "GCASH"]);
-    ws.addRow(["Starting Balance", startingCashLocal, startingGcashLocal]);
-    ws.addRow(["COH / Total of the Day", cohCashLocal, cohGcashLocal]);
-    ws.addRow(["Cash Outs", cashOutsCash, cashOutsGcash]);
-    ws.addRow(["Paid reservations for today", paidResCashLocal, paidResGcashLocal]);
-    ws.addRow(["New Advance Payments", advCashLocal, advGcashLocal]);
-    ws.addRow(["Down payments within this day only", walkCashLocal, walkGcashLocal]);
-    ws.addRow(["Actual System", actualSystemLocal, ""]);
-    ws.addRow(["Sales System / Total Cost (computed)", salesSystemComputed, ""]);
-    ws.addRow([]);
-
-    ws.addRow(["Cash Sales", cashSalesLocal]);
-    ws.addRow(["GCash Sales", gcashSalesLocal]);
-    ws.addRow(["Bilin", bilinLocal]);
-    ws.addRow(["Sales Collected (Actual System - Bilin)", salesCollectedDisplayLocal]);
-    ws.addRow([]);
-
-    ws.addRow(["Consignment Net", consignment.net]);
-    ws.addRow(["Inventory Loss", inventoryLossLocal]);
-    ws.addRow([]);
-
-    ws.addRow(["Other Totals"]);
-    ws.addRow([
-      "Total Time (includes Promo + Customer List System Cost)",
-      totalTimeAmount,
-    ]);
-    ws.addRow(["Promo Payments (Paid)", promoPaid]);
-    ws.addRow(["Customer List System Cost (Paid)", customerListSystemPaid]);
-    ws.addRow(["Add-ons (includes Customer List Order Payment)", addons]);
-    ws.addRow(["Customer List Order Payment (Paid)", customerListOrderPaid]);
-    ws.addRow(["Discount (amount)", discount]);
-    ws.addRow(["Consignment Sales", consignment.gross]);
-    ws.addRow(["Consignment 15%", consignment.fee15]);
-    ws.addRow(["Cash Outs (Cash)", cashOutsCash]);
-    ws.addRow(["Cash Outs (GCash)", cashOutsGcash]);
-    ws.addRow([]);
-
-    ws.addRow(["CASH COUNT"]);
-    ws.addRow(["Type", "Denomination", "Qty", "Amount"]);
-
-    for (const l of cashLines) {
-      ws.addRow(["CASH", l.denomination, l.qty, l.denomination * l.qty]);
-    }
-    for (const l of coinLines) {
-      ws.addRow(["COIN", l.denomination, l.qty, l.denomination * l.qty]);
-    }
-
-    ws.columns = [{ width: 40 }, { width: 20 }, { width: 16 }, { width: 20 }];
-
-    const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buf], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-    saveAs(blob, `Daily_Sales_Report_${selectedDate}.xlsx`);
-
-    setToast({ open: true, msg: "Excel exported.", color: "success" });
+  const titleFill = {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: "6F8F6B" },
   };
 
+  const sectionFill = {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: "EADFC9" },
+  };
+
+  const totalFill = {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: "E5EFD9" },
+  };
+
+  const cardFill = {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: "FCF7EE" },
+  };
+
+  const thinBorder = {
+    top: { style: "thin" as const, color: { argb: "D8C7A6" } },
+    left: { style: "thin" as const, color: { argb: "D8C7A6" } },
+    bottom: { style: "thin" as const, color: { argb: "D8C7A6" } },
+    right: { style: "thin" as const, color: { argb: "D8C7A6" } },
+  };
+
+  ws.columns = [
+    { width: 38 },
+    { width: 18 },
+    { width: 18 },
+    { width: 18 },
+  ];
+
+  ws.mergeCells("A1:D1");
+  ws.getCell("A1").value = "ADMIN DAILY SALES REPORT";
+  ws.getCell("A1").font = { size: 18, bold: true, color: { argb: "FFFFFF" } };
+  ws.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+  ws.getCell("A1").fill = titleFill;
+  ws.getRow(1).height = 28;
+
+  ws.mergeCells("A2:D2");
+  ws.getCell("A2").value = "Clean summary of payments, totals, and cash count";
+  ws.getCell("A2").font = { size: 11, italic: true, color: { argb: "FFFFFF" } };
+  ws.getCell("A2").alignment = { horizontal: "center" };
+  ws.getCell("A2").fill = titleFill;
+
+  ws.getCell("A4").value = "Report Date";
+  ws.getCell("B4").value = selectedDate;
+  ws.getCell("C4").value = "Status";
+  ws.getCell("D4").value = report.is_submitted ? "SUBMITTED" : "DRAFT";
+
+  ["A4", "B4", "C4", "D4"].forEach((addr) => {
+    const c = ws.getCell(addr);
+    c.border = thinBorder;
+    c.fill = cardFill;
+    c.font = { bold: true };
+  });
+
+  let row = 6;
+
+  ws.mergeCells(`A${row}:D${row}`);
+  ws.getCell(`A${row}`).value = "CATEGORY SUMMARY";
+  ws.getCell(`A${row}`).fill = sectionFill;
+  ws.getCell(`A${row}`).font = { bold: true, size: 12 };
+  ws.getCell(`A${row}`).border = thinBorder;
+  row++;
+
+  ws.getRow(row).values = ["Category", "Cash", "GCash", ""];
+  ws.getRow(row).font = { bold: true };
+  ws.getRow(row).fill = sectionFill;
+  ws.getRow(row).eachCell((c) => {
+    c.border = thinBorder;
+    c.alignment = { horizontal: "center" };
+  });
+  row++;
+
+  const categoryRows: Array<[string, number, number]> = [
+    ["Starting Balance", startingCash, startingGcash],
+    ["COH / Total of the Day", cashTotal + coinTotal, gcashSales],
+    ["Cash Outs", cashOutsCash, cashOutsGcash],
+    ["Walk-in Payments", walkinPaymentCash, walkinPaymentGcash],
+    ["Reservation Payments (Same Day)", reservationDownCash, reservationDownGcash],
+    ["Reservation Advance Payments", reservationAdvanceCash, reservationAdvanceGcash],
+    ["Promo Payments (Same Day)", promoTodayCash, promoTodayGcash],
+    ["Promo Advance Payments", promoAdvanceCash, promoAdvanceGcash],
+    ["Total Payment Collections", totalPaymentCash, totalPaymentGcash],
+  ];
+
+  for (const [label, cash, gcash] of categoryRows) {
+    ws.getCell(`A${row}`).value = label;
+    ws.getCell(`B${row}`).value = cash;
+    ws.getCell(`C${row}`).value = gcash;
+
+    ["A", "B", "C"].forEach((col) => {
+      ws.getCell(`${col}${row}`).border = thinBorder;
+      ws.getCell(`${col}${row}`).fill =
+        label === "Total Payment Collections" ? totalFill : cardFill;
+    });
+
+    ws.getCell(`B${row}`).numFmt = '₱#,##0.00';
+    ws.getCell(`C${row}`).numFmt = '₱#,##0.00';
+
+    if (label === "Total Payment Collections") {
+      ws.getRow(row).font = { bold: true };
+    }
+
+    row++;
+  }
+
+  ws.getCell(`A${row}`).value = "Actual System";
+  ws.getCell(`B${row}`).value = actualSystem;
+  ws.getCell(`B${row}`).numFmt = '₱#,##0.00';
+  ws.getCell(`A${row}`).border = thinBorder;
+  ws.getCell(`B${row}`).border = thinBorder;
+  ws.getCell(`A${row}`).fill = totalFill;
+  ws.getCell(`B${row}`).fill = totalFill;
+  ws.getRow(row).font = { bold: true };
+  row++;
+
+  ws.getCell(`A${row}`).value = "Sales Collected";
+  ws.getCell(`B${row}`).value = salesCollectedDisplay;
+  ws.getCell(`B${row}`).numFmt = '₱#,##0.00';
+  ws.getCell(`A${row}`).border = thinBorder;
+  ws.getCell(`B${row}`).border = thinBorder;
+  ws.getCell(`A${row}`).fill = totalFill;
+  ws.getCell(`B${row}`).fill = totalFill;
+  ws.getRow(row).font = { bold: true };
+  row += 2;
+
+  ws.mergeCells(`A${row}:D${row}`);
+  ws.getCell(`A${row}`).value = "OTHER TOTALS";
+  ws.getCell(`A${row}`).fill = sectionFill;
+  ws.getCell(`A${row}`).font = { bold: true, size: 12 };
+  ws.getCell(`A${row}`).border = thinBorder;
+  row++;
+
+  const otherRows: Array<[string, number]> = [
+    ["Add-ons (Paid)", addonsTotalWithCustomerOrders],
+    ["Discount (Amount)", discount],
+    ["Total Time", totalTimeAmount],
+    ["Consignment Sales", consignment.gross],
+    ["Consignment 15%", consignment.fee15],
+    ["Consignment Net", consignment.net],
+    ["Inventory Loss", inventoryLossAmount],
+    ["Bilin", bilin],
+    ["Sales System / Total Cost", salesSystemComputed],
+  ];
+
+  for (const [label, value] of otherRows) {
+    ws.getCell(`A${row}`).value = label;
+    ws.getCell(`B${row}`).value = value;
+    ws.getCell(`B${row}`).numFmt = '₱#,##0.00';
+
+    ws.getCell(`A${row}`).border = thinBorder;
+    ws.getCell(`B${row}`).border = thinBorder;
+    ws.getCell(`A${row}`).fill = cardFill;
+    ws.getCell(`B${row}`).fill = cardFill;
+
+    if (label === "Sales System / Total Cost") {
+      ws.getCell(`A${row}`).fill = totalFill;
+      ws.getCell(`B${row}`).fill = totalFill;
+      ws.getRow(row).font = { bold: true };
+    }
+
+    row++;
+  }
+
+  row += 2;
+
+  ws.mergeCells(`A${row}:D${row}`);
+  ws.getCell(`A${row}`).value = "CASH COUNT";
+  ws.getCell(`A${row}`).fill = sectionFill;
+  ws.getCell(`A${row}`).font = { bold: true, size: 12 };
+  ws.getCell(`A${row}`).border = thinBorder;
+  row++;
+
+  ws.getRow(row).values = ["Type", "Denomination", "Qty", "Amount"];
+  ws.getRow(row).font = { bold: true };
+  ws.getRow(row).fill = sectionFill;
+  ws.getRow(row).eachCell((c) => {
+    c.border = thinBorder;
+    c.alignment = { horizontal: "center" };
+  });
+  row++;
+
+  for (const l of cashLines) {
+    ws.addRow(["CASH", l.denomination, l.qty, l.denomination * l.qty]);
+    ws.getRow(row).eachCell((c) => {
+      c.border = thinBorder;
+      c.fill = cardFill;
+    });
+    ws.getCell(`D${row}`).numFmt = '₱#,##0.00';
+    row++;
+  }
+
+  for (const l of coinLines) {
+    ws.addRow(["COIN", l.denomination, l.qty, l.denomination * l.qty]);
+    ws.getRow(row).eachCell((c) => {
+      c.border = thinBorder;
+      c.fill = cardFill;
+    });
+    ws.getCell(`D${row}`).numFmt = '₱#,##0.00';
+    row++;
+  }
+
+  ws.addRow(["Total Cash", "", "", cashTotal]);
+  ws.getRow(row).eachCell((c) => {
+    c.border = thinBorder;
+    c.fill = totalFill;
+    c.font = { bold: true };
+  });
+  ws.getCell(`D${row}`).numFmt = '₱#,##0.00';
+  row++;
+
+  ws.addRow(["Total Coins", "", "", coinTotal]);
+  ws.getRow(row).eachCell((c) => {
+    c.border = thinBorder;
+    c.fill = totalFill;
+    c.font = { bold: true };
+  });
+  ws.getCell(`D${row}`).numFmt = '₱#,##0.00';
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  saveAs(blob, `Admin_Daily_Sales_Report_${selectedDate}.xlsx`);
+
+  setToast({ open: true, msg: "Excel exported.", color: "success" });
+};
+
   /* =========================
-     LOAD when date changes
+     LOAD on date change
   ========================= */
 
   useEffect(() => {
     void loadReport(selectedDate);
     void loadTotals(selectedDate);
     void loadConsignment(selectedDate);
-    void loadAddonsPaid(selectedDate);
-    void loadPromoPaid(selectedDate);
-    void loadCustomerListSystemPaid(selectedDate);
-    void loadCustomerListOrderPaid(selectedDate);
+    void loadAddonsPaidBase(selectedDate);
+    void loadCustomerOrderPaid(selectedDate);
+    void loadReservationPaymentPlacement(selectedDate);
+    void loadPromoPaymentPlacement(selectedDate);
+    void loadWalkinSystemPaidAndDiscount(selectedDate);
+    void loadReservationTimeAndDiscount(selectedDate);
+    void loadPromoDiscountAmount(selectedDate);
     void loadCashOutsTotal(selectedDate);
     void loadInventoryLossAmount(selectedDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1340,60 +1933,6 @@ const AdminSalesReport: React.FC = () => {
     void loadCashLines(report.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report?.id]);
-
-  /* =========================
-     COMPUTED (UI)
-  ========================= */
-
-  const cashTotal = useMemo(() => {
-    return lines
-      .filter((l) => l.money_kind === "cash")
-      .reduce((sum, l) => sum + l.denomination * l.qty, 0);
-  }, [lines]);
-
-  const coinTotal = useMemo(() => {
-    return lines
-      .filter((l) => l.money_kind === "coin")
-      .reduce((sum, l) => sum + l.denomination * l.qty, 0);
-  }, [lines]);
-
-  const inventoryLoss = inventoryLossAmount;
-  const cashSales = totals ? toNumber(totals.cash_sales) : 0;
-  const gcashSales = totals ? toNumber(totals.gcash_sales) : 0;
-
-  const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
-  const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
-
-  const advCash = totals ? toNumber(totals.advance_cash) : 0;
-  const advGcash = totals ? toNumber(totals.advance_gcash) : 0;
-
-  const dpCash = totals ? toNumber(totals.walkin_cash) : 0;
-  const dpGcash = totals ? toNumber(totals.walkin_gcash) : 0;
-
-  const startingCash = report ? toNumber(report.starting_cash) : 0;
-  const startingGcash = report ? toNumber(report.starting_gcash) : 0;
-
-  const cohCash = cashTotal + coinTotal;
-  const cohGcash = gcashSales;
-
-  const bilin = report ? toNumber(report.bilin_amount) : 0;
-
-  const actualSystem =
-    cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash);
-
-  const baseTotalTimeAmount = totals ? toNumber(totals.total_time) : 0;
-  const totalTimeAmount = round2(
-    baseTotalTimeAmount + promoPaid + customerListSystemPaid
-  );
-
-  const discount = totals ? toNumber(totals.discount_total) : 0;
-  const addonsTotalWithCustomerOrders = round2(addonsPaid + customerListOrderPaid);
-
-  const salesSystemComputed = round2(
-    addonsTotalWithCustomerOrders + totalTimeAmount + consignment.gross - discount
-  );
-
-  const salesCollectedDisplay = actualSystem - bilin;
 
   if (loading) {
     return (
@@ -1577,7 +2116,7 @@ const AdminSalesReport: React.FC = () => {
                           disabled={submitting}
                           value={report ? String(toNumber(report.starting_cash)) : "0"}
                           onIonChange={(ev) =>
-                            updateReportField(
+                            void updateReportField(
                               "starting_cash",
                               valueToNonNegMoney(getDetailValue(ev))
                             )
@@ -1598,7 +2137,7 @@ const AdminSalesReport: React.FC = () => {
                           disabled={submitting}
                           value={report ? String(toNumber(report.starting_gcash)) : "0"}
                           onIonChange={(ev) =>
-                            updateReportField(
+                            void updateReportField(
                               "starting_gcash",
                               valueToNonNegMoney(getDetailValue(ev))
                             )
@@ -1621,21 +2160,39 @@ const AdminSalesReport: React.FC = () => {
                   </div>
 
                   <div className="ssr-left-row ssr-left-row--tint">
-                    <div className="ssr-left-label">Paid reservations for today</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(paidResCash)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(paidResGcash)}</div>
+                    <div className="ssr-left-label">Walk-in Payments</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(walkinPaymentCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(walkinPaymentGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">New Advance Payments</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(advCash)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(advGcash)}</div>
+                    <div className="ssr-left-label">Reservation Payments (Same Day)</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(reservationDownCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(reservationDownGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">Down payments within this day only</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(dpCash)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(dpGcash)}</div>
+                    <div className="ssr-left-label">Reservation Advance Payments</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(reservationAdvanceCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(reservationAdvanceGcash)}</div>
+                  </div>
+
+                  <div className="ssr-left-row">
+                    <div className="ssr-left-label">Promo Payments (Same Day)</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(promoTodayCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(promoTodayGcash)}</div>
+                  </div>
+
+                  <div className="ssr-left-row">
+                    <div className="ssr-left-label">Promo Advance Payments</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(promoAdvanceCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(promoAdvanceGcash)}</div>
+                  </div>
+
+                  <div className="ssr-left-row ssr-left-row--tint">
+                    <div className="ssr-left-label">Total Payment Collections</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(totalPaymentCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totalPaymentGcash)}</div>
                   </div>
 
                   <div className="ssr-system-grid">
@@ -1676,7 +2233,7 @@ const AdminSalesReport: React.FC = () => {
                     </div>
                     <div className="ssr-sales-box">
                       <span className="ssr-sales-box-label">Inventory Loss</span>
-                      <span className="ssr-sales-box-value">{peso(inventoryLoss)}</span>
+                      <span className="ssr-sales-box-value">{peso(inventoryLossAmount)}</span>
                     </div>
                   </div>
                 </IonCardContent>
@@ -1715,7 +2272,7 @@ const AdminSalesReport: React.FC = () => {
                                 disabled={submitting}
                                 value={String(line.qty)}
                                 onIonChange={(ev) =>
-                                  upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
+                                  void upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
                                 }
                               />
                             </div>
@@ -1752,7 +2309,7 @@ const AdminSalesReport: React.FC = () => {
                                 disabled={submitting}
                                 value={String(line.qty)}
                                 onIonChange={(ev) =>
-                                  upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
+                                  void upsertQty(line, valueToNonNegInt(getDetailValue(ev)))
                                 }
                               />
                             </div>
@@ -1782,7 +2339,7 @@ const AdminSalesReport: React.FC = () => {
                         disabled={submitting}
                         value={report ? String(toNumber(report.bilin_amount)) : "0"}
                         onIonChange={(ev) =>
-                          updateReportField(
+                          void updateReportField(
                             "bilin_amount",
                             valueToNonNegMoney(getDetailValue(ev))
                           )
@@ -1809,7 +2366,7 @@ const AdminSalesReport: React.FC = () => {
                     </div>
 
                     <div className="ssr-mini-row">
-                      <span>Discount (amount)</span>
+                      <span>Discount (Amount)</span>
                       <b>{peso(discount)}</b>
                     </div>
 
