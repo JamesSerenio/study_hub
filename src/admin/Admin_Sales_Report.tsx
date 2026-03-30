@@ -1331,8 +1331,8 @@ const exportToPDF = (): void => {
 <title>Metyme LOUNGE Daily Sales Report ${selectedDate}</title>
 <style>
   @page {
-    size: A4;
-    margin: 12mm;
+    size: 8.5in 13in;
+    margin: 8mm;
   }
 
   * {
@@ -1344,6 +1344,8 @@ const exportToPDF = (): void => {
     font-family: "Segoe UI", Arial, sans-serif;
     background: #f6f1e7;
     color: #2c2418;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .page {
@@ -1353,20 +1355,20 @@ const exportToPDF = (): void => {
   .hero {
     background: linear-gradient(135deg, #6f8f6b, #9bb48f);
     color: white;
-    border-radius: 18px;
-    padding: 22px 24px;
-    margin-bottom: 16px;
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
   }
 
   .hero-title {
-    font-size: 26px;
+    font-size: 20px;
     font-weight: 800;
-    letter-spacing: 0.4px;
-    margin: 0 0 6px;
+    letter-spacing: 0.2px;
+    margin: 0 0 4px;
   }
 
   .hero-sub {
-    font-size: 13px;
+    font-size: 11px;
     opacity: 0.95;
     margin: 0;
   }
@@ -1374,69 +1376,98 @@ const exportToPDF = (): void => {
   .meta-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    margin-top: 14px;
+    gap: 8px;
+    margin-top: 10px;
   }
 
   .meta-card {
     background: rgba(255,255,255,0.15);
     border: 1px solid rgba(255,255,255,0.18);
-    border-radius: 14px;
-    padding: 10px 12px;
+    border-radius: 10px;
+    padding: 8px 10px;
   }
 
   .meta-label {
-    font-size: 11px;
+    font-size: 9px;
     text-transform: uppercase;
     opacity: 0.85;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
   }
 
   .meta-value {
-    font-size: 14px;
+    font-size: 11px;
     font-weight: 700;
+  }
+
+  .mini-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .mini-box {
+    background: #f8f2e6;
+    border: 1px solid #e6d8bb;
+    border-radius: 10px;
+    padding: 8px 10px;
+  }
+
+  .mini-label {
+    font-size: 9px;
+    color: #7a694a;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+  }
+
+  .mini-value {
+    font-size: 15px;
+    font-weight: 800;
+    color: #3d3220;
   }
 
   .grid {
     display: grid;
-    grid-template-columns: 1.15fr 0.85fr;
-    gap: 14px;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 10px;
   }
 
   .card {
     background: #fffaf0;
     border: 1px solid #e5d8bf;
-    border-radius: 18px;
-    padding: 14px;
-    margin-bottom: 14px;
-    box-shadow: 0 6px 16px rgba(80, 62, 31, 0.08);
+    border-radius: 12px;
+    padding: 10px;
+    margin-bottom: 10px;
+    box-shadow: 0 4px 10px rgba(80, 62, 31, 0.05);
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
   .card-title {
-    font-size: 15px;
+    font-size: 12px;
     font-weight: 800;
     color: #5a4a2f;
-    margin: 0 0 10px;
-    padding-bottom: 8px;
+    margin: 0 0 8px;
+    padding-bottom: 5px;
     border-bottom: 2px solid #eadfc9;
   }
 
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: 10px;
   }
 
   th {
     background: #efe1c6;
     color: #4c3d25;
-    padding: 9px 10px;
+    padding: 6px 7px;
     text-align: left;
     border-bottom: 1px solid #d8c7a6;
   }
 
   td {
-    padding: 8px 10px;
+    padding: 5px 7px;
     border-bottom: 1px solid #eee3cf;
     vertical-align: middle;
   }
@@ -1461,56 +1492,30 @@ const exportToPDF = (): void => {
     color: #314126;
   }
 
-  .mini-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-  }
-
-  .mini-box {
-    background: #f8f2e6;
-    border: 1px solid #e6d8bb;
-    border-radius: 14px;
-    padding: 12px;
-  }
-
-  .mini-label {
-    font-size: 11px;
-    color: #7a694a;
-    margin-bottom: 5px;
-    text-transform: uppercase;
-  }
-
-  .mini-value {
-    font-size: 20px;
-    font-weight: 800;
-    color: #3d3220;
-  }
-
   .summary-list {
     display: grid;
-    gap: 8px;
+    gap: 6px;
   }
 
   .summary-row {
     display: flex;
     justify-content: space-between;
-    gap: 12px;
-    padding: 10px 12px;
+    gap: 10px;
+    padding: 7px 9px;
     background: #fcf7ee;
     border: 1px solid #ebdec6;
-    border-radius: 12px;
-    font-size: 12px;
+    border-radius: 9px;
+    font-size: 10px;
   }
 
   .summary-row b {
-    font-size: 13px;
+    font-size: 11px;
   }
 
   .footer-note {
-    margin-top: 12px;
+    margin-top: 6px;
     text-align: right;
-    font-size: 11px;
+    font-size: 9px;
     color: #7d7059;
   }
 </style>
@@ -1622,12 +1627,6 @@ const exportToPDF = (): void => {
         </div>
       </div>
     </div>
-
-    <div class="footer-note">
-      Generated automatically from Admin Sales Report
-    </div>
-  </div>
-
 <script>
   window.onload = () => { window.print(); };
 </script>
@@ -1711,14 +1710,14 @@ const exportToExcel = async (): Promise<void> => {
   ];
 
   ws.mergeCells("A1:D1");
-  ws.getCell("A1").value = "ADMIN DAILY SALES REPORT";
+  ws.getCell("A1").value = "Metyme LOUNGE Daily Sales Report";
   ws.getCell("A1").font = { size: 18, bold: true, color: { argb: "FFFFFF" } };
   ws.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
   ws.getCell("A1").fill = titleFill;
   ws.getRow(1).height = 28;
 
   ws.mergeCells("A2:D2");
-  ws.getCell("A2").value = "Clean summary of payments, totals, and cash count";
+  ws.getCell("A2").value = "Daily sales summary, collections, cash count, and totals";
   ws.getCell("A2").font = { size: 11, italic: true, color: { argb: "FFFFFF" } };
   ws.getCell("A2").alignment = { horizontal: "center" };
   ws.getCell("A2").fill = titleFill;
