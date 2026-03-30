@@ -1804,23 +1804,8 @@ const AdminSalesReport: React.FC = () => {
 
                   <div className="ssr-mini">
                     <div className="ssr-mini-row">
-                      <span>Add-ons (Payments)</span>
+                      <span>Add-ons (Paid)</span>
                       <b>{peso(addonsTotalWithCustomerOrders)}</b>
-                    </div>
-
-                    <div className="ssr-mini-row">
-                      <span>Customer List Order Payment (Paid)</span>
-                      <b>{peso(customerListOrderPaid)}</b>
-                    </div>
-
-                    <div className="ssr-mini-row">
-                      <span>Promo Payments (Paid)</span>
-                      <b>{peso(promoPaid)}</b>
-                    </div>
-
-                    <div className="ssr-mini-row">
-                      <span>Customer List System Cost (Paid)</span>
-                      <b>{peso(customerListSystemPaid)}</b>
                     </div>
 
                     <div className="ssr-mini-row">
@@ -1829,13 +1814,8 @@ const AdminSalesReport: React.FC = () => {
                     </div>
 
                     <div className="ssr-mini-row">
-                      <span>Total Time (includes Promo + System Cost)</span>
+                      <span>Total Time</span>
                       <b>{peso(totalTimeAmount)}</b>
-                    </div>
-
-                    <div className="ssr-mini-row">
-                      <span>Total Cost / Sales System</span>
-                      <b>{peso(salesSystemComputed)}</b>
                     </div>
                   </div>
                 </IonCardContent>
