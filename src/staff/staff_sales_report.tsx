@@ -1,22 +1,25 @@
 // src/pages/staff_sales_report.tsx
 // ✅ STRICT TS, NO any
-// ✅ Cash Outs TOTAL now split into CASH / GCASH (uses cash_outs.payment_method)
-// ✅ If your table still uses ONLY cashout_date + amount, it will fallback to ALL as CASH
-// ✅ Uses paid_at date window logic elsewhere unchanged
-// ✅ FIX: Add-ons (Paid) now includes:
+// ✅ Cash Outs TOTAL split into CASH / GCASH
+// ✅ Add-ons (Paid) includes:
 //         1) customer_session_add_ons payment amounts
 //         2) customer_order_payments payment amounts
-// ✅ FIX: Total Time now includes:
-//         1) WALK-IN system cost from Customer_Lists logic (discount-applied system cost, PAID only, paid_at within selected day)
-//         2) RESERVATION time-consumed amount (base), PAID only
-//         3) PROMO base price, PAID only
+// ✅ Total Time now includes:
+//         1) WALK-IN system cost (paid_at within selected day)
+//         2) RESERVATION time-consumed amount (paid)
+//         3) PROMO REMOVED from Total Time
 // ✅ Discount total includes:
 //         1) WALK-IN system discount amount
 //         2) RESERVATION discount amount
-//         3) PROMO discount amount
-// ✅ CONSIGNMENT NET (same as admin)
+// ✅ CONSIGNMENT NET
 // ✅ Inventory Loss from add_on_expenses
-// ✅ Other Totals fixed
+// ✅ Payment breakdown rows added:
+//         1) Walk-in Payments
+//         2) Reservation Payments (Same Day)
+//         3) Reservation Advance Payments
+//         4) Promo Payments (Same Day)
+//         5) Promo Advance Payments
+//         6) Total Payment Collections
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -154,6 +157,14 @@ type ReservationForTimeRow = {
   discount_value: number | string | null;
 };
 
+type ReservationPaymentPlacementRow = {
+  paid_at: string | null;
+  is_paid: boolean | number | string | null;
+  reservation_date: string | null;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
+
 type AddOnExpenseRow = {
   created_at: string;
   expense_type: string;
@@ -161,15 +172,12 @@ type AddOnExpenseRow = {
   voided: boolean | null;
 };
 
-type PromoForTimeRow = {
-  created_at: string;
+type PromoPaymentRow = {
   paid_at: string | null;
-  is_paid: boolean | null;
-  start_at: string;
-  end_at: string;
-  price: number | string | null;
-  discount_kind: string | null;
-  discount_value: number | string | null;
+  is_paid: boolean | number | string | null;
+  start_at: string | null;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
 };
 
 /* =========================
@@ -188,7 +196,6 @@ const toNumber = (v: string | number | null | undefined): number => {
 
 const round2 = (n: number): number =>
   Number((Number.isFinite(n) ? n : 0).toFixed(2));
-
 
 const clamp = (n: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, n));
@@ -304,6 +311,16 @@ const isoToYMD = (iso: string): string => {
   if (!raw) return todayYMD();
   const ymd = raw.slice(0, 10);
   return isYMD(ymd) ? ymd : todayYMD();
+};
+
+const isoToLocalYMD = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return todayYMD();
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 };
 
 const buildZeroLines = (reportId: string): CashLine[] => {
@@ -440,12 +457,23 @@ const StaffSalesReport: React.FC = () => {
   const [customerOrderPaid, setCustomerOrderPaid] = useState<number>(0);
   const [walkinSystemPaid, setWalkinSystemPaid] = useState<number>(0);
   const [reservationTimeBase, setReservationTimeBase] = useState<number>(0);
-  const [promoTimeBase, setPromoTimeBase] = useState<number>(0);
+
+  const [reservationDownCash, setReservationDownCash] = useState<number>(0);
+  const [reservationDownGcash, setReservationDownGcash] = useState<number>(0);
+  const [reservationAdvanceCash, setReservationAdvanceCash] = useState<number>(0);
+  const [reservationAdvanceGcash, setReservationAdvanceGcash] = useState<number>(0);
+
+  const [promoTodayCash, setPromoTodayCash] = useState<number>(0);
+  const [promoTodayGcash, setPromoTodayGcash] = useState<number>(0);
+  const [promoAdvanceCash, setPromoAdvanceCash] = useState<number>(0);
+  const [promoAdvanceGcash, setPromoAdvanceGcash] = useState<number>(0);
 
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
-  const [discountPaid, setDiscountPaid] = useState<number>(0);
+ const [walkinDiscountAmount, setWalkinDiscountAmount] = useState<number>(0);
+  const [reservationDiscountAmount, setReservationDiscountAmount] = useState<number>(0);
+  const [promoDiscountAmount, setPromoDiscountAmount] = useState<number>(0);
   const [inventoryLossAmount, setInventoryLossAmount] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
@@ -482,10 +510,22 @@ const StaffSalesReport: React.FC = () => {
     setCustomerOrderPaid(0);
     setWalkinSystemPaid(0);
     setReservationTimeBase(0);
-    setPromoTimeBase(0);
+
+    setReservationDownCash(0);
+    setReservationDownGcash(0);
+    setReservationAdvanceCash(0);
+    setReservationAdvanceGcash(0);
+
+    setPromoTodayCash(0);
+    setPromoTodayGcash(0);
+    setPromoAdvanceCash(0);
+    setPromoAdvanceGcash(0);
+
     setCashOutsCash(0);
     setCashOutsGcash(0);
-    setDiscountPaid(0);
+    setWalkinDiscountAmount(0);
+    setReservationDiscountAmount(0);
+    setPromoDiscountAmount(0);
     setInventoryLossAmount(0);
   };
 
@@ -689,9 +729,14 @@ const StaffSalesReport: React.FC = () => {
     setCustomerOrderPaid(round2(total));
   };
 
-  const loadWalkinSystemPaidAndDiscount = async (dateYMD: string): Promise<void> => {
+  const loadReservationPaymentPlacement = async (
+    dateYMD: string
+  ): Promise<void> => {
     if (!isYMD(dateYMD)) {
-      setWalkinSystemPaid(0);
+      setReservationDownCash(0);
+      setReservationDownGcash(0);
+      setReservationAdvanceCash(0);
+      setReservationAdvanceGcash(0);
       return;
     }
 
@@ -700,43 +745,156 @@ const StaffSalesReport: React.FC = () => {
 
     const res = await supabase
       .from("customer_sessions")
-      .select("paid_at, is_paid, reservation, total_amount, discount_kind, discount_value")
-      .eq("reservation", "no")
+      .select("paid_at, is_paid, reservation_date, gcash_amount, cash_amount")
+      .eq("reservation", "yes")
       .gte("paid_at", start.toISOString())
       .lt("paid_at", end.toISOString());
 
     if (res.error) {
-      console.error("walkin system paid query error:", res.error.message);
-      setWalkinSystemPaid(0);
+      console.error("reservation payment placement query error:", res.error.message);
+      setReservationDownCash(0);
+      setReservationDownGcash(0);
+      setReservationAdvanceCash(0);
+      setReservationAdvanceGcash(0);
       return;
     }
 
-    const rows = (res.data ?? []) as WalkinSystemPaidRow[];
+    const rows = (res.data ?? []) as ReservationPaymentPlacementRow[];
 
-    let systemSum = 0;
-    let discountSum = 0;
+    let todayCash = 0;
+    let todayGcash = 0;
+    let advanceCash = 0;
+    let advanceGcash = 0;
 
     for (const r of rows) {
       if (!toBool(r.is_paid) || !r.paid_at) continue;
 
-      const base = Math.max(0, toNumber(r.total_amount));
-      const kind = (r.discount_kind ?? "none") as DiscountKind;
-      const value = Math.max(0, toNumber(r.discount_value));
+      const reservationYMD = String(r.reservation_date ?? "").trim();
+      const cash = Math.max(0, toNumber(r.cash_amount));
+      const gcash = Math.max(0, toNumber(r.gcash_amount));
 
-      const discountAmt = computeDiscountAmountFromBaseCost(base, kind, value);
-      const finalSystemCost = applyDiscountToBase(base, kind, value);
-
-      systemSum += finalSystemCost;
-      discountSum += discountAmt;
+      if (reservationYMD === dateYMD) {
+        todayCash += cash;
+        todayGcash += gcash;
+      } else if (reservationYMD > dateYMD) {
+        advanceCash += cash;
+        advanceGcash += gcash;
+      }
     }
 
-    setWalkinSystemPaid(round2(systemSum));
-    setDiscountPaid((prev) => round2(prev + discountSum));
+    setReservationDownCash(round2(todayCash));
+    setReservationDownGcash(round2(todayGcash));
+    setReservationAdvanceCash(round2(advanceCash));
+    setReservationAdvanceGcash(round2(advanceGcash));
   };
+
+  const loadPromoPaymentPlacement = async (dateYMD: string): Promise<void> => {
+    if (!isYMD(dateYMD)) {
+      setPromoTodayCash(0);
+      setPromoTodayGcash(0);
+      setPromoAdvanceCash(0);
+      setPromoAdvanceGcash(0);
+      return;
+    }
+
+    const start = new Date(`${dateYMD}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+    const res = await supabase
+      .from("promo_bookings")
+      .select("paid_at, is_paid, start_at, gcash_amount, cash_amount")
+      .gte("paid_at", start.toISOString())
+      .lt("paid_at", end.toISOString());
+
+    if (res.error) {
+      console.error("promo payment placement query error:", res.error.message);
+      setPromoTodayCash(0);
+      setPromoTodayGcash(0);
+      setPromoAdvanceCash(0);
+      setPromoAdvanceGcash(0);
+      return;
+    }
+
+    const rows = (res.data ?? []) as PromoPaymentRow[];
+
+    let todayCash = 0;
+    let todayGcash = 0;
+    let advanceCash = 0;
+    let advanceGcash = 0;
+
+    for (const r of rows) {
+      if (!toBool(r.is_paid) || !r.paid_at) continue;
+
+      const availYMD = r.start_at ? isoToLocalYMD(r.start_at) : "";
+      const cash = Math.max(0, toNumber(r.cash_amount));
+      const gcash = Math.max(0, toNumber(r.gcash_amount));
+
+      if (availYMD === dateYMD) {
+        todayCash += cash;
+        todayGcash += gcash;
+      } else if (availYMD > dateYMD) {
+        advanceCash += cash;
+        advanceGcash += gcash;
+      }
+    }
+
+    setPromoTodayCash(round2(todayCash));
+    setPromoTodayGcash(round2(todayGcash));
+    setPromoAdvanceCash(round2(advanceCash));
+    setPromoAdvanceGcash(round2(advanceGcash));
+  };
+
+    const loadWalkinSystemPaidAndDiscount = async (dateYMD: string): Promise<void> => {
+      if (!isYMD(dateYMD)) {
+        setWalkinSystemPaid(0);
+        setWalkinDiscountAmount(0);
+        return;
+      }
+
+      const start = new Date(`${dateYMD}T00:00:00+08:00`);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+      const res = await supabase
+        .from("customer_sessions")
+        .select("paid_at, is_paid, reservation, total_amount, discount_kind, discount_value")
+        .eq("reservation", "no")
+        .gte("paid_at", start.toISOString())
+        .lt("paid_at", end.toISOString());
+
+      if (res.error) {
+        console.error("walkin system paid query error:", res.error.message);
+        setWalkinSystemPaid(0);
+        setWalkinDiscountAmount(0);
+        return;
+      }
+
+      const rows = (res.data ?? []) as WalkinSystemPaidRow[];
+
+      let systemSum = 0;
+      let discountSum = 0;
+
+      for (const r of rows) {
+        if (!toBool(r.is_paid) || !r.paid_at) continue;
+
+        const base = Math.max(0, toNumber(r.total_amount));
+        const kind = (r.discount_kind ?? "none") as DiscountKind;
+        const value = Math.max(0, toNumber(r.discount_value));
+
+        const discountAmt = computeDiscountAmountFromBaseCost(base, kind, value);
+        const finalSystemCost = applyDiscountToBase(base, kind, value);
+
+        systemSum += finalSystemCost;
+        discountSum += discountAmt;
+      }
+
+      setWalkinSystemPaid(round2(systemSum));
+      setWalkinDiscountAmount(round2(discountSum));
+    };
 
   const loadReservationTimeAndDiscount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setReservationTimeBase(0);
+      setReservationDiscountAmount(0);
       return;
     }
 
@@ -752,6 +910,7 @@ const StaffSalesReport: React.FC = () => {
     if (res.error) {
       console.error("reservation time query error:", res.error.message);
       setReservationTimeBase(0);
+      setReservationDiscountAmount(0);
       return;
     }
 
@@ -782,56 +941,55 @@ const StaffSalesReport: React.FC = () => {
     }
 
     setReservationTimeBase(round2(timeSum));
-    setDiscountPaid((prev) => round2(prev + discountSum));
+    setReservationDiscountAmount(round2(discountSum));
   };
 
-  const loadPromoTimeAndDiscount = async (dateYMD: string): Promise<void> => {
-    if (!isYMD(dateYMD)) {
-      setPromoTimeBase(0);
-      return;
-    }
+  const loadPromoDiscountAmount = async (dateYMD: string): Promise<void> => {
+  if (!isYMD(dateYMD)) {
+    setPromoDiscountAmount(0);
+    return;
+  }
 
-    const start = new Date(`${dateYMD}T00:00:00+08:00`);
-    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  const start = new Date(`${dateYMD}T00:00:00+08:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
-    const promoRes = await supabase
-      .from("promo_bookings")
-      .select("created_at, paid_at, is_paid, start_at, end_at, price, discount_kind, discount_value")
-      .eq("is_paid", true)
-      .or(
-        `paid_at.gte.${start.toISOString()},paid_at.lt.${end.toISOString()},and(paid_at.is.null,created_at.gte.${start.toISOString()},created_at.lt.${end.toISOString()})`
-      );
+  const res = await supabase
+    .from("promo_bookings")
+    .select("paid_at, is_paid, price, discount_kind, discount_value")
+    .gte("paid_at", start.toISOString())
+    .lt("paid_at", end.toISOString());
 
-    if (promoRes.error) {
-      console.error("promo time/discount query error:", promoRes.error.message);
-      setPromoTimeBase(0);
-      return;
-    }
+  if (res.error) {
+    console.error("promo discount query error:", res.error.message);
+    setPromoDiscountAmount(0);
+    return;
+  }
 
-    const promoRows = (promoRes.data ?? []) as PromoForTimeRow[];
+  const rows = (res.data ?? []) as Array<{
+    paid_at: string | null;
+    is_paid: boolean | number | string | null;
+    price: number | string | null;
+    discount_kind: string | null;
+    discount_value: number | string | null;
+  }>;
 
-    let promoSum = 0;
-    let discountSum = 0;
+  let discountSum = 0;
 
-    for (const p of promoRows) {
-      if (!p.is_paid) continue;
+  for (const row of rows) {
+    if (!toBool(row.is_paid) || !row.paid_at) continue;
 
-      const base = round2(Math.max(0, toNumber(p.price)));
-      if (base <= 0) continue;
+    const base = Math.max(0, toNumber(row.price));
+    const dAmt = computeDiscountAmountFromBaseCost(
+      base,
+      row.discount_kind,
+      row.discount_value
+    );
 
-      promoSum += base;
+    discountSum += dAmt;
+  }
 
-      const dAmt = computeDiscountAmountFromBaseCost(
-        base,
-        p.discount_kind,
-        p.discount_value
-      );
-      discountSum += dAmt;
-    }
-
-    setPromoTimeBase(round2(promoSum));
-    setDiscountPaid((prev) => round2(prev + discountSum));
-  };
+  setPromoDiscountAmount(round2(discountSum));
+};
 
   const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -1093,16 +1251,16 @@ const StaffSalesReport: React.FC = () => {
       if (isSubmitted) {
         resetComputed();
       } else {
-        setDiscountPaid(0);
-
-        void loadConsignment(selectedDate);
-        void loadAddonsPaidBase(selectedDate);
-        void loadCustomerOrderPaid(selectedDate);
-        void loadWalkinSystemPaidAndDiscount(selectedDate);
-        void loadReservationTimeAndDiscount(selectedDate);
-        void loadPromoTimeAndDiscount(selectedDate);
-        void loadCashOutsTotal(selectedDate);
-        void loadInventoryLossAmount(selectedDate);
+    void loadConsignment(selectedDate);
+    void loadAddonsPaidBase(selectedDate);
+    void loadCustomerOrderPaid(selectedDate);
+    void loadReservationPaymentPlacement(selectedDate);
+    void loadPromoPaymentPlacement(selectedDate);
+    void loadWalkinSystemPaidAndDiscount(selectedDate);
+    void loadReservationTimeAndDiscount(selectedDate);
+    void loadPromoDiscountAmount(selectedDate);
+    void loadCashOutsTotal(selectedDate);
+    void loadInventoryLossAmount(selectedDate);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1144,25 +1302,41 @@ const StaffSalesReport: React.FC = () => {
   const cohCash = cashTotal + coinTotal;
   const cohGcash = gcashSales;
 
-  const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
-  const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
+  const walkinPaymentCash = totals ? toNumber(totals.walkin_cash) : 0;
+  const walkinPaymentGcash = totals ? toNumber(totals.walkin_gcash) : 0;
 
-  const advCash = totals ? toNumber(totals.advance_cash) : 0;
-  const advGcash = totals ? toNumber(totals.advance_gcash) : 0;
+  const totalPaymentCash = round2(
+    walkinPaymentCash +
+      reservationDownCash +
+      reservationAdvanceCash +
+      promoTodayCash +
+      promoAdvanceCash
+  );
 
-  const dpCash = totals ? toNumber(totals.walkin_cash) : 0;
-  const dpGcash = totals ? toNumber(totals.walkin_gcash) : 0;
+  const totalPaymentGcash = round2(
+    walkinPaymentGcash +
+      reservationDownGcash +
+      reservationAdvanceGcash +
+      promoTodayGcash +
+      promoAdvanceGcash
+  );
 
   const startingCash = report ? toNumber(report.starting_cash) : 0;
   const startingGcash = report ? toNumber(report.starting_gcash) : 0;
 
   const addonsPaid = round2(addonsPaidBase + customerOrderPaid);
-  const totalTimeAmount = round2(walkinSystemPaid + reservationTimeBase + promoTimeBase);
+  const totalTimeAmount = round2(walkinSystemPaid + reservationTimeBase);
+
+    const discountPaid = round2(
+    walkinDiscountAmount +
+      reservationDiscountAmount +
+      promoDiscountAmount
+  );
 
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 
   const salesSystem = round2(
-    cohCash + cohGcash + paidResCash + advCash + dpCash - (startingCash + startingGcash)
+    (totalPaymentCash + totalPaymentGcash) - (startingCash + startingGcash)
   );
 
   const salesSystemComputed = round2(
@@ -1364,21 +1538,39 @@ const StaffSalesReport: React.FC = () => {
                   </div>
 
                   <div className="ssr-left-row ssr-left-row--tint">
-                    <div className="ssr-left-label">Paid reservations for this date</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(paidResCash)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(paidResGcash)}</div>
+                    <div className="ssr-left-label">Walk-in Payments</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(walkinPaymentCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(walkinPaymentGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">New Advance Payments</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(advCash)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(advGcash)}</div>
+                    <div className="ssr-left-label">Reservation Payments (Same Day)</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(reservationDownCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(reservationDownGcash)}</div>
                   </div>
 
                   <div className="ssr-left-row">
-                    <div className="ssr-left-label">Down payments within this date only</div>
-                    <div className="ssr-left-value ssr-left-value--cash">{peso(dpCash)}</div>
-                    <div className="ssr-left-value ssr-left-value--gcash">{peso(dpGcash)}</div>
+                    <div className="ssr-left-label">Reservation Advance Payments</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(reservationAdvanceCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(reservationAdvanceGcash)}</div>
+                  </div>
+
+                  <div className="ssr-left-row">
+                    <div className="ssr-left-label">Promo Payments (Same Day)</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(promoTodayCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(promoTodayGcash)}</div>
+                  </div>
+
+                  <div className="ssr-left-row">
+                    <div className="ssr-left-label">Promo Advance Payments</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(promoAdvanceCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(promoAdvanceGcash)}</div>
+                  </div>
+
+                  <div className="ssr-left-row ssr-left-row--tint">
+                    <div className="ssr-left-label">Total Payment Collections</div>
+                    <div className="ssr-left-value ssr-left-value--cash">{peso(totalPaymentCash)}</div>
+                    <div className="ssr-left-value ssr-left-value--gcash">{peso(totalPaymentGcash)}</div>
                   </div>
 
                   <div className="ssr-system-grid">
@@ -1545,7 +1737,7 @@ const StaffSalesReport: React.FC = () => {
                     </div>
 
                     <div className="ssr-mini-row">
-                      <span>Discount (amount)</span>
+                      <span>Discount (Amount)</span>
                       <b>{peso(discountPaid)}</b>
                     </div>
 
