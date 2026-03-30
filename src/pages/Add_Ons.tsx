@@ -163,6 +163,11 @@ const DEFAULT_SEAT_GROUPS: SeatGroup[] = [
     title: "2ndF",
     seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"],
   },
+
+  {
+    title: "CONFERENCE ROOM",
+    seats: ["CONFERENCE ROOM"],
+  },
 ];
 
 const SUCCESS_MESSAGE = "Thank you! Kindly proceed to the counter for pickup and payment.";
@@ -225,10 +230,17 @@ const Add_Ons: React.FC = () => {
 
   const [toastMsg, setToastMsg] = useState<string>("");
   const [showToast, setShowToast] = useState<boolean>(false);
-  const toastColor = useMemo<"success" | "danger">(
-    () => (toastMsg.toLowerCase().includes("success") ? "success" : "danger"),
-    [toastMsg]
-  );
+const toastColor = useMemo<"success" | "danger">(() => {
+  const msg = toastMsg.toLowerCase();
+
+  const isSuccessMessage =
+    msg.includes("success") ||
+    msg.includes("verified") ||
+    msg.includes("saved") ||
+    msg.includes("received");
+
+  return isSuccessMessage ? "success" : "danger";
+}, [toastMsg]);
 
   const [successOpen, setSuccessOpen] = useState<boolean>(false);
 
@@ -727,11 +739,11 @@ const Add_Ons: React.FC = () => {
       setSeat(result.session.seat_number ?? "");
     }
 
-    showSuccessToast(
-      result.session.source === "promo_booking"
-        ? "Promo code verified."
-        : "Booking code verified."
-    );
+      showSuccessToast(
+        result.session.source === "promo_booking"
+          ? "✔ Promo code verified successfully."
+          : "✔ Booking code verified successfully."
+      );
   };
 
   const handleSubmit = async (): Promise<void> => {
