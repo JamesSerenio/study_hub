@@ -163,6 +163,11 @@ const DEFAULT_SEAT_GROUPS: SeatGroup[] = [
     title: "2ndF",
     seats: ["13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"],
   },
+
+  {
+    title: "CONFERENCE ROOM",
+    seats: ["CONFERENCE ROOM"],
+  },
 ];
 
 const SUCCESS_MESSAGE = "Thank you! Kindly proceed to the counter for pickup and payment.";
