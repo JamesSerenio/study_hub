@@ -161,6 +161,14 @@ type AddOnExpenseRow = {
   voided: boolean | null;
 };
 
+type PromoPaymentRow = {
+  paid_at: string | null;
+  is_paid: boolean | number | string | null;
+  start_at: string | null;
+  gcash_amount: number | string | null;
+  cash_amount: number | string | null;
+};
+
 
 /* =========================
    CONSTANTS
@@ -296,6 +304,16 @@ const isoToYMD = (iso: string): string => {
   return isYMD(ymd) ? ymd : todayYMD();
 };
 
+const isoToLocalYMD = (iso: string): string => {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return todayYMD();
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
 const buildZeroLines = (reportId: string): CashLine[] => {
   const merged: CashLine[] = [];
   for (const d of CASH_DENOMS) {
@@ -428,11 +446,17 @@ const StaffSalesReport: React.FC = () => {
 
   const [addonsPaidBase, setAddonsPaidBase] = useState<number>(0);
   const [customerOrderPaid, setCustomerOrderPaid] = useState<number>(0);
-  const [walkinSystemPaid, setWalkinSystemPaid] = useState<number>(0);
-  const [reservationTimeBase, setReservationTimeBase] = useState<number>(0);
+const [walkinSystemPaid, setWalkinSystemPaid] = useState<number>(0);
+const [reservationTimeBase, setReservationTimeBase] = useState<number>(0);
 
+const [promoTodayCash, setPromoTodayCash] = useState<number>(0);
+const [promoTodayGcash, setPromoTodayGcash] = useState<number>(0);
+const [promoAdvanceCash, setPromoAdvanceCash] = useState<number>(0);
+const [promoAdvanceGcash, setPromoAdvanceGcash] = useState<number>(0);
+const [promoReservationCash, setPromoReservationCash] = useState<number>(0);
+const [promoReservationGcash, setPromoReservationGcash] = useState<number>(0);
 
-  const [cashOutsCash, setCashOutsCash] = useState<number>(0);
+const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
 
   const [discountPaid, setDiscountPaid] = useState<number>(0);
@@ -466,17 +490,25 @@ const StaffSalesReport: React.FC = () => {
     }
   };
 
-  const resetComputed = (): void => {
-    setConsignment({ gross: 0, fee15: 0, net: 0 });
-    setAddonsPaidBase(0);
-    setCustomerOrderPaid(0);
-    setWalkinSystemPaid(0);
-    setReservationTimeBase(0);
-    setCashOutsCash(0);
-    setCashOutsGcash(0);
-    setDiscountPaid(0);
-    setInventoryLossAmount(0);
-  };
+const resetComputed = (): void => {
+  setConsignment({ gross: 0, fee15: 0, net: 0 });
+  setAddonsPaidBase(0);
+  setCustomerOrderPaid(0);
+  setWalkinSystemPaid(0);
+  setReservationTimeBase(0);
+
+  setPromoTodayCash(0);
+  setPromoTodayGcash(0);
+  setPromoAdvanceCash(0);
+  setPromoAdvanceGcash(0);
+  setPromoReservationCash(0);
+  setPromoReservationGcash(0);
+
+  setCashOutsCash(0);
+  setCashOutsGcash(0);
+  setDiscountPaid(0);
+  setInventoryLossAmount(0);
+};
 
   const loadReport = async (dateYMD: string): Promise<void> => {
     setLoading(true);
@@ -642,41 +674,108 @@ const StaffSalesReport: React.FC = () => {
     setAddonsPaidBase(computeAddonsPaidFromPayments(onlyWithPayment));
   };
 
-  const loadCustomerOrderPaid = async (dateYMD: string): Promise<void> => {
-    if (!isYMD(dateYMD)) {
-      setCustomerOrderPaid(0);
-      return;
-    }
+      const loadCustomerOrderPaid = async (dateYMD: string): Promise<void> => {
+      if (!isYMD(dateYMD)) {
+        setCustomerOrderPaid(0);
+        return;
+      }
 
-    const start = new Date(`${dateYMD}T00:00:00+08:00`);
-    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+      const start = new Date(`${dateYMD}T00:00:00+08:00`);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
-    const res = await supabase
-      .from("customer_order_payments")
-      .select("paid_at, is_paid, gcash_amount, cash_amount")
-      .gte("paid_at", start.toISOString())
-      .lt("paid_at", end.toISOString());
+      const res = await supabase
+        .from("customer_order_payments")
+        .select("paid_at, is_paid, gcash_amount, cash_amount")
+        .gte("paid_at", start.toISOString())
+        .lt("paid_at", end.toISOString());
 
-    if (res.error) {
-      console.error("customer_order_payments query error:", res.error.message);
-      setCustomerOrderPaid(0);
-      return;
-    }
+      if (res.error) {
+        console.error("customer_order_payments query error:", res.error.message);
+        setCustomerOrderPaid(0);
+        return;
+      }
 
-    const rows = (res.data ?? []) as CustomerOrderPaymentRow[];
+      const rows = (res.data ?? []) as CustomerOrderPaymentRow[];
 
-    const total = rows
-      .filter((r) => toBool(r.is_paid) && !!r.paid_at)
-      .reduce(
-        (sum, r) =>
-          sum +
-          Math.max(0, toNumber(r.gcash_amount)) +
-          Math.max(0, toNumber(r.cash_amount)),
-        0
-      );
+      const total = rows
+        .filter((r) => toBool(r.is_paid) && !!r.paid_at)
+        .reduce(
+          (sum, r) =>
+            sum +
+            Math.max(0, toNumber(r.gcash_amount)) +
+            Math.max(0, toNumber(r.cash_amount)),
+          0
+        );
 
-    setCustomerOrderPaid(round2(total));
-  };
+      setCustomerOrderPaid(round2(total));
+    };
+
+    const loadPromoPaymentPlacement = async (dateYMD: string): Promise<void> => {
+      if (!isYMD(dateYMD)) {
+        setPromoTodayCash(0);
+        setPromoTodayGcash(0);
+        setPromoAdvanceCash(0);
+        setPromoAdvanceGcash(0);
+        setPromoReservationCash(0);
+        setPromoReservationGcash(0);
+        return;
+      }
+
+      const start = new Date(`${dateYMD}T00:00:00+08:00`);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+      const res = await supabase
+        .from("promo_bookings")
+        .select("paid_at, is_paid, start_at, gcash_amount, cash_amount")
+        .gte("paid_at", start.toISOString())
+        .lt("paid_at", end.toISOString());
+
+      if (res.error) {
+        console.error("promo payment placement query error:", res.error.message);
+        setPromoTodayCash(0);
+        setPromoTodayGcash(0);
+        setPromoAdvanceCash(0);
+        setPromoAdvanceGcash(0);
+        setPromoReservationCash(0);
+        setPromoReservationGcash(0);
+        return;
+      }
+
+      const rows = (res.data ?? []) as PromoPaymentRow[];
+
+      let todayCash = 0;
+      let todayGcash = 0;
+      let advanceCash = 0;
+      let advanceGcash = 0;
+      let reservationCash = 0;
+      let reservationGcash = 0;
+
+      for (const r of rows) {
+        if (!toBool(r.is_paid) || !r.paid_at) continue;
+
+        const availYMD = r.start_at ? isoToLocalYMD(r.start_at) : "";
+        const cash = Math.max(0, toNumber(r.cash_amount));
+        const gcash = Math.max(0, toNumber(r.gcash_amount));
+
+        if (availYMD === dateYMD) {
+          todayCash += cash;
+          todayGcash += gcash;
+
+          reservationCash += cash;
+          reservationGcash += gcash;
+        } else if (availYMD > dateYMD) {
+          advanceCash += cash;
+          advanceGcash += gcash;
+        }
+      }
+
+      setPromoTodayCash(round2(todayCash));
+      setPromoTodayGcash(round2(todayGcash));
+      setPromoAdvanceCash(round2(advanceCash));
+      setPromoAdvanceGcash(round2(advanceGcash));
+      setPromoReservationCash(round2(reservationCash));
+      setPromoReservationGcash(round2(reservationGcash));
+    };
 
   const loadWalkinSystemPaidAndDiscount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
@@ -1036,13 +1135,14 @@ const StaffSalesReport: React.FC = () => {
       } else {
         setDiscountPaid(0);
 
-      void loadConsignment(selectedDate);
-      void loadAddonsPaidBase(selectedDate);
-      void loadCustomerOrderPaid(selectedDate);
-      void loadWalkinSystemPaidAndDiscount(selectedDate);
-      void loadReservationTimeAndDiscount(selectedDate);
-      void loadCashOutsTotal(selectedDate);
-      void loadInventoryLossAmount(selectedDate);
+    void loadConsignment(selectedDate);
+    void loadAddonsPaidBase(selectedDate);
+    void loadCustomerOrderPaid(selectedDate);
+    void loadPromoPaymentPlacement(selectedDate);
+    void loadWalkinSystemPaidAndDiscount(selectedDate);
+    void loadReservationTimeAndDiscount(selectedDate);
+    void loadCashOutsTotal(selectedDate);
+    void loadInventoryLossAmount(selectedDate);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1084,14 +1184,23 @@ const StaffSalesReport: React.FC = () => {
   const cohCash = cashTotal + coinTotal;
   const cohGcash = gcashSales;
 
-  const paidResCash = totals ? toNumber(totals.paid_reservation_cash) : 0;
-  const paidResGcash = totals ? toNumber(totals.paid_reservation_gcash) : 0;
+  const paidResCashBase = totals ? toNumber(totals.paid_reservation_cash) : 0;
+  const paidResGcashBase = totals ? toNumber(totals.paid_reservation_gcash) : 0;
 
-  const advCash = totals ? toNumber(totals.advance_cash) : 0;
-  const advGcash = totals ? toNumber(totals.advance_gcash) : 0;
+  const paidResCash = round2(Math.max(0, paidResCashBase - promoReservationCash));
+  const paidResGcash = round2(Math.max(0, paidResGcashBase - promoReservationGcash));
 
-  const dpCash = totals ? toNumber(totals.walkin_cash) : 0;
-  const dpGcash = totals ? toNumber(totals.walkin_gcash) : 0;
+  const advCashBase = totals ? toNumber(totals.advance_cash) : 0;
+  const advGcashBase = totals ? toNumber(totals.advance_gcash) : 0;
+
+  const advCash = round2(advCashBase + promoAdvanceCash);
+  const advGcash = round2(advGcashBase + promoAdvanceGcash);
+
+  const dpCashBase = totals ? toNumber(totals.walkin_cash) : 0;
+  const dpGcashBase = totals ? toNumber(totals.walkin_gcash) : 0;
+
+  const dpCash = round2(dpCashBase + promoTodayCash);
+  const dpGcash = round2(dpGcashBase + promoTodayGcash);
 
   const startingCash = report ? toNumber(report.starting_cash) : 0;
   const startingGcash = report ? toNumber(report.starting_gcash) : 0;
