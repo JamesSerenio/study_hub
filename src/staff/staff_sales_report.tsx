@@ -161,16 +161,6 @@ type AddOnExpenseRow = {
   voided: boolean | null;
 };
 
-type PromoForTimeRow = {
-  created_at: string;
-  paid_at: string | null;
-  is_paid: boolean | null;
-  start_at: string;
-  end_at: string;
-  price: number | string | null;
-  discount_kind: string | null;
-  discount_value: number | string | null;
-};
 
 /* =========================
    CONSTANTS
@@ -440,7 +430,7 @@ const StaffSalesReport: React.FC = () => {
   const [customerOrderPaid, setCustomerOrderPaid] = useState<number>(0);
   const [walkinSystemPaid, setWalkinSystemPaid] = useState<number>(0);
   const [reservationTimeBase, setReservationTimeBase] = useState<number>(0);
-  const [promoTimeBase, setPromoTimeBase] = useState<number>(0);
+
 
   const [cashOutsCash, setCashOutsCash] = useState<number>(0);
   const [cashOutsGcash, setCashOutsGcash] = useState<number>(0);
@@ -482,7 +472,6 @@ const StaffSalesReport: React.FC = () => {
     setCustomerOrderPaid(0);
     setWalkinSystemPaid(0);
     setReservationTimeBase(0);
-    setPromoTimeBase(0);
     setCashOutsCash(0);
     setCashOutsGcash(0);
     setDiscountPaid(0);
@@ -785,54 +774,6 @@ const StaffSalesReport: React.FC = () => {
     setDiscountPaid((prev) => round2(prev + discountSum));
   };
 
-  const loadPromoTimeAndDiscount = async (dateYMD: string): Promise<void> => {
-    if (!isYMD(dateYMD)) {
-      setPromoTimeBase(0);
-      return;
-    }
-
-    const start = new Date(`${dateYMD}T00:00:00+08:00`);
-    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-
-    const promoRes = await supabase
-      .from("promo_bookings")
-      .select("created_at, paid_at, is_paid, start_at, end_at, price, discount_kind, discount_value")
-      .eq("is_paid", true)
-      .or(
-        `paid_at.gte.${start.toISOString()},paid_at.lt.${end.toISOString()},and(paid_at.is.null,created_at.gte.${start.toISOString()},created_at.lt.${end.toISOString()})`
-      );
-
-    if (promoRes.error) {
-      console.error("promo time/discount query error:", promoRes.error.message);
-      setPromoTimeBase(0);
-      return;
-    }
-
-    const promoRows = (promoRes.data ?? []) as PromoForTimeRow[];
-
-    let promoSum = 0;
-    let discountSum = 0;
-
-    for (const p of promoRows) {
-      if (!p.is_paid) continue;
-
-      const base = round2(Math.max(0, toNumber(p.price)));
-      if (base <= 0) continue;
-
-      promoSum += base;
-
-      const dAmt = computeDiscountAmountFromBaseCost(
-        base,
-        p.discount_kind,
-        p.discount_value
-      );
-      discountSum += dAmt;
-    }
-
-    setPromoTimeBase(round2(promoSum));
-    setDiscountPaid((prev) => round2(prev + discountSum));
-  };
-
   const loadInventoryLossAmount = async (dateYMD: string): Promise<void> => {
     if (!isYMD(dateYMD)) {
       setInventoryLossAmount(0);
@@ -1095,14 +1036,13 @@ const StaffSalesReport: React.FC = () => {
       } else {
         setDiscountPaid(0);
 
-        void loadConsignment(selectedDate);
-        void loadAddonsPaidBase(selectedDate);
-        void loadCustomerOrderPaid(selectedDate);
-        void loadWalkinSystemPaidAndDiscount(selectedDate);
-        void loadReservationTimeAndDiscount(selectedDate);
-        void loadPromoTimeAndDiscount(selectedDate);
-        void loadCashOutsTotal(selectedDate);
-        void loadInventoryLossAmount(selectedDate);
+      void loadConsignment(selectedDate);
+      void loadAddonsPaidBase(selectedDate);
+      void loadCustomerOrderPaid(selectedDate);
+      void loadWalkinSystemPaidAndDiscount(selectedDate);
+      void loadReservationTimeAndDiscount(selectedDate);
+      void loadCashOutsTotal(selectedDate);
+      void loadInventoryLossAmount(selectedDate);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1157,7 +1097,7 @@ const StaffSalesReport: React.FC = () => {
   const startingGcash = report ? toNumber(report.starting_gcash) : 0;
 
   const addonsPaid = round2(addonsPaidBase + customerOrderPaid);
-  const totalTimeAmount = round2(walkinSystemPaid + reservationTimeBase + promoTimeBase);
+  const totalTimeAmount = round2(walkinSystemPaid + reservationTimeBase);
 
   const bilin = report ? toNumber(report.bilin_amount) : 0;
 
