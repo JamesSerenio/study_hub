@@ -736,8 +736,8 @@ const toastColor = useMemo<"success" | "danger">(() => {
 
       showSuccessToast(
         result.session.source === "promo_booking"
-          ? "Promo code verified successfully."
-          : "Booking code verified successfully."
+          ? "✔ Promo code verified successfully."
+          : "✔ Booking code verified successfully."
       );
   };
 
