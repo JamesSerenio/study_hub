@@ -48,6 +48,7 @@ import salesIcon from "../assets/sales.png";
 import flowerImg from "../assets/flower.png";
 import cancelledIcon from "../assets/cancelled.png";
 import bellIcon from "../assets/bell.png";
+import foodNotifIcon from "../assets/food_notif.png";
 import consignmentIcon from "../assets/consignment.png";
 import staff_consignmentIcon from "../assets/staff_consignment.png";
 import consignmentRecordIcon from "../assets/consignment_record.png";
@@ -74,6 +75,20 @@ type NoisyNotifRow = {
   read_at: string | null;
 };
 
+type FoodNotifRow = {
+  id: string;
+  created_at: string;
+  full_name: string;
+  seat_number: string;
+  add_on_name: string;
+  quantity: number;
+  total: number;
+  is_read: boolean;
+  read_at: string | null;
+};
+
+type LooseRecord = Record<string, unknown>;
+
 type RealtimeInsertPayload<T> = {
   new: T;
 };
@@ -83,7 +98,6 @@ type RealtimeUpdatePayload<T> = {
   old: Partial<T>;
 };
 
-
 const Staff_menu: React.FC = () => {
   const history = useHistory();
   const [activePage, setActivePage] = useState("dashboard");
@@ -91,7 +105,7 @@ const Staff_menu: React.FC = () => {
   const [boot, setBoot] = useState(false);
 
   /* =========================
-      🔔 Notifications
+      🔔 Guest Notifications
   ========================= */
   const NOISY_TABLE = "noisy_reports";
 
@@ -104,19 +118,43 @@ const Staff_menu: React.FC = () => {
 
   const bellBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>(
-    {
-      top: 64,
-      right: 12,
-    }
-  );
+  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number }>({
+    top: 64,
+    right: 12,
+  });
 
   const refreshTimerRef = useRef<number | null>(null);
   const suspendRefreshRef = useRef<boolean>(false);
 
+  /* =========================
+      🍔 Food Notifications
+  ========================= */
+  const FOOD_NOTIF_TABLE = "add_on_notifications";
+
+  const [foodNotifOpen, setFoodNotifOpen] = useState<boolean>(false);
+  const foodNotifOpenRef = useRef<boolean>(false);
+
+  const [foodNotifLoading, setFoodNotifLoading] = useState<boolean>(false);
+  const [foodNotifItems, setFoodNotifItems] = useState<FoodNotifRow[]>([]);
+  const [foodUnreadCount, setFoodUnreadCount] = useState<number>(0);
+
+  const foodBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const [foodPopoverPos, setFoodPopoverPos] = useState<{ top: number; right: number }>({
+    top: 64,
+    right: 70,
+  });
+
+  const foodRefreshTimerRef = useRef<number | null>(null);
+  const foodSuspendRefreshRef = useRef<boolean>(false);
+
   useEffect(() => {
     notifOpenRef.current = notifOpen;
   }, [notifOpen]);
+
+  useEffect(() => {
+    foodNotifOpenRef.current = foodNotifOpen;
+  }, [foodNotifOpen]);
 
   const formatPHDateTime = (iso: string): string => {
     const d = new Date(iso);
@@ -130,6 +168,67 @@ const Staff_menu: React.FC = () => {
       minute: "2-digit",
       hour12: true,
     }).format(d);
+  };
+
+  const peso = (value: number): string => {
+    const safe = Number.isFinite(value) ? value : 0;
+    return `₱${safe.toLocaleString("en-PH", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    })}`;
+  };
+
+  const toText = (value: unknown): string => {
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number") return String(value);
+    return "";
+  };
+
+  const toNumber = (value: unknown): number => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  const pickText = (row: LooseRecord, keys: string[]): string => {
+    for (const key of keys) {
+      const v = toText(row[key]);
+      if (v) return v;
+    }
+    return "";
+  };
+
+  const pickNumber = (row: LooseRecord, keys: string[]): number => {
+    for (const key of keys) {
+      const v = row[key];
+      const n = toNumber(v);
+      if (n || n === 0) return n;
+    }
+    return 0;
+  };
+
+  const mapFoodNotifRow = (row: LooseRecord): FoodNotifRow => {
+    return {
+      id: toText(row.id) || crypto.randomUUID(),
+      created_at: toText(row.created_at) || new Date().toISOString(),
+      full_name: pickText(row, ["full_name", "name", "customer_name", "customer"]),
+      seat_number: pickText(row, ["seat_number", "seat", "table_no"]),
+      add_on_name: pickText(row, [
+        "add_on_name",
+        "addon_name",
+        "item_name",
+        "product_name",
+        "food_name",
+        "name_of_addon",
+      ]),
+      quantity: pickNumber(row, ["quantity", "qty"]),
+      total: pickNumber(row, ["total", "total_amount", "amount", "subtotal"]),
+      is_read: Boolean(row.is_read),
+      read_at: toText(row.read_at) || null,
+    };
   };
 
   const normalizeType = (value: string | null | undefined): string => {
@@ -162,6 +261,9 @@ const Staff_menu: React.FC = () => {
     return String(row.message ?? row.concern ?? "").trim() || "No message.";
   };
 
+  /* =========================
+      Guest notif helpers
+  ========================= */
   const cancelScheduledRefresh = (): void => {
     if (refreshTimerRef.current !== null) {
       window.clearTimeout(refreshTimerRef.current);
@@ -176,7 +278,6 @@ const Staff_menu: React.FC = () => {
     refreshTimerRef.current = window.setTimeout(() => {
       if (suspendRefreshRef.current) return;
       void fetchUnreadCount();
-      if (!notifOpenRef.current) return;
     }, delayMs);
   };
 
@@ -278,6 +379,7 @@ const Staff_menu: React.FC = () => {
   };
 
   const openBell = async (): Promise<void> => {
+    if (foodNotifOpen) setFoodNotifOpen(false);
     computePopoverPosition();
     setNotifOpen(true);
     await fetchNotifications();
@@ -296,9 +398,146 @@ const Staff_menu: React.FC = () => {
     }
   };
 
+  /* =========================
+      Food notif helpers
+  ========================= */
+  const cancelFoodScheduledRefresh = (): void => {
+    if (foodRefreshTimerRef.current !== null) {
+      window.clearTimeout(foodRefreshTimerRef.current);
+    }
+    foodRefreshTimerRef.current = null;
+  };
+
+  const scheduleFoodRecount = (delayMs = 220): void => {
+    if (foodSuspendRefreshRef.current) return;
+    cancelFoodScheduledRefresh();
+
+    foodRefreshTimerRef.current = window.setTimeout(() => {
+      if (foodSuspendRefreshRef.current) return;
+      void fetchFoodUnreadCount();
+    }, delayMs);
+  };
+
+  const fetchFoodUnreadCount = async (): Promise<number> => {
+    const result = await supabase
+      .from(FOOD_NOTIF_TABLE)
+      .select("id", { count: "exact", head: true })
+      .eq("is_read", false);
+
+    const total = result.error ? 0 : Number(result.count ?? 0);
+    setFoodUnreadCount(total);
+    return total;
+  };
+
+  const fetchFoodNotifications = async (): Promise<void> => {
+    setFoodNotifLoading(true);
+
+    const { data, error } = await supabase
+      .from(FOOD_NOTIF_TABLE)
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    setFoodNotifLoading(false);
+
+    if (error) {
+      console.warn("fetch food notifications:", error.message);
+      return;
+    }
+
+    const mapped = ((data as LooseRecord[] | null) ?? []).map(mapFoodNotifRow);
+    setFoodNotifItems(mapped);
+  };
+
+  const markAllFoodAsReadSilent = async (): Promise<void> => {
+    if (foodSuspendRefreshRef.current) return;
+
+    cancelFoodScheduledRefresh();
+    foodSuspendRefreshRef.current = true;
+
+    const nowIso = new Date().toISOString();
+
+    setFoodUnreadCount(0);
+    setFoodNotifItems((prev) =>
+      prev.map((n) => ({
+        ...n,
+        is_read: true,
+        read_at: nowIso,
+      }))
+    );
+
+    const { error } = await supabase
+      .from(FOOD_NOTIF_TABLE)
+      .update({ is_read: true, read_at: nowIso })
+      .eq("is_read", false);
+
+    if (error) {
+      console.warn("markAllFoodAsReadSilent:", error.message);
+      await fetchFoodUnreadCount();
+      if (foodNotifOpenRef.current) {
+        await fetchFoodNotifications();
+      }
+    }
+
+    foodSuspendRefreshRef.current = false;
+  };
+
+  const handleDeleteFoodNotification = async (id: string): Promise<void> => {
+    const ok = window.confirm("Delete this food notification?");
+    if (!ok) return;
+
+    const current = foodNotifItems.find((x) => x.id === id);
+
+    const { error } = await supabase.from(FOOD_NOTIF_TABLE).delete().eq("id", id);
+
+    if (error) {
+      alert(`Delete failed: ${error.message}`);
+      return;
+    }
+
+    setFoodNotifItems((prev) => prev.filter((x) => x.id !== id));
+
+    if (current && !current.is_read) {
+      setFoodUnreadCount((c) => Math.max(0, c - 1));
+    } else {
+      void fetchFoodUnreadCount();
+    }
+  };
+
+  const computeFoodPopoverPosition = (): void => {
+    const btn = foodBtnRef.current;
+    if (!btn) return;
+
+    const r = btn.getBoundingClientRect();
+    const top = Math.round(r.bottom + 10);
+    const right = Math.max(12, Math.round(window.innerWidth - r.right));
+    setFoodPopoverPos({ top, right });
+  };
+
+  const openFoodBell = async (): Promise<void> => {
+    if (notifOpen) setNotifOpen(false);
+    computeFoodPopoverPosition();
+    setFoodNotifOpen(true);
+    await fetchFoodNotifications();
+    void markAllFoodAsReadSilent();
+  };
+
+  const closeFoodBell = (): void => {
+    setFoodNotifOpen(false);
+  };
+
+  const toggleFoodBell = async (): Promise<void> => {
+    if (foodNotifOpen) {
+      closeFoodBell();
+    } else {
+      await openFoodBell();
+    }
+  };
+
   useEffect(() => {
     const onResize = (): void => {
       if (notifOpenRef.current) computePopoverPosition();
+      if (foodNotifOpenRef.current) computeFoodPopoverPosition();
     };
 
     window.addEventListener("resize", onResize);
@@ -346,7 +585,6 @@ const Staff_menu: React.FC = () => {
           setNotifItems((prev) => {
             const idx = prev.findIndex((x) => x.id === newRow.id);
             if (idx === -1) return prev;
-
             const copy = [...prev];
             copy[idx] = newRow;
             return copy;
@@ -382,9 +620,7 @@ const Staff_menu: React.FC = () => {
 
     const onFocusOrWake = (): void => {
       void fetchUnreadCount();
-      if (notifOpenRef.current) {
-        computePopoverPosition();
-      }
+      if (notifOpenRef.current) computePopoverPosition();
     };
 
     window.addEventListener("focus", onFocusOrWake);
@@ -398,6 +634,99 @@ const Staff_menu: React.FC = () => {
 
       cancelScheduledRefresh();
       suspendRefreshRef.current = false;
+      void supabase.removeChannel(ch);
+    };
+  }, []);
+
+  useEffect(() => {
+    void fetchFoodUnreadCount();
+    void fetchFoodNotifications();
+
+    const ch = supabase
+      .channel("realtime_add_on_notifications")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: FOOD_NOTIF_TABLE },
+        (payload: unknown) => {
+          const raw = (payload as RealtimeInsertPayload<LooseRecord>).new;
+          const row = mapFoodNotifRow(raw);
+
+          setFoodNotifItems((prev) => {
+            if (prev.some((x) => x.id === row.id)) return prev;
+            const merged = [row, ...prev].sort(
+              (a, b) =>
+                new Date(b.created_at).getTime() -
+                new Date(a.created_at).getTime()
+            );
+            return merged.slice(0, 50);
+          });
+
+          if (foodNotifOpenRef.current) {
+            void markAllFoodAsReadSilent();
+          } else if (!row.is_read) {
+            setFoodUnreadCount((c) => c + 1);
+            scheduleFoodRecount(600);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: FOOD_NOTIF_TABLE },
+        (payload: unknown) => {
+          const p = payload as RealtimeUpdatePayload<LooseRecord>;
+          const newRow = mapFoodNotifRow(p.new as LooseRecord);
+
+          setFoodNotifItems((prev) => {
+            const idx = prev.findIndex((x) => x.id === newRow.id);
+            if (idx === -1) return prev;
+            const copy = [...prev];
+            copy[idx] = newRow;
+            return copy;
+          });
+
+          if (foodNotifOpenRef.current) return;
+
+          const oldIsRead = Boolean((p.old as LooseRecord).is_read);
+          const isUnreadNow = !newRow.is_read;
+
+          if (!oldIsRead && !isUnreadNow) {
+            setFoodUnreadCount((c) => Math.max(0, c - 1));
+          } else if (oldIsRead && isUnreadNow) {
+            setFoodUnreadCount((c) => c + 1);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: FOOD_NOTIF_TABLE },
+        () => {
+          if (!foodNotifOpenRef.current) {
+            scheduleFoodRecount(250);
+          } else {
+            void fetchFoodUnreadCount();
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("FOOD NOTIF CHANNEL:", status);
+      });
+
+    const onFocusOrWake = (): void => {
+      void fetchFoodUnreadCount();
+      if (foodNotifOpenRef.current) computeFoodPopoverPosition();
+    };
+
+    window.addEventListener("focus", onFocusOrWake);
+    window.addEventListener("online", onFocusOrWake);
+    document.addEventListener("visibilitychange", onFocusOrWake);
+
+    return () => {
+      window.removeEventListener("focus", onFocusOrWake);
+      window.removeEventListener("online", onFocusOrWake);
+      document.removeEventListener("visibilitychange", onFocusOrWake);
+
+      cancelFoodScheduledRefresh();
+      foodSuspendRefreshRef.current = false;
       void supabase.removeChannel(ch);
     };
   }, []);
@@ -612,6 +941,19 @@ const Staff_menu: React.FC = () => {
               <IonButtons slot="end">
                 <div className="topbar-tools">
                   <button
+                    ref={foodBtnRef}
+                    className="notif-bell-btn food-notif-btn"
+                    onClick={() => void toggleFoodBell()}
+                    aria-label="Food Notifications"
+                    type="button"
+                  >
+                    <img src={foodNotifIcon} alt="Food Notifications" className="notif-bell-icon" />
+                    {foodUnreadCount > 0 && (
+                      <span className="notif-badge notif-badge-food">{foodUnreadCount}</span>
+                    )}
+                  </button>
+
+                  <button
                     ref={bellBtnRef}
                     className="notif-bell-btn"
                     onClick={() => void toggleBell()}
@@ -641,6 +983,100 @@ const Staff_menu: React.FC = () => {
               </AnimatePresence>
             )}
           </IonContent>
+
+          {foodNotifOpen && (
+            <div
+              className="notif-popover notif-popover--fixed food-popover"
+              style={{ top: `${foodPopoverPos.top}px`, right: `${foodPopoverPos.right}px` }}
+              role="dialog"
+              aria-label="Food Notifications"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="notif-popover-head">
+                <div>
+                  <div className="notif-title">Food / Add-Ons Notifications</div>
+                  <div className="notif-subtitle">
+                    Full details ng orders para hindi cut
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="notif-close-btn"
+                    onClick={closeFoodBell}
+                    aria-label="Close"
+                    type="button"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <div className="notif-popover-body food-notif-body">
+                {foodNotifLoading ? (
+                  <div className="notif-empty">
+                    <IonSpinner name="dots" />
+                  </div>
+                ) : foodNotifItems.length === 0 ? (
+                  <div className="notif-empty">No food notifications yet.</div>
+                ) : (
+                  foodNotifItems.map((n) => (
+                    <div
+                      key={n.id}
+                      className={`food-notif-card ${n.is_read ? "" : "food-notif-card--unread"}`}
+                    >
+                      <div className="food-notif-card-top">
+                        <div className="food-notif-name">{n.full_name || "Unknown Customer"}</div>
+                        <div className="food-notif-datetime">
+                          {formatPHDateTime(n.created_at)}
+                        </div>
+                      </div>
+
+                      <div className="food-notif-grid">
+                        <div className="food-notif-row">
+                          <span className="food-notif-label">Seat Number</span>
+                          <span className="food-notif-value">{n.seat_number || "-"}</span>
+                        </div>
+
+                        <div className="food-notif-row">
+                          <span className="food-notif-label">Add Ons Name</span>
+                          <span className="food-notif-value food-notif-value-wrap">
+                            {n.add_on_name || "-"}
+                          </span>
+                        </div>
+
+                        <div className="food-notif-row">
+                          <span className="food-notif-label">Quantity</span>
+                          <span className="food-notif-value">{n.quantity}</span>
+                        </div>
+
+                        <div className="food-notif-row">
+                          <span className="food-notif-label">Total</span>
+                          <span className="food-notif-value food-notif-total">
+                            {peso(n.total)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="notif-actions">
+                        <button
+                          type="button"
+                          className="notif-delete-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDeleteFoodNotification(n.id);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
 
           {notifOpen && (
             <div
