@@ -8386,3 +8386,127 @@ ion-button.ao-success-btn {
   }
 }
 
+.topbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.food-notif-btn {
+  position: relative;
+}
+
+.notif-badge-food {
+  background: linear-gradient(135deg, #ff8a00, #ff4d4f);
+}
+
+.food-popover {
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(74vh, 760px);
+}
+
+.food-notif-body {
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.food-notif-card {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 18px;
+  padding: 14px 14px 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+
+.food-notif-card--unread {
+  border-color: rgba(34, 197, 94, 0.38);
+  box-shadow: 0 14px 34px rgba(34, 197, 94, 0.12);
+}
+
+.food-notif-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.food-notif-name {
+  font-size: 16px;
+  font-weight: 800;
+  color: #162033;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.food-notif-datetime {
+  font-size: 12px;
+  color: #6b7280;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.food-notif-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.food-notif-row {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.food-notif-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.food-notif-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.food-notif-value-wrap {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.food-notif-total {
+  color: #15803d;
+  font-size: 15px;
+}
+
+@media (max-width: 640px) {
+  .food-popover {
+    width: calc(100vw - 16px);
+    right: 8px !important;
+  }
+
+  .food-notif-row {
+    grid-template-columns: 1fr;
+  }
+
+  .food-notif-datetime {
+    white-space: normal;
+  }
+
+  .food-notif-card-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
