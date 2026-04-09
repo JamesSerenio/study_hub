@@ -996,9 +996,6 @@ const Staff_menu: React.FC = () => {
               <div className="notif-popover-head">
                 <div>
                   <div className="notif-title">Food / Add-Ons Notifications</div>
-                  <div className="notif-subtitle">
-                    Full details ng orders para hindi cut
-                  </div>
                 </div>
 
                 <div style={{ display: "flex", gap: 8 }}>
